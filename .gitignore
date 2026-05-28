@@ -1,0 +1,14 @@
+# Environments and Secrets
+.env
+venv/
+env/
+__pycache__/
+
+# Next.js and Node.js
+frontend/.next/
+frontend/node_modules/
+node_modules/
+
+# Logs and Outputs
+logs/
+outputs/
