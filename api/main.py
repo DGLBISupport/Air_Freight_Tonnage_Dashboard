@@ -28,6 +28,7 @@ from api.database import (
     get_destination_countries,
     get_destination_cities,
     get_branches,
+    execute_custom_query,
 )
 from api.pdf_service import generate_dashboard_pdf
 from api.email_service import send_pdf_via_graph
@@ -45,9 +46,10 @@ app.add_middleware(
 
 # --- DATA MODELS ---
 class ReportRequest(BaseModel):
-    start_date: str
-    end_date: str
     recipient_email: str
+    # Standard mode fields (optional for custom-sql mode)
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
     country: Optional[str] = None
     airline: Optional[str] = None
     company_code: Optional[str] = None
@@ -55,6 +57,20 @@ class ReportRequest(BaseModel):
     destination_country: Optional[str] = None
     destination_city: Optional[str] = None
     branch: Optional[str] = None
+    # Custom SQL mode fields
+    mode: Optional[str] = "standard"  # "standard" or "custom-sql"
+    custom_sql: Optional[str] = None
+    # Section selection for PDF optimization
+    include_weekly_visual: bool = True
+    include_weekly_ledger: bool = True
+    include_monthly_visual: bool = True
+    include_monthly_ledger: bool = True
+    max_data_rows: int = 100  # Limit table rows to reduce PDF size
+
+
+class CustomQueryRequest(BaseModel):
+    query: str
+
 
 
 # --- ENDPOINT 1: Fetch Dynamic JSON Data (with dynamic filters) ---
@@ -244,6 +260,13 @@ def process_pdf_and_email(req: ReportRequest):
             destination_country=req.destination_country,
             destination_city=req.destination_city,
             branch=req.branch,
+            include_weekly_visual=req.include_weekly_visual,
+            include_weekly_ledger=req.include_weekly_ledger,
+            include_monthly_visual=req.include_monthly_visual,
+            include_monthly_ledger=req.include_monthly_ledger,
+            max_data_rows=req.max_data_rows,
+            mode=req.mode,
+            custom_sql=req.custom_sql,
         )
         send_pdf_via_graph(pdf_path=temp_pdf_path, recipient_email=req.recipient_email)
     except Exception as e:
@@ -280,7 +303,27 @@ def send_report(req: ReportRequest, background_tasks: BackgroundTasks):
     }
 
 
-# --- RUNNER ---
+# --- ENDPOINT 7: Custom SQL Query Sandbox Runner ---
+@app.post("/api/custom-query")
+def custom_query(req: CustomQueryRequest):
+    """Executes a custom SQL query directly against the engine in a sandbox environment."""
+    if not req.query or not req.query.strip():
+        raise HTTPException(status_code=400, detail="SQL query string cannot be empty.")
+    
+    try:
+        data = execute_custom_query(req.query)
+        return {"status": "success", "data": data, "rowCount": len(data)}
+    except ValueError as e:
+        # Validation errors
+        raise HTTPException(status_code=400, detail=f"Invalid SQL: {str(e)}")
+    except Exception as e:
+        # Database errors
+        error_msg = str(e)
+        raise HTTPException(status_code=400, detail=f"Query execution failed: {error_msg}")
+
+
+
+# --- RUNNER FOR DEVELOPMENT ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

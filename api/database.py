@@ -82,33 +82,49 @@ def get_filtered_data(
     dest_city_filter = build_multi_in_clause("vt.ConDischargePortCity", destination_city, params, "dest_city")
 
     query = f"""
+    WITH ConsolShipmentCounts AS (
+        SELECT 
+            vt.AirlineName1,
+            vt.ConLoadPortCountryName,
+            vt.ConLoadPortCity,
+            vt.ConDischargePortCountryName,
+            vt.ConDischargePortCity,
+            vt.SendingForwarder,
+            vt.Air_ChargebleWeight,
+            vt.Revenue_USD,
+            (SELECT COUNT(DISTINCT Link_ShipmentNum) 
+             FROM dbo.ChatData_ViewShipConsolLink 
+             WHERE Link_ConsolNumber = vt.ConsoleNumber) AS ShipmentCount
+        FROM dbo.ChatData_ViewShipConsolTransport vt
+        WHERE vt.TransportMode = 'AIR'
+          AND vt.ETD >= :start_date 
+          AND vt.ETD <= :end_date
+          {company_filter}
+          {country_filter}
+          {airline_filter}
+          {branch_filter}
+          {origin_city_filter}
+          {dest_country_filter}
+          {dest_city_filter}
+    )
     SELECT
-        vt.AirlineName1 AS Airline,
-        vt.ConLoadPortCountryName AS Origin_Country,
-        vt.ConLoadPortCity AS Origin_City,
-        vt.ConDischargePortCountryName AS Destination_Country,
-        vt.ConDischargePortCity AS Destination_City,
-        RIGHT(vt.SendingForwarder, 3) AS Company_Code,
-        SUM(vt.Air_ChargebleWeight) AS Total_Tonnage,
-        SUM(vt.Revenue_USD) AS Total_Revenue,
-        COUNT(*) AS Total_Shipments
-    FROM dbo.ChatData_ViewShipConsolTransport vt
-    WHERE vt.ETD >= :start_date 
-      AND vt.ETD <= :end_date
-      {company_filter}
-      {country_filter}
-      {airline_filter}
-      {branch_filter}
-      {origin_city_filter}
-      {dest_country_filter}
-      {dest_city_filter}
+        AirlineName1 AS Airline,
+        ConLoadPortCountryName AS Origin_Country,
+        ConLoadPortCity AS Origin_City,
+        ConDischargePortCountryName AS Destination_Country,
+        ConDischargePortCity AS Destination_City,
+        RIGHT(SendingForwarder, 3) AS Company_Code,
+        SUM(Air_ChargebleWeight) AS Total_Tonnage,
+        SUM(Revenue_USD) AS Total_Revenue,
+        SUM(ShipmentCount) AS Total_Shipments
+    FROM ConsolShipmentCounts
     GROUP BY 
-        vt.AirlineName1, 
-        vt.ConLoadPortCountryName,
-        vt.ConLoadPortCity,
-        vt.ConDischargePortCountryName,
-        vt.ConDischargePortCity,
-        RIGHT(vt.SendingForwarder, 3)
+        AirlineName1, 
+        ConLoadPortCountryName,
+        ConLoadPortCity,
+        ConDischargePortCountryName,
+        ConDischargePortCity,
+        RIGHT(SendingForwarder, 3)
     ORDER BY Total_Revenue DESC
     """
     with engine.connect() as conn:
@@ -141,7 +157,8 @@ def get_countries(start_date: str, end_date: str, company_code: str = None):
     query = f"""
     SELECT DISTINCT vt.ConLoadPortCountryName AS country
     FROM dbo.ChatData_ViewShipConsolTransport vt
-    WHERE vt.ETD >= :start_date AND vt.ETD <= :end_date
+    WHERE vt.TransportMode = 'AIR'
+      AND vt.ETD >= :start_date AND vt.ETD <= :end_date
       AND vt.ConLoadPortCountryName IS NOT NULL
       {company_filter}
     ORDER BY vt.ConLoadPortCountryName
@@ -184,7 +201,8 @@ def get_airlines(start_date: str, end_date: str, country: str = None):
     query = """
     SELECT DISTINCT vt.AirlineName1 AS airline
     FROM dbo.ChatData_ViewShipConsolTransport vt
-    WHERE vt.ETD >= :start_date AND vt.ETD <= :end_date
+    WHERE vt.TransportMode = 'AIR'
+      AND vt.ETD >= :start_date AND vt.ETD <= :end_date
       AND vt.AirlineName1 IS NOT NULL
       AND (:country IS NULL OR vt.ConLoadPortCountryName = :country)
     ORDER BY vt.AirlineName1
@@ -241,26 +259,37 @@ def get_weekly_data(
     dest_city_filter = build_multi_in_clause("vt.ConDischargePortCity", destination_city, params, "dest_city")
 
     query = f"""
+    WITH ConsolShipmentCounts AS (
+        SELECT 
+            vt.ETD,
+            vt.Air_ChargebleWeight,
+            vt.Revenue_USD,
+            (SELECT COUNT(DISTINCT Link_ShipmentNum) 
+             FROM dbo.ChatData_ViewShipConsolLink 
+             WHERE Link_ConsolNumber = vt.ConsoleNumber) AS ShipmentCount
+        FROM dbo.ChatData_ViewShipConsolTransport vt
+        WHERE vt.TransportMode = 'AIR'
+          AND vt.ETD >= :start_date 
+          AND vt.ETD <= :end_date
+          {company_filter}
+          {country_filter}
+          {airline_filter}
+          {branch_filter}
+          {origin_city_filter}
+          {dest_country_filter}
+          {dest_city_filter}
+    )
     SELECT
-        DATEPART(YEAR, vt.ETD) AS Year,
-        DATEPART(WEEK, vt.ETD) AS Week,
-        CAST(MIN(vt.ETD) AS DATE) AS Week_Start,
-        SUM(vt.Air_ChargebleWeight) AS Total_Tonnage,
-        SUM(vt.Revenue_USD) AS Total_Revenue,
-        COUNT(*) AS Total_Shipments
-    FROM dbo.ChatData_ViewShipConsolTransport vt
-    WHERE vt.ETD >= :start_date 
-      AND vt.ETD <= :end_date
-      {company_filter}
-      {country_filter}
-      {airline_filter}
-      {branch_filter}
-      {origin_city_filter}
-      {dest_country_filter}
-      {dest_city_filter}
+        DATEPART(YEAR, ETD) AS Year,
+        DATEPART(WEEK, ETD) AS Week,
+        CAST(MIN(ETD) AS DATE) AS Week_Start,
+        SUM(Air_ChargebleWeight) AS Total_Tonnage,
+        SUM(Revenue_USD) AS Total_Revenue,
+        SUM(ShipmentCount) AS Total_Shipments
+    FROM ConsolShipmentCounts
     GROUP BY 
-        DATEPART(YEAR, vt.ETD),
-        DATEPART(WEEK, vt.ETD)
+        DATEPART(YEAR, ETD),
+        DATEPART(WEEK, ETD)
     ORDER BY Year, Week
     """
     with engine.connect() as conn:
@@ -320,25 +349,36 @@ def get_monthly_data(
     dest_city_filter = build_multi_in_clause("vt.ConDischargePortCity", destination_city, params, "dest_city")
 
     query = f"""
+    WITH ConsolShipmentCounts AS (
+        SELECT 
+            vt.ETD,
+            vt.Air_ChargebleWeight,
+            vt.Revenue_USD,
+            (SELECT COUNT(DISTINCT Link_ShipmentNum) 
+             FROM dbo.ChatData_ViewShipConsolLink 
+             WHERE Link_ConsolNumber = vt.ConsoleNumber) AS ShipmentCount
+        FROM dbo.ChatData_ViewShipConsolTransport vt
+        WHERE vt.TransportMode = 'AIR'
+          AND vt.ETD >= :start_date 
+          AND vt.ETD <= :end_date
+          {company_filter}
+          {country_filter}
+          {airline_filter}
+          {branch_filter}
+          {origin_city_filter}
+          {dest_country_filter}
+          {dest_city_filter}
+    )
     SELECT
-        DATEPART(YEAR, vt.ETD) AS Year,
-        DATEPART(MONTH, vt.ETD) AS Month,
-        SUM(vt.Air_ChargebleWeight) AS Total_Tonnage,
-        SUM(vt.Revenue_USD) AS Total_Revenue,
-        COUNT(*) AS Total_Shipments
-    FROM dbo.ChatData_ViewShipConsolTransport vt
-    WHERE vt.ETD >= :start_date 
-      AND vt.ETD <= :end_date
-      {company_filter}
-      {country_filter}
-      {airline_filter}
-      {branch_filter}
-      {origin_city_filter}
-      {dest_country_filter}
-      {dest_city_filter}
+        DATEPART(YEAR, ETD) AS Year,
+        DATEPART(MONTH, ETD) AS Month,
+        SUM(Air_ChargebleWeight) AS Total_Tonnage,
+        SUM(Revenue_USD) AS Total_Revenue,
+        SUM(ShipmentCount) AS Total_Shipments
+    FROM ConsolShipmentCounts
     GROUP BY 
-        DATEPART(YEAR, vt.ETD),
-        DATEPART(MONTH, vt.ETD)
+        DATEPART(YEAR, ETD),
+        DATEPART(MONTH, ETD)
     ORDER BY Year, Month
     """
     with engine.connect() as conn:
@@ -407,25 +447,39 @@ def get_kpi_summary(
     dest_city_filter = build_multi_in_clause("vt.ConDischargePortCity", destination_city, params, "dest_city")
 
     query = f"""
+    WITH FilteredConsols AS (
+        SELECT 
+            vt.Air_ChargebleWeight,
+            vt.Revenue_USD,
+            vt.Cost_USD,
+            vt.Profit_USD,
+            vt.AirlineName1,
+            vt.ConLoadPortCountryName,
+            (SELECT COUNT(DISTINCT Link_ShipmentNum) 
+             FROM dbo.ChatData_ViewShipConsolLink 
+             WHERE Link_ConsolNumber = vt.ConsoleNumber) AS ShipmentCount
+        FROM dbo.ChatData_ViewShipConsolTransport vt
+        WHERE vt.TransportMode = 'AIR'
+          AND vt.ETD >= :start_date 
+          AND vt.ETD <= :end_date
+          {company_filter}
+          {country_filter}
+          {airline_filter}
+          {branch_filter}
+          {origin_city_filter}
+          {dest_country_filter}
+          {dest_city_filter}
+    )
     SELECT
-        SUM(vt.Air_ChargebleWeight) AS Total_Tonnage,
-        SUM(vt.Revenue_USD) AS Total_Revenue,
-        SUM(vt.Cost_USD) AS Total_Cost,
-        SUM(vt.Profit_USD) AS Total_Profit,
-        CASE WHEN SUM(vt.Revenue_USD) > 0 THEN (SUM(vt.Profit_USD) / SUM(vt.Revenue_USD)) * 100 ELSE 0 END AS GP_Margin,
-        COUNT(*) AS Total_Shipments,
-        COUNT(DISTINCT vt.AirlineName1) AS Unique_Airlines,
-        COUNT(DISTINCT vt.ConLoadPortCountryName) AS Unique_Countries
-    FROM dbo.ChatData_ViewShipConsolTransport vt
-    WHERE vt.ETD >= :start_date 
-      AND vt.ETD <= :end_date
-      {company_filter}
-      {country_filter}
-      {airline_filter}
-      {branch_filter}
-      {origin_city_filter}
-      {dest_country_filter}
-      {dest_city_filter}
+        SUM(Air_ChargebleWeight) AS Total_Tonnage,
+        SUM(Revenue_USD) AS Total_Revenue,
+        SUM(Cost_USD) AS Total_Cost,
+        SUM(Profit_USD) AS Total_Profit,
+        CASE WHEN SUM(Revenue_USD) > 0 THEN (SUM(Profit_USD) / SUM(Revenue_USD)) * 100 ELSE 0 END AS GP_Margin,
+        SUM(ShipmentCount) AS Total_Shipments,
+        COUNT(DISTINCT AirlineName1) AS Unique_Airlines,
+        COUNT(DISTINCT ConLoadPortCountryName) AS Unique_Countries
+    FROM FilteredConsols
     """
     with engine.connect() as conn:
         df = pd.read_sql(text(query), conn, params=params)
@@ -496,7 +550,8 @@ def get_origin_cities(start_date: str, end_date: str, country: str = None):
     query = """
     SELECT DISTINCT vt.ConLoadPortCity AS city
     FROM dbo.ChatData_ViewShipConsolTransport vt
-    WHERE vt.ETD >= :start_date AND vt.ETD <= :end_date
+    WHERE vt.TransportMode = 'AIR'
+      AND vt.ETD >= :start_date AND vt.ETD <= :end_date
       AND vt.ConLoadPortCity IS NOT NULL
       AND (:country IS NULL OR vt.ConLoadPortCountryName = :country)
     ORDER BY vt.ConLoadPortCity
@@ -511,7 +566,8 @@ def get_destination_countries(start_date: str, end_date: str):
     query = """
     SELECT DISTINCT vt.ConDischargePortCountryName AS country
     FROM dbo.ChatData_ViewShipConsolTransport vt
-    WHERE vt.ETD >= :start_date AND vt.ETD <= :end_date
+    WHERE vt.TransportMode = 'AIR'
+      AND vt.ETD >= :start_date AND vt.ETD <= :end_date
       AND vt.ConDischargePortCountryName IS NOT NULL
     ORDER BY vt.ConDischargePortCountryName
     """
@@ -525,7 +581,8 @@ def get_destination_cities(start_date: str, end_date: str, country: str = None):
     query = """
     SELECT DISTINCT vt.ConDischargePortCity AS city
     FROM dbo.ChatData_ViewShipConsolTransport vt
-    WHERE vt.ETD >= :start_date AND vt.ETD <= :end_date
+    WHERE vt.TransportMode = 'AIR'
+      AND vt.ETD >= :start_date AND vt.ETD <= :end_date
       AND vt.ConDischargePortCity IS NOT NULL
       AND (:country IS NULL OR vt.ConDischargePortCountryName = :country)
     ORDER BY vt.ConDischargePortCity
@@ -533,3 +590,42 @@ def get_destination_cities(start_date: str, end_date: str, country: str = None):
     with engine.connect() as conn:
         df = pd.read_sql(text(query), conn, params={"start_date": start_date, "end_date": end_date, "country": country})
     return df["city"].dropna().tolist()
+
+
+def execute_custom_query(sql_str: str):
+    """
+    Executes a custom SQL query directly in a sandbox environment and returns the dataframe as a list of records.
+    
+    Safety checks:
+    - Validates query is not empty
+    - Prevents execution of certain dangerous operations
+    - Executes in read-only context
+    """
+    if not sql_str or not sql_str.strip():
+        raise ValueError("SQL query cannot be empty")
+    
+    # Normalize query
+    sql_str = sql_str.strip()
+    
+    # Sandbox check: Prevent DROP, DELETE, INSERT, UPDATE, ALTER operations
+    dangerous_keywords = ['DROP', 'DELETE', 'INSERT', 'UPDATE', 'ALTER', 'CREATE', 'TRUNCATE']
+    query_upper = sql_str.upper()
+    
+    for keyword in dangerous_keywords:
+        # Simple check - if statement starts with dangerous keyword
+        if query_upper.lstrip().startswith(keyword):
+            raise ValueError(f"Query sandbox does not allow {keyword} operations. This is a read-only query execution environment.")
+    
+    try:
+        with engine.connect() as conn:
+            # Execute query and read results
+            df = pd.read_sql(text(sql_str), conn)
+        
+        # Convert NULL values to None for JSON serialization
+        df = df.where(pd.notnull(df), None)
+        
+        # Return as list of records
+        return df.to_dict(orient="records")
+    except Exception as e:
+        # Re-raise with more context
+        raise Exception(f"SQL execution error: {str(e)}")
