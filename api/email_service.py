@@ -42,7 +42,7 @@ def send_pdf_via_graph(pdf_path: str, recipient_email: str):
         
         email_msg = {
             "message": {
-                "subject": "On-Demand Tonnage Analysis Dashboard",
+                "subject": "Weekly Air Freight Performance Report",
                 "body": {
                     "contentType": "Text",
                     "content": "Hello,\n\nPlease find your requested custom tonnage dashboard view attached.\n\nBest Regards,\nBI Support Team"

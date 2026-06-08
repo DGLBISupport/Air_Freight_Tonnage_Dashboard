@@ -26,6 +26,26 @@ const formatNumber = (val: number | null | undefined) => {
 };
 
 const PIE_COLORS = ["#4299E1", "#81E6D9", "#CBD5E0", "#5A67D8", "#ED64A6"];
+const TEN_COLORS = ["#4299E1", "#319795", "#ED64A6", "#5A67D8", "#81E6D9", "#ED8936", "#ECC94B", "#48BB78", "#9F7AEA", "#CBD5E0"];
+
+// Branded airline colors — matched by lowercase substring of airline name
+const AIRLINE_COLORS: { [key: string]: string } = {
+  "turkish": "#C70A0C",
+  "vietnam": "#005e80",
+  "etihad": "#C4921B",
+  "asiana": "#464A4C",
+  "air canada": "#F01428",
+  "cathay": "#005D63",
+};
+
+// Returns the branded color for a known airline, falling back to TEN_COLORS[idx]
+const getAirlineColor = (airlineName: string, fallbackIdx: number): string => {
+  const lower = (airlineName || "").toLowerCase();
+  for (const [key, color] of Object.entries(AIRLINE_COLORS)) {
+    if (lower.includes(key)) return color;
+  }
+  return TEN_COLORS[fallbackIdx % TEN_COLORS.length];
+};
 
 // Parse weekly trend data dynamically from custom SQL result rows
 const parseWeeklyData = (rows: any[]) => {
@@ -52,7 +72,7 @@ const parseWeeklyData = (rows: any[]) => {
     });
     return Object.values(weeklyMap).sort((a: any, b: any) => a.Year !== b.Year ? a.Year - b.Year : a.Week - b.Week);
   }
-  
+
   const hasEtd = rows.some((r) => r.ETD || r.etd || r.etd_date);
   if (hasEtd) {
     const weeklyMap: { [key: string]: any } = {};
@@ -61,18 +81,18 @@ const parseWeeklyData = (rows: any[]) => {
       if (!etdVal) return;
       const date = new Date(etdVal);
       if (isNaN(date.getTime())) return;
-      
+
       const day = date.getDay();
       const diff = date.getDate() - day + (day === 0 ? -6 : 1);
       const monday = new Date(date.setDate(diff));
       const weekStr = monday.toISOString().slice(0, 10);
-      
+
       const tempDate = new Date(date.valueOf());
       tempDate.setHours(0, 0, 0, 0);
       tempDate.setDate(tempDate.getDate() + 3 - (tempDate.getDay() + 6) % 7);
       const week1 = new Date(tempDate.getFullYear(), 0, 4);
       const weekNum = 1 + Math.round(((tempDate.valueOf() - week1.valueOf()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
-      
+
       const key = weekStr;
       if (!weeklyMap[key]) {
         weeklyMap[key] = {
@@ -91,7 +111,7 @@ const parseWeeklyData = (rows: any[]) => {
     });
     return Object.values(weeklyMap).sort((a: any, b: any) => a.Week_Start.localeCompare(b.Week_Start));
   }
-  
+
   return [];
 };
 
@@ -125,7 +145,7 @@ const parseMonthlyData = (rows: any[]) => {
     });
     return Object.values(monthlyMap).sort((a: any, b: any) => a.Year !== b.Year ? a.Year - b.Year : a.Month - b.Month);
   }
-  
+
   const hasEtd = rows.some((r) => r.ETD || r.etd || r.etd_date);
   if (hasEtd) {
     const monthlyMap: { [key: string]: any } = {};
@@ -153,7 +173,7 @@ const parseMonthlyData = (rows: any[]) => {
     });
     return Object.values(monthlyMap).sort((a: any, b: any) => a.Year !== b.Year ? a.Year - b.Year : a.Month - b.Month);
   }
-  
+
   return [];
 };
 
@@ -169,6 +189,22 @@ export default function PrintView() {
   const destinationCity = searchParams?.get("destination_city") || "";
   const branch = searchParams?.get("branch") || "";
   const maxDataRows = parseInt(searchParams?.get("max_data_rows") || "100");
+  const mode = searchParams?.get("mode") || "standard";
+
+  const getSqlDateRange = () => {
+    if (data.length === 0) return "";
+    const dates = data.map(r => {
+      const etdVal = r.ETD ?? r.etd ?? r.etd_date;
+      if (!etdVal) return null;
+      const d = new Date(etdVal);
+      return isNaN(d.getTime()) ? null : d;
+    }).filter(Boolean) as Date[];
+    if (dates.length === 0) return "";
+    const minD = new Date(Math.min(...dates.map(d => d.getTime())));
+    const maxD = new Date(Math.max(...dates.map(d => d.getTime())));
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${minD.getFullYear()}-${pad(minD.getMonth() + 1)}-${pad(minD.getDate())} to ${maxD.getFullYear()}-${pad(maxD.getMonth() + 1)}-${pad(maxD.getDate())}`;
+  };
 
   const [data, setData] = useState<any[]>([]);
   const [weeklyData, setWeeklyData] = useState<any[]>([]);
@@ -236,10 +272,10 @@ export default function PrintView() {
           const totalProfit = records.reduce((sum: number, r: any) => sum + Number(r.Total_Profit ?? r.Profit_USD ?? r.profit ?? 0), 0);
           const gpMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
           const totalShipments = records.reduce((sum: number, r: any) => sum + Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1), 0);
-          
+
           const airlinesSet = new Set(records.map((r: any) => r.Airline ?? r.AirlineName1 ?? r.carrier).filter(Boolean));
           const countriesSet = new Set(records.map((r: any) => r.Origin_Country ?? r.ConLoadPortCountryName ?? r.country).filter(Boolean));
-          
+
           setKpi({
             Total_Tonnage: totalTonnage,
             Total_Revenue: totalRevenue,
@@ -304,7 +340,7 @@ export default function PrintView() {
       acc[countryName] = (acc[countryName] || 0) + (curr.Total_Revenue || 0);
       return acc;
     }, {});
-    
+
     const sorted = Object.entries(grouped)
       .map(([name, value]) => ({ name, value: value as number }))
       .sort((a, b) => b.value - a.value);
@@ -322,8 +358,8 @@ export default function PrintView() {
   // Process data for Airline Carrier wise tonnage (Top 10 overall, or highlight selected ones)
   const getAirlineWiseData = () => {
     const aggregated = data.reduce((acc: any, curr: any) => {
-      const carrier = curr.Airline || "Unknown Carrier";
-      acc[carrier] = (acc[carrier] || 0) + (curr.Total_Tonnage || 0);
+      const carrier = curr.Airline ?? curr.AirlineName1 ?? curr.carrier ?? "Unknown Carrier";
+      acc[carrier] = (acc[carrier] || 0) + Number(curr.Tonnage_Chargeable ?? curr.Air_ChargebleWeight ?? curr.Total_Tonnage ?? curr.tonnage ?? 0);
       return acc;
     }, {});
 
@@ -339,6 +375,167 @@ export default function PrintView() {
   };
 
   const airlineWiseData = getAirlineWiseData();
+
+  // Process data for Airline Carrier Tonnage Pie Chart (Top 4 + Others)
+  const getAirlinePieData = () => {
+    const aggregated = data.reduce((acc: any, curr: any) => {
+      const carrier = curr.Airline ?? curr.AirlineName1 ?? curr.carrier ?? "Unknown Carrier";
+      acc[carrier] = (acc[carrier] || 0) + Number(curr.Tonnage_Chargeable ?? curr.Air_ChargebleWeight ?? curr.Total_Tonnage ?? curr.tonnage ?? 0);
+      return acc;
+    }, {});
+
+    const sorted = Object.entries(aggregated)
+      .map(([name, tonnage]) => ({
+        name,
+        value: tonnage as number
+      }))
+      .sort((a, b) => b.value - a.value);
+
+    if (sorted.length <= 4) return sorted;
+    const top4 = sorted.slice(0, 4);
+    const othersVal = sorted.slice(4).reduce((sum, item) => sum + item.value, 0);
+    return [...top4, { name: "Others", value: othersVal }];
+  };
+
+  const airlinePieData = getAirlinePieData();
+
+  // Airline × Week stacked data — each row = one airline, each column = a week period
+  const getAirlineWeeklyStackData = () => {
+    const topAirlines = getAirlineWiseData().slice(0, 10).map(a => a.name);
+    const weekSet = new Map<string, string>(); // sortKey → label
+    data.forEach((r: any) => {
+      const etdVal = r.ETD ?? r.etd ?? r.etd_date;
+      if (!etdVal) return;
+      const date = new Date(etdVal);
+      if (isNaN(date.getTime())) return;
+      const td = new Date(date.valueOf());
+      td.setHours(0, 0, 0, 0);
+      td.setDate(td.getDate() + 3 - (td.getDay() + 6) % 7);
+      const w1 = new Date(td.getFullYear(), 0, 4);
+      const wn = 1 + Math.round(((td.valueOf() - w1.valueOf()) / 86400000 - 3 + (w1.getDay() + 6) % 7) / 7);
+      const yr = date.getFullYear();
+      const sk = `${yr}-${String(wn).padStart(2, '0')}`;
+      if (!weekSet.has(sk)) weekSet.set(sk, `W${wn}'${String(yr).slice(-2)}`);
+    });
+    const sortedWeeks = Array.from(weekSet.entries()).sort(([a], [b]) => a.localeCompare(b));
+    const weekLabels = sortedWeeks.map(([, l]) => l);
+    const weekSortKeys = sortedWeeks.map(([k]) => k);
+
+    const airlineWeekMap: { [airline: string]: { [wk: string]: number } } = {};
+    topAirlines.forEach(name => { airlineWeekMap[name] = {}; });
+
+    data.forEach((r: any) => {
+      const carrier = r.Airline ?? r.AirlineName1 ?? r.carrier ?? "Unknown Carrier";
+      if (!topAirlines.includes(carrier)) return;
+      const etdVal = r.ETD ?? r.etd ?? r.etd_date;
+      if (!etdVal) return;
+      const date = new Date(etdVal);
+      if (isNaN(date.getTime())) return;
+      const td = new Date(date.valueOf());
+      td.setHours(0, 0, 0, 0);
+      td.setDate(td.getDate() + 3 - (td.getDay() + 6) % 7);
+      const w1 = new Date(td.getFullYear(), 0, 4);
+      const wn = 1 + Math.round(((td.valueOf() - w1.valueOf()) / 86400000 - 3 + (w1.getDay() + 6) % 7) / 7);
+      const yr = date.getFullYear();
+      const sk = `${yr}-${String(wn).padStart(2, '0')}`;
+      const wIdx = weekSortKeys.indexOf(sk);
+      if (wIdx === -1) return;
+      const lbl = weekLabels[wIdx];
+      const ton = Number(r.Total_Tonnage ?? r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.tonnage ?? 0);
+      airlineWeekMap[carrier][lbl] = (airlineWeekMap[carrier][lbl] || 0) + ton;
+    });
+
+    return topAirlines.map((name, idx) => {
+      const row: { [key: string]: any } = { airline: name, colorIdx: idx };
+      weekLabels.forEach(wk => { row[wk] = airlineWeekMap[name][wk] || 0; });
+      return row;
+    });
+  };
+
+  const airlineWeeklyStackData = getAirlineWeeklyStackData();
+
+  const weekStackLabels = (() => {
+    const weekSet = new Map<string, string>();
+    data.forEach((r: any) => {
+      const etdVal = r.ETD ?? r.etd ?? r.etd_date;
+      if (!etdVal) return;
+      const date = new Date(etdVal);
+      if (isNaN(date.getTime())) return;
+      const td = new Date(date.valueOf());
+      td.setHours(0, 0, 0, 0);
+      td.setDate(td.getDate() + 3 - (td.getDay() + 6) % 7);
+      const w1 = new Date(td.getFullYear(), 0, 4);
+      const wn = 1 + Math.round(((td.valueOf() - w1.valueOf()) / 86400000 - 3 + (w1.getDay() + 6) % 7) / 7);
+      const yr = date.getFullYear();
+      const sk = `${yr}-${String(wn).padStart(2, '0')}`;
+      if (!weekSet.has(sk)) weekSet.set(sk, `W${wn}'${String(yr).slice(-2)}`);
+    });
+    return Array.from(weekSet.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v);
+  })();
+
+  // Process data for Trade Routes Pie Chart (Top 5 + Others) — used in SQL Sandbox mode
+  const getTradeRouteData = () => {
+    const grouped = data.reduce((acc: any, curr: any) => {
+      const origin = curr.Origin_Country || curr.ConLoadPortCountryName || curr.Origin_City || "Unknown";
+      const dest = curr.Destination_Country || curr.DestCountry || curr.Destination_City || "Unknown";
+      const route = `${origin} → ${dest}`;
+      acc[route] = (acc[route] || 0) + Number(curr.Total_Tonnage ?? curr.Tonnage_Chargeable ?? curr.Air_ChargebleWeight ?? curr.tonnage ?? 0);
+      return acc;
+    }, {});
+
+    const sorted = Object.entries(grouped)
+      .map(([name, value]) => ({ name, value: value as number }))
+      .sort((a, b) => b.value - a.value);
+
+    if (sorted.length <= 5) return sorted;
+    const top5 = sorted.slice(0, 5);
+    const othersVal = sorted.slice(5).reduce((sum, item) => sum + item.value, 0);
+    return [...top5, { name: "Others", value: othersVal }];
+  };
+
+  const tradeRouteData = getTradeRouteData();
+
+  // Process day-by-day stacked airline tonnage share
+  const getDailyStackedAirlineData = () => {
+    const topAirlines = getAirlineWiseData().map(a => a.name);
+    const dayMap: { [key: string]: { date_label: string; sortKey: string;[key: string]: any } } = {};
+
+    data.forEach((r: any) => {
+      const etdVal = r.ETD ?? r.etd ?? r.etd_date;
+      if (!etdVal) return;
+      const date = new Date(etdVal);
+      if (isNaN(date.getTime())) return;
+      const dateStr = date.toISOString().slice(0, 10);
+      const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      const label = `${dayNames[date.getDay()]} ${date.getDate()}/${date.getMonth() + 1}`;
+
+      const carrier = r.Airline ?? r.AirlineName1 ?? r.carrier ?? "Unknown Carrier";
+      const ton = Number(r.Total_Tonnage ?? r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.tonnage ?? 0);
+
+      if (!dayMap[dateStr]) {
+        dayMap[dateStr] = { date_label: label, sortKey: dateStr };
+        // Initialize top airlines to 0
+        topAirlines.forEach((airlineName) => {
+          dayMap[dateStr][airlineName] = 0;
+        });
+        dayMap[dateStr]["Others"] = 0;
+      }
+
+      if (topAirlines.includes(carrier)) {
+        dayMap[dateStr][carrier] = (dayMap[dateStr][carrier] || 0) + ton;
+      } else {
+        dayMap[dateStr]["Others"] = (dayMap[dateStr]["Others"] || 0) + ton;
+      }
+    });
+
+    return Object.values(dayMap)
+      .sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+  };
+
+  const dailyStackedAirlineData = getDailyStackedAirlineData();
+  const top10Airlines = getAirlineWiseData();
+  const totalTop10Tonnage = top10Airlines.reduce((sum, item) => sum + item.tonnage, 0);
+  const top10AirlinesNames = top10Airlines.map(a => a.name);
 
   // Process data for stacked class breakdown
   const stackedWeightBars = weeklyData.slice(-12).map((item) => {
@@ -364,29 +561,32 @@ export default function PrintView() {
   return (
     <div className="flex flex-col items-center bg-slate-150 py-4 gap-8 print:block print:p-0 print:gap-0 print:bg-transparent select-none">
       {/* Hidden indicator for PDF capture readiness */}
-      <div id="pdf-ready" style={{display: 'none'}}>ready</div>
-      
+      <div id="pdf-ready" style={{ display: 'none' }}>ready</div>
+
       {/* ── SECTIONS STATUS INDICATOR ── */}
       <div className="print:hidden w-full max-w-[1123px] bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg shadow-sm p-3 mx-auto">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse" />
             <p className="text-xs font-semibold text-blue-900">
-              PDF Sections: 
+              PDF Sections:
               <span className="ml-2">
-                {selectedSections.weeklyVisual && <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[10px] font-bold mr-1 inline-block">Weekly Charts</span>}
-                {selectedSections.weeklyLedger && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold mr-1 inline-block">Weekly Tables</span>}
-                {selectedSections.monthlyVisual && <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[10px] font-bold mr-1 inline-block">Monthly Charts</span>}
-                {selectedSections.monthlyLedger && <span className="bg-teal-100 text-teal-700 px-2 py-0.5 rounded text-[10px] font-bold mr-1 inline-block">Monthly Tables</span>}
+                {selectedSections.weeklyVisual && <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[10px] font-bold mr-1 inline-block">{mode === "custom-sql" ? "Weekly Operational Performance" : "Weekly Charts"}</span>}
+                {selectedSections.weeklyLedger && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold mr-1 inline-block">{mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Tables"}</span>}
+                {selectedSections.monthlyVisual && <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[10px] font-bold mr-1 inline-block">{mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Charts"}</span>}
+                {selectedSections.monthlyLedger && mode !== "custom-sql" && <span className="bg-teal-100 text-teal-700 px-2 py-0.5 rounded text-[10px] font-bold mr-1 inline-block">Monthly Tables</span>}
               </span>
             </p>
           </div>
           <span className="text-[10px] font-bold text-blue-600 bg-white px-2.5 py-1 rounded-full border border-blue-200">
-            {Object.values(selectedSections).filter(Boolean).length} / 4 Sections
+            {mode === "custom-sql"
+              ? `${[selectedSections.weeklyVisual, selectedSections.weeklyLedger, selectedSections.monthlyVisual].filter(Boolean).length} / 3`
+              : `${Object.values(selectedSections).filter(Boolean).length} / 4`
+            } Sections
           </span>
         </div>
       </div>
-      
+
       {/* ── SECTION SELECTOR (Only visible on screen, hidden when printing) ── */}
       <div className="print:hidden w-full max-w-[1123px] bg-white border border-slate-200 rounded-lg shadow-md p-4 mx-auto">
         <div className="flex flex-col gap-4">
@@ -418,11 +618,10 @@ export default function PrintView() {
             {/* Section 1: Weekly Visual */}
             <button
               onClick={() => toggleSection('weeklyVisual')}
-              className={`p-3 rounded-lg border-2 transition-all text-left ${
-                selectedSections.weeklyVisual
-                  ? 'border-indigo-400 bg-indigo-50 shadow-sm'
-                  : 'border-slate-200 bg-slate-50 hover:border-slate-300'
-              }`}
+              className={`p-3 rounded-lg border-2 transition-all text-left ${selectedSections.weeklyVisual
+                ? 'border-indigo-400 bg-indigo-50 shadow-sm'
+                : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                }`}
             >
               <div className="flex items-start gap-2">
                 {selectedSections.weeklyVisual ? (
@@ -431,8 +630,12 @@ export default function PrintView() {
                   <Square className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
                 )}
                 <div>
-                  <p className="font-semibold text-sm text-slate-800">Weekly Dashboard</p>
-                  <p className="text-xs text-slate-500 mt-0.5">Charts & KPIs</p>
+                  <p className="font-semibold text-sm text-slate-800">
+                    {mode === "custom-sql" ? "Weekly Operational Performance" : "Weekly Dashboard"}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {mode === "custom-sql" ? "All 4 Visuals" : "Charts & KPIs"}
+                  </p>
                 </div>
               </div>
             </button>
@@ -440,11 +643,10 @@ export default function PrintView() {
             {/* Section 2: Weekly Ledger */}
             <button
               onClick={() => toggleSection('weeklyLedger')}
-              className={`p-3 rounded-lg border-2 transition-all text-left ${
-                selectedSections.weeklyLedger
-                  ? 'border-blue-400 bg-blue-50 shadow-sm'
-                  : 'border-slate-200 bg-slate-50 hover:border-slate-300'
-              }`}
+              className={`p-3 rounded-lg border-2 transition-all text-left ${selectedSections.weeklyLedger
+                ? 'border-blue-400 bg-blue-50 shadow-sm'
+                : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                }`}
             >
               <div className="flex items-start gap-2">
                 {selectedSections.weeklyLedger ? (
@@ -453,8 +655,12 @@ export default function PrintView() {
                   <Square className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
                 )}
                 <div>
-                  <p className="font-semibold text-sm text-slate-800">Weekly Ledger</p>
-                  <p className="text-xs text-slate-500 mt-0.5">Carrier details</p>
+                  <p className="font-semibold text-sm text-slate-800">
+                    {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Ledger"}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {mode === "custom-sql" ? "Airline details & metrics" : "Carrier details"}
+                  </p>
                 </div>
               </div>
             </button>
@@ -462,11 +668,10 @@ export default function PrintView() {
             {/* Section 3: Monthly Visual */}
             <button
               onClick={() => toggleSection('monthlyVisual')}
-              className={`p-3 rounded-lg border-2 transition-all text-left ${
-                selectedSections.monthlyVisual
-                  ? 'border-teal-400 bg-teal-50 shadow-sm'
-                  : 'border-slate-200 bg-slate-50 hover:border-slate-300'
-              }`}
+              className={`p-3 rounded-lg border-2 transition-all text-left ${selectedSections.monthlyVisual
+                ? 'border-teal-400 bg-teal-50 shadow-sm'
+                : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                }`}
             >
               <div className="flex items-start gap-2">
                 {selectedSections.monthlyVisual ? (
@@ -475,33 +680,38 @@ export default function PrintView() {
                   <Square className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
                 )}
                 <div>
-                  <p className="font-semibold text-sm text-slate-800">Monthly Dashboard</p>
-                  <p className="text-xs text-slate-500 mt-0.5">Trends & insights</p>
+                  <p className="font-semibold text-sm text-slate-800">
+                    {mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Dashboard"}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {mode === "custom-sql" ? "Route details & metrics" : "Trends & insights"}
+                  </p>
                 </div>
               </div>
             </button>
 
             {/* Section 4: Monthly Ledger */}
-            <button
-              onClick={() => toggleSection('monthlyLedger')}
-              className={`p-3 rounded-lg border-2 transition-all text-left ${
-                selectedSections.monthlyLedger
+            {mode !== "custom-sql" && (
+              <button
+                onClick={() => toggleSection('monthlyLedger')}
+                className={`p-3 rounded-lg border-2 transition-all text-left ${selectedSections.monthlyLedger
                   ? 'border-purple-400 bg-purple-50 shadow-sm'
                   : 'border-slate-200 bg-slate-50 hover:border-slate-300'
-              }`}
-            >
-              <div className="flex items-start gap-2">
-                {selectedSections.monthlyLedger ? (
-                  <CheckSquare className="w-5 h-5 text-purple-600 shrink-0 mt-0.5" />
-                ) : (
-                  <Square className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
-                )}
-                <div>
-                  <p className="font-semibold text-sm text-slate-800">Monthly Ledger</p>
-                  <p className="text-xs text-slate-500 mt-0.5">Financial summary</p>
+                  }`}
+              >
+                <div className="flex items-start gap-2">
+                  {selectedSections.monthlyLedger ? (
+                    <CheckSquare className="w-5 h-5 text-purple-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <Square className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
+                  )}
+                  <div>
+                    <p className="font-semibold text-sm text-slate-800">Monthly Ledger</p>
+                    <p className="text-xs text-slate-500 mt-0.5">Financial summary</p>
+                  </div>
                 </div>
-              </div>
-            </button>
+              </button>
+            )}
           </div>
 
           <div className="bg-slate-50 border border-slate-200 rounded-md p-2 text-xs text-slate-600">
@@ -509,506 +719,995 @@ export default function PrintView() {
           </div>
         </div>
       </div>
-      
+
       {/* ── SECTION 1: WEEKLY VISUAL DASHBOARD (Page 1) ── */}
       {selectedSections.weeklyVisual && (
-      <div className="bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
-        
-        {/* Print Header */}
-        <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
-          <div className="flex items-center gap-2.5">
-            <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-            <div>
-              <h1 className="text-lg font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
-              <p className="text-[10px] text-slate-400 mt-0.5">Dart Global Logistics · Weekly Operational Performance Dashboard</p>
-            </div>
-          </div>
-          <div className="flex flex-col items-end gap-0.5">
-            <Badge className="bg-indigo-50 text-indigo-700 border border-indigo-150 font-bold text-[9px] px-2 py-0.5 rounded shadow-sm">
-              📅 {startDate} to {endDate}
-            </Badge>
-            <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
-              {companyCode && (
-                <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                  🏢 Entity: {companyCode}
-                </span>
-              )}
-              {branch && (
-                <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                  🏢 Branch: {branch}
-                </span>
-              )}
-              <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                🌍 From: {originCity ? `${originCity}, ` : ""}{country || "Global Markets"}
-              </span>
-              {destinationCountry && (
-                <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                  📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
-                </span>
-              )}
-              <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded max-w-[150px] truncate">
-                ✈️ Carrier: {airline || "All Carriers"}
-              </span>
-            </div>
-          </div>
-        </div>
+        <div className="bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
 
-        {/* KPI Cards Row */}
-        <div className="grid grid-cols-5 gap-4 mt-4">
-          <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
-            <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Revenue</span>
-            <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
-            <span className="text-[8px] text-blue-500 font-semibold">✓ Consol Revenue</span>
-          </div>
-          <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
-            <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Cost</span>
-            <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
-            <span className="text-[8px] text-rose-500 font-semibold">✗ Total Expenses</span>
-          </div>
-          <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
-            <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Profit</span>
-            <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
-            <span className="text-[8px] text-emerald-600 font-semibold">✓ Net Earnings</span>
-          </div>
-          <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
-            <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">GP Margin</span>
-            <h3 className="text-lg font-extrabold text-slate-800 leading-none">
-              {kpi.GP_Margin ? `${kpi.GP_Margin.toFixed(1)}%` : "0.0%"}
-            </h3>
-            <span className="text-[8px] text-teal-600 font-semibold">✓ Margin Ratio</span>
-          </div>
-          <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
-            <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Tonnage</span>
-            <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
-            <span className="text-[8px] text-indigo-600 font-semibold">✈️ Active Weight</span>
-          </div>
-        </div>
-
-        {/* Expanded Charts Grid */}
-        <div className="grid grid-cols-12 gap-6 my-4 flex-1 items-stretch">
-          {/* Left: Weekly Revenue Trend Area Chart */}
-          <div className="col-span-8 border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between h-[450px]">
-            <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Revenue Flow & Trends (Weekly)</span>
-            <div className="h-[390px] w-full mt-2">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={weeklyData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
-                  <defs>
-                    <linearGradient id="printArea" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#4299E1" stopOpacity={0.25} />
-                      <stop offset="100%" stopColor="#FFFFFF" stopOpacity={0.0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} />
-                  <XAxis dataKey="week_label" tick={{ fontSize: 8, fill: "#718096" }} axisLine={{ stroke: "#E2E8F0" }} tickLine={false} />
-                  <YAxis tick={{ fontSize: 8, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
-                  <Area type="monotone" dataKey="Total_Revenue" stroke="#3182CE" strokeWidth={2} fill="url(#printArea)" dot={{ fill: "#3182CE", r: 3 }} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Right: Airline wise Tonnage Chart */}
-          <div className="col-span-4 border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between h-[450px]">
-            <div className="flex items-center justify-between">
-              <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Airline Carrier Tonnage</span>
-              {selectedAirlines.length > 0 && (
-                <Badge variant="outline" className="border-blue-200 text-blue-600 bg-blue-50/50 text-[6px] font-bold px-1 py-0.2 rounded shrink-0">
-                  Selection Active
-                </Badge>
-              )}
-            </div>
-            <div className="h-[390px] w-full mt-2">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={airlineWiseData}
-                  layout="vertical"
-                  margin={{ top: 5, right: 10, left: 10, bottom: 5 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={true} horizontal={false} />
-                  <XAxis
-                    type="number"
-                    tick={{ fontSize: 8, fill: "#A0AEC0" }}
-                    axisLine={false}
-                    tickLine={false}
-                    tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
-                  />
-                  <YAxis
-                    dataKey="name"
-                    type="category"
-                    tick={{ fontSize: 8, fill: "#4A5568", fontWeight: 600 }}
-                    axisLine={{ stroke: "#E2E8F0" }}
-                    tickLine={false}
-                    width={70}
-                  />
-                  <Bar dataKey="tonnage" radius={[0, 4, 4, 0]} maxBarSize={14}>
-                    {airlineWiseData.map((entry: any, index: number) => (
-                      <Cell
-                        key={`cell-${index}`}
-                        fill={entry.isSelected || selectedAirlines.length === 0 ? "#3182CE" : "#CBD5E0"}
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-
-        {/* Print Footer */}
-        <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[8px] text-slate-400">
-          <span>Generated via Headless Chromium PDF Print Engine</span>
-          <span>© 2026 Dart Global Logistics · Visual Summary Page</span>
-        </div>
-      </div>
-      )}
-
-      {/* ── SECTION 2: WEEKLY DETAILED CARRIER LEDGER (Page 2+, Dynamic Flow) ── */}
-      {selectedSections.weeklyLedger && (
-      <div className="bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
-        
-        <div className="flex flex-col print:block gap-6 flex-1">
           {/* Print Header */}
           <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
             <div className="flex items-center gap-2.5">
               <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
               <div>
                 <h1 className="text-lg font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
-                <p className="text-[10px] text-slate-400 mt-0.5">Dart Global Logistics · Weekly Carrier Metrics Detailed Ledger</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  Dart Global Logistics · {mode === "custom-sql" ? "Weekly Operational Performance" : "Weekly Operational Performance Dashboard"}
+                </p>
               </div>
             </div>
             <div className="flex flex-col items-end gap-0.5">
               <Badge className="bg-indigo-50 text-indigo-700 border border-indigo-150 font-bold text-[9px] px-2 py-0.5 rounded shadow-sm">
-                📅 {startDate} to {endDate}
+                📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`}
               </Badge>
+              <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
+                {companyCode && (
+                  <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                    🏢 Entity: {companyCode}
+                  </span>
+                )}
+                {branch && (
+                  <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                    🏢 Branch: {branch}
+                  </span>
+                )}
+                <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                  🌍 From: {originCity ? `${originCity}, ` : ""}{country || "Global Markets"}
+                </span>
+                {destinationCountry && (
+                  <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                    📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
+                  </span>
+                )}
+                <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded max-w-[150px] truncate">
+                  ✈️ Carrier: {airline || "All Carriers"}
+                </span>
+              </div>
             </div>
           </div>
 
-          {/* Carrier Metrics Complete Table */}
-          <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex-1">
-            <div className="flex items-center justify-between mb-2 pb-1 border-b border-[#F1F5F9]">
-              <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Weekly Carrier Ledger</span>
-              <span className="text-[8px] text-slate-400 font-bold">All Carrier Records ({data.length})</span>
+          {/* KPI Cards Row */}
+          <div className="grid grid-cols-4 gap-4 mt-4">
+            <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
+              <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Revenue</span>
+              <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
+              <span className="text-[8px] text-blue-500 font-semibold">✓ Consol Revenue</span>
             </div>
-            <div>
-              <table className="w-full text-left text-[10px] border-collapse">
-                <thead>
-                  <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[8px] tracking-wider bg-slate-50/50">
-                    {searchParams?.get("mode") === "custom-sql" ? (
-                      data.length > 0 ? (
-                        Object.keys(data[0]).map((key) => (
-                          <th key={key} className="px-3 py-1.5 first:rounded-l-md last:rounded-r-md">
-                            {key.replace(/_/g, " ")}
-                          </th>
-                        ))
-                      ) : (
-                        <th className="px-3 py-1.5">Custom SQL Columns</th>
-                      )
-                    ) : (
-                      <>
-                        <th className="px-3 py-1.5">Branch</th>
-                        <th className="px-3 py-1.5">Airline Name</th>
-                        <th className="px-3 py-1.5">Origin</th>
-                        <th className="px-3 py-1.5">Destination</th>
-                        <th className="px-3 py-1.5 text-right">Revenue</th>
-                        <th className="px-3 py-1.5 text-right">Tonnage</th>
-                        <th className="px-3 py-1.5 text-right">Shipments</th>
-                      </>
-                    )}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#F1F5F9]">
-                  {searchParams?.get("mode") === "custom-sql" ? (
-                    data.slice(0, maxDataRows).map((row: any, i: number) => (
-                      <tr key={i} className="hover:bg-slate-50/50">
-                        {Object.entries(row).map(([key, val]: any, cellIdx) => {
-                          const isPrice = key.toLowerCase().includes("revenue") || key.toLowerCase().includes("cost") || key.toLowerCase().includes("profit") || key.toLowerCase().includes("amount") || key.toLowerCase().includes("usd");
-                          const isWeight = key.toLowerCase().includes("tonnage") || key.toLowerCase().includes("weight");
-                          const isNumeric = typeof val === "number";
-
-                          let displayVal = val;
-                          if (val == null) {
-                            displayVal = "—";
-                          } else if (isPrice && isNumeric) {
-                            displayVal = formatCurrency(val);
-                          } else if (isWeight && isNumeric) {
-                            displayVal = `${formatNumber(val)} kg`;
-                          } else if (isNumeric) {
-                            displayVal = formatNumber(val);
-                          }
-
-                          return (
-                            <td
-                              key={cellIdx}
-                              className={`px-3 py-1.5 text-slate-700 font-medium ${
-                                isNumeric ? "text-right tabular-nums" : ""
-                              } ${key.toLowerCase().includes("airline") || key.toLowerCase().includes("carrier") ? "font-bold text-slate-800" : ""}`}
-                            >
-                              {displayVal}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))
-                  ) : (
-                    data.slice(0, maxDataRows).map((row: any, i: number) => (
-                      <tr key={i} className="hover:bg-slate-50/50">
-                        <td className="px-3 py-1.5 font-bold text-slate-500">{row.Company_Code ?? "—"}</td>
-                        <td className="px-3 py-1.5 font-semibold text-slate-800 truncate max-w-[150px]">{row.Airline ?? "—"}</td>
-                        <td className="px-3 py-1.5 text-slate-500 truncate max-w-[150px]">
-                          {row.Origin_City ? `${row.Origin_City}, ` : ""}{row.Origin_Country ?? "—"}
-                        </td>
-                        <td className="px-3 py-1.5 text-slate-500 truncate max-w-[150px]">
-                          {row.Destination_City ? `${row.Destination_City}, ` : ""}{row.Destination_Country ?? "—"}
-                        </td>
-                        <td className="px-3 py-1.5 text-right font-bold text-blue-600">
-                          {row.Total_Revenue != null ? formatCurrency(row.Total_Revenue) : "—"}
-                        </td>
-                        <td className="px-3 py-1.5 text-right text-slate-600 font-semibold">
-                          {row.Total_Tonnage != null ? `${formatNumber(row.Total_Tonnage)} kg` : "—"}
-                        </td>
-                        <td className="px-3 py-1.5 text-right text-slate-400">
-                          {row.Total_Shipments != null ? formatNumber(row.Total_Shipments) : "—"}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                  {data.length === 0 && (
-                    <tr>
-                      <td colSpan={10} className="text-center py-6 text-slate-400">No carrier ledger data available.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+            <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
+              <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Cost</span>
+              <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
+              <span className="text-[8px] text-rose-500 font-semibold">✗ Total Expenses</span>
+            </div>
+            <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
+              <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Profit</span>
+              <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
+              <span className="text-[8px] text-emerald-600 font-semibold">✓ Net Earnings</span>
+            </div>
+            <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
+              <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Tonnage</span>
+              <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
+              <span className="text-[8px] text-indigo-600 font-semibold">✈️ Active Weight</span>
             </div>
           </div>
-        </div>
 
-        {/* Print Footer */}
-        <div className="border-t border-slate-200 pt-2 mt-4 flex items-center justify-between text-[8px] text-slate-400">
-          <span>Generated via Headless Chromium PDF Print Engine</span>
-          <span>© 2026 Dart Global Logistics · Carrier Ledger Page</span>
+          {/* Expanded Charts Grid */}
+          {mode === "custom-sql" ? (
+            <div className="flex flex-col flex-1 min-h-0 gap-4 mt-2 mb-1 justify-between">
+              {/* Row 1: Top 10 Airlines Tonnage Share (Left) + Airline Tonnage Share (Right) */}
+              <div className="grid grid-cols-12 gap-4 h-[230px]">
+                {/* Left: Top 10 Airlines Tonnage Share */}
+                <div className="col-span-8 border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-full">
+                  <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-1 shrink-0">
+                    <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Top 10 Airlines Tonnage Share</span>
+                    <span className="text-[7.5px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border">Day-by-Day Stack</span>
+                  </div>
+                  <div className="h-[185px] w-full mt-1">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={dailyStackedAirlineData}
+                        margin={{ top: 5, right: 10, left: 4, bottom: dailyStackedAirlineData.length > 10 ? 15 : 5 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} horizontal={true} />
+                        <XAxis
+                          dataKey="date_label"
+                          type="category"
+                          tick={{ fontSize: 7, fill: "#4A5568", fontWeight: 650 }}
+                          axisLine={{ stroke: "#E2E8F0" }}
+                          tickLine={false}
+                          interval={dailyStackedAirlineData.length > 14 ? Math.floor(dailyStackedAirlineData.length / 14) : 0}
+                        />
+                        <YAxis
+                          type="number"
+                          tick={{ fontSize: 7, fill: "#A0AEC0" }}
+                          axisLine={false}
+                          tickLine={false}
+                          tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+                          width={28}
+                        />
+                        {top10AirlinesNames.map((airlineName, idx) => (
+                          <Bar
+                            key={airlineName}
+                            dataKey={airlineName}
+                            stackId="airlines"
+                            fill={getAirlineColor(airlineName, idx)}
+                          />
+                        ))}
+                        <Bar
+                          key="Others"
+                          dataKey="Others"
+                          stackId="airlines"
+                          fill="#CBD5E0"
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Right: Airline Tonnage Share (Pie) */}
+                <div className="col-span-4 border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-full">
+                  <div className="border-b border-[#F1F5F9] pb-1 shrink-0">
+                    <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Airline Tonnage Share</span>
+                  </div>
+                  <div className="relative h-[110px] flex items-center justify-center mt-0.5 shrink-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={airlinePieData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={24}
+                          outerRadius={38}
+                          paddingAngle={2}
+                          dataKey="value"
+                        >
+                          {airlinePieData.map((entry: any, index: number) => (
+                            <Cell key={`cell-${index}`} fill={entry.name === "Others" ? "#CBD5E0" : getAirlineColor(entry.name, index)} />
+                          ))}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="absolute text-center flex flex-col justify-center items-center pointer-events-none">
+                      <span className="text-[6.5px] font-bold text-slate-400 uppercase">Total</span>
+                      <span className="text-[8.5px] font-extrabold text-[#2D3748] tracking-tight">
+                        {formatNumber(kpi.Total_Tonnage)} kg
+                      </span>
+                    </div>
+                  </div>
+                  <div className="space-y-0.5 mt-0.5 overflow-hidden flex-1">
+                    {airlinePieData.map((entry: any, idx: number) => {
+                      const pct = kpi.Total_Tonnage > 0 ? ((entry.value / kpi.Total_Tonnage) * 100).toFixed(1) : "0.0";
+                      return (
+                        <div key={entry.name} className="flex items-center justify-between text-[8px] text-slate-500">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: entry.name === "Others" ? "#CBD5E0" : getAirlineColor(entry.name, idx) }} />
+                            <span className="truncate max-w-[80px] font-semibold">{entry.name}</span>
+                          </div>
+                          <span className="font-bold text-slate-700 shrink-0">{formatNumber(entry.value)} kg ({pct}%)</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 2: Airline Tonnage by Week Period (Left) + Trade Routes by Tonnage (Right) */}
+              <div className="grid grid-cols-12 gap-4 h-[230px]">
+                {/* Left: Airline Tonnage by Week Period */}
+                <div className="col-span-8 border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-full">
+                  <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-1 shrink-0">
+                    <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Airline Tonnage by Week Period</span>
+                    <span className="bg-indigo-50 text-indigo-700 text-[7.5px] px-1.5 py-0.2 rounded font-black uppercase shrink-0">
+                      {airlineWeeklyStackData.length} Airlines
+                    </span>
+                  </div>
+                  <div className="h-[185px] w-full mt-1">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={airlineWeeklyStackData}
+                        layout="vertical"
+                        margin={{ top: 2, right: 10, left: 4, bottom: 2 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={true} horizontal={false} />
+                        <XAxis
+                          type="number"
+                          tick={{ fontSize: 7, fill: "#A0AEC0" }}
+                          axisLine={false}
+                          tickLine={false}
+                          tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+                        />
+                        <YAxis
+                          dataKey="airline"
+                          type="category"
+                          tick={{ fontSize: 7, fill: "#4A5568", fontWeight: 600 }}
+                          axisLine={{ stroke: "#E2E8F0" }}
+                          tickLine={false}
+                          width={75}
+                          tickFormatter={(v: string) => v.length > 15 ? v.slice(0, 14) + "…" : v}
+                        />
+                        {weekStackLabels.map((wkLabel, wIdx) => (
+                          <Bar
+                            key={wkLabel}
+                            dataKey={wkLabel}
+                            stackId="awstack"
+                            radius={wIdx === weekStackLabels.length - 1 ? [0, 3, 3, 0] : [0, 0, 0, 0]}
+                          >
+                            {airlineWeeklyStackData.map((row: any) => (
+                              <Cell
+                                key={`${row.airline}-${wkLabel}`}
+                                fill={getAirlineColor(row.airline, row.colorIdx)}
+                                fillOpacity={weekStackLabels.length > 1 ? 0.45 + (wIdx / (weekStackLabels.length - 1)) * 0.55 : 1}
+                              />
+                            ))}
+                          </Bar>
+                        ))}
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Right: Trade Routes by Tonnage (Top 5 + Others) */}
+                <div className="col-span-4 border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-full">
+                  <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-1 shrink-0">
+                    <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Trade Routes by Tonnage (Top 5 + Others)</span>
+                  </div>
+                  <div className="relative h-[110px] flex items-center justify-center mt-0.5 shrink-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={tradeRouteData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={24}
+                          outerRadius={38}
+                          paddingAngle={2}
+                          dataKey="value"
+                        >
+                          {tradeRouteData.map((entry, index) => (
+                            <Cell key={`tr-cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                          ))}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="absolute text-center flex flex-col justify-center items-center pointer-events-none">
+                      <span className="text-[6.5px] font-bold text-slate-400 uppercase">Total</span>
+                      <span className="text-[8.5px] font-extrabold text-[#2D3748] tracking-tight">
+                        {formatNumber(tradeRouteData.reduce((s, r) => s + r.value, 0))} kg
+                      </span>
+                    </div>
+                  </div>
+                  <div className="space-y-0.5 mt-0.5 overflow-hidden flex-1">
+                    {tradeRouteData.map((entry, idx) => {
+                      const total = tradeRouteData.reduce((s, r) => s + r.value, 0);
+                      const pct = total > 0 ? ((entry.value / total) * 100).toFixed(1) : "0.0";
+                      return (
+                        <div key={entry.name} className="flex items-center justify-between text-[8px] text-slate-500">
+                          <div className="flex items-center gap-1 min-w-0">
+                            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }} />
+                            <span className="truncate max-w-[90px] font-semibold" title={entry.name}>{entry.name}</span>
+                          </div>
+                          <span className="font-bold text-slate-700 shrink-0">{formatNumber(entry.value)} kg ({pct}%)</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-12 gap-6 my-4 flex-1 items-stretch">
+              {/* Left: Weekly Revenue Trend Area Chart */}
+              <div className="col-span-8 border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between h-[450px]">
+                <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Revenue Flow & Trends (Weekly)</span>
+                <div className="h-[390px] w-full mt-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={weeklyData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+                      <defs>
+                        <linearGradient id="printArea" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#4299E1" stopOpacity={0.25} />
+                          <stop offset="100%" stopColor="#FFFFFF" stopOpacity={0.0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} />
+                      <XAxis dataKey="week_label" tick={{ fontSize: 8, fill: "#718096" }} axisLine={{ stroke: "#E2E8F0" }} tickLine={false} />
+                      <YAxis tick={{ fontSize: 8, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
+                      <Area type="monotone" dataKey="Total_Revenue" stroke="#3182CE" strokeWidth={2} fill="url(#printArea)" dot={{ fill: "#3182CE", r: 3 }} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Right: Airline wise Tonnage Chart */}
+              <div className="col-span-4 border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between h-[450px]">
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Airline Carrier Tonnage</span>
+                  {selectedAirlines.length > 0 && (
+                    <Badge variant="outline" className="border-blue-200 text-blue-600 bg-blue-50/50 text-[6px] font-bold px-1 py-0.2 rounded shrink-0">
+                      Selection Active
+                    </Badge>
+                  )}
+                </div>
+                <div className="h-[390px] w-full mt-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={airlineWiseData}
+                      layout="vertical"
+                      margin={{ top: 5, right: 10, left: 10, bottom: 5 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={true} horizontal={false} />
+                      <XAxis
+                        type="number"
+                        tick={{ fontSize: 8, fill: "#A0AEC0" }}
+                        axisLine={false}
+                        tickLine={false}
+                        tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+                      />
+                      <YAxis
+                        dataKey="name"
+                        type="category"
+                        tick={{ fontSize: 8, fill: "#4A5568", fontWeight: 600 }}
+                        axisLine={{ stroke: "#E2E8F0" }}
+                        tickLine={false}
+                        width={70}
+                      />
+                      <Bar dataKey="tonnage" radius={[0, 4, 4, 0]} maxBarSize={14}>
+                        {airlineWiseData.map((entry: any, index: number) => (
+                          <Cell
+                            key={`cell-${index}`}
+                            fill={entry.isSelected || selectedAirlines.length === 0 ? "#3182CE" : "#CBD5E0"}
+                          />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Print Footer */}
+          <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[8px] text-slate-400">
+            <span>Generated via Headless Chromium PDF Print Engine</span>
+            <span>© 2026 Dart Global Logistics · {mode === "custom-sql" ? "Weekly Operational Performance" : "Visual Summary"} Page</span>
+          </div>
         </div>
-      </div>
       )}
 
-      {/* ── SECTION 3: MONTHLY VISUAL DASHBOARD (Page 3) ── */}
-      {selectedSections.monthlyVisual && (
-      <div className="bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
-        
-        {/* Print Header */}
-        <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
-          <div className="flex items-center gap-2.5">
-            <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-            <div>
-              <h1 className="text-lg font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
-              <p className="text-[10px] text-slate-400 mt-0.5">Dart Global Logistics · Monthly Strategic Analysis & Contribution Dashboard</p>
-            </div>
-          </div>
-          <div className="flex flex-col items-end gap-0.5">
-            <Badge className="bg-teal-50 text-teal-700 border border-teal-150 font-bold text-[9px] px-2 py-0.5 rounded shadow-sm">
-              📅 {startDate} to {endDate}
-            </Badge>
-            <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
-              {companyCode && (
-                <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                  🏢 Entity: {companyCode}
-                </span>
-              )}
-              {branch && (
-                <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                  🏢 Branch: {branch}
-                </span>
-              )}
-              <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                🌍 From: {originCity ? `${originCity}, ` : ""}{country || "Global Markets"}
-              </span>
-              {destinationCountry && (
-                <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                  📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
-                </span>
-              )}
-              <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded max-w-[150px] truncate">
-                ✈️ Carrier: {airline || "All Carriers"}
-              </span>
-            </div>
-          </div>
-        </div>
+      {/* ── SECTION 2: WEEKLY DETAILED CARRIER LEDGER / Airline Performance Summary (Page 2+, Dynamic Flow) ── */}
+      {selectedSections.weeklyLedger && (
+        <div className="bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
 
-        {/* KPI Cards Row */}
-        <div className="grid grid-cols-5 gap-4 mt-4">
-          <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
-            <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Revenue</span>
-            <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
-            <span className="text-[8px] text-blue-500 font-semibold">✓ Consol Revenue</span>
-          </div>
-          <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
-            <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Cost</span>
-            <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
-            <span className="text-[8px] text-rose-500 font-semibold">✗ Total Expenses</span>
-          </div>
-          <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
-            <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Profit</span>
-            <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
-            <span className="text-[8px] text-emerald-600 font-semibold">✓ Net Earnings</span>
-          </div>
-          <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
-            <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">GP Margin</span>
-            <h3 className="text-lg font-extrabold text-slate-800 leading-none">
-              {kpi.GP_Margin ? `${kpi.GP_Margin.toFixed(1)}%` : "0.0%"}
-            </h3>
-            <span className="text-[8px] text-teal-600 font-semibold">✓ Margin Ratio</span>
-          </div>
-          <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
-            <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Tonnage</span>
-            <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
-            <span className="text-[8px] text-indigo-600 font-semibold">✈️ Active Weight</span>
-          </div>
-        </div>
-
-        {/* Expanded Charts Grid */}
-        <div className="grid grid-cols-12 gap-6 my-4 flex-1 items-stretch">
-          
-          {/* Left Column - Origin Contribution (Pie Chart) */}
-          <div className="col-span-4 border border-slate-200 rounded-xl p-4 bg-white shadow-sm h-[450px] flex flex-col justify-between">
-            <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Origin Contribution</span>
-            <div className="relative h-[220px] flex items-center justify-center mt-1">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={doughnutData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={50}
-                    outerRadius={75}
-                    paddingAngle={2}
-                    dataKey="value"
-                  >
-                    {doughnutData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                    ))}
-                  </Pie>
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="absolute text-center flex flex-col justify-center items-center">
-                <span className="text-[7px] font-bold text-slate-400 uppercase tracking-widest">Share</span>
-                <span className="text-[9px] font-extrabold text-[#2D3748]">{formatCurrency(kpi.Total_Revenue).slice(0, 7)}</span>
+          <div className="flex flex-col print:block gap-6 flex-1">
+            {/* Print Header */}
+            <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
+              <div className="flex items-center gap-2.5">
+                <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
+                <div>
+                  <h1 className="text-lg font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    Dart Global Logistics · {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Carrier Metrics Detailed Ledger"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col items-end gap-0.5">
+                <Badge className="bg-indigo-50 text-indigo-700 border border-indigo-150 font-bold text-[9px] px-2 py-0.5 rounded shadow-sm">
+                  📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`}
+                </Badge>
               </div>
             </div>
 
-            <div className="space-y-1 mt-2 overflow-hidden flex-1">
-              {doughnutData.slice(0, 4).map((entry, idx) => (
-                <div key={entry.name} className="flex items-center justify-between text-[9px] text-slate-500">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }} />
-                    <span className="truncate max-w-[90px] font-semibold">{entry.name}</span>
-                  </div>
-                  <span className="font-bold text-slate-700">{formatCurrency(entry.value)}</span>
-                </div>
-              ))}
+            {/* Carrier Metrics Table / Airline Performance Table */}
+            <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex-1">
+              <div className="flex items-center justify-between mb-2 pb-1 border-b border-[#F1F5F9]">
+                <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">
+                  {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Carrier Ledger"}
+                </span>
+                <span className="text-[8px] text-slate-400 font-bold">
+                  {mode === "custom-sql" ? "Top 10 Airlines + Others" : `All Carrier Records (${data.length})`}
+                </span>
+              </div>
+              <div>
+                <table className="w-full text-left text-[10px] border-collapse">
+                  <thead>
+                    <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[8px] tracking-wider bg-slate-50/50">
+                      {mode === "custom-sql" ? (
+                        <>
+                          <th className="px-3 py-1.5 w-8">#</th>
+                          <th className="px-3 py-1.5">Airline</th>
+                          <th className="px-3 py-1.5">Origin Country</th>
+                          <th className="px-3 py-1.5">Destination Country</th>
+                          <th className="px-3 py-1.5 text-right">Tonnage (kg)</th>
+                          <th className="px-3 py-1.5 text-right">Shipments</th>
+                          <th className="px-3 py-1.5 text-right">Shipment Revenue (USD)</th>
+                          <th className="px-3 py-1.5 text-right">Shipment Cost (USD)</th>
+                          <th className="px-3 py-1.5 text-right">Gross Profit (USD)</th>
+                          <th className="px-3 py-1.5 text-right">GP Margin</th>
+                        </>
+                      ) : (
+                        <>
+                          <th className="px-3 py-1.5">Branch</th>
+                          <th className="px-3 py-1.5">Airline Name</th>
+                          <th className="px-3 py-1.5">Origin</th>
+                          <th className="px-3 py-1.5">Destination</th>
+                          <th className="px-3 py-1.5 text-right">Revenue</th>
+                          <th className="px-3 py-1.5 text-right">Tonnage</th>
+                          <th className="px-3 py-1.5 text-right">Shipments</th>
+                        </>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#F1F5F9]">
+                    {mode === "custom-sql" ? (
+                      (() => {
+                        // Aggregate raw rows by Airline + Origin Country + Destination Country
+                        const aggMap: {
+                          [key: string]: {
+                            airline: string; originCountry: string; destCountry: string;
+                            tonnage: number; revenue: number; cost: number; shipments: number;
+                          }
+                        } = {};
+
+                        data.forEach((r: any) => {
+                          const airline = r.Airline ?? r.AirlineName1 ?? r.carrier ?? "Unknown";
+                          const originCountry = r.Origin_Country ?? r.ConLoadPortCountryName ?? r.origin_country ?? "—";
+                          const destCountry = r.Destination_Country ?? r.DestCountry ?? r.dest_country ?? "—";
+                          const key = `${airline}||${originCountry}||${destCountry}`;
+                          if (!aggMap[key]) {
+                            aggMap[key] = { airline, originCountry, destCountry, tonnage: 0, revenue: 0, cost: 0, shipments: 0 };
+                          }
+                          aggMap[key].tonnage += Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
+                          aggMap[key].revenue += Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
+                          aggMap[key].cost += Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
+                          aggMap[key].shipments += Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
+                        });
+
+                        const sorted = Object.values(aggMap).sort((a, b) => b.tonnage - a.tonnage);
+                        const top10 = sorted.slice(0, 10);
+                        const others = sorted.slice(10);
+                        const othersRow = others.length > 0 ? {
+                          airline: `Others (${others.length} airlines)`,
+                          originCountry: "—", destCountry: "—",
+                          tonnage: others.reduce((s, r) => s + r.tonnage, 0),
+                          revenue: others.reduce((s, r) => s + r.revenue, 0),
+                          cost: others.reduce((s, r) => s + r.cost, 0),
+                          shipments: others.reduce((s, r) => s + r.shipments, 0),
+                        } : null;
+
+                        const rows = othersRow ? [...top10, othersRow] : top10;
+                        const grandTotal = {
+                          tonnage: rows.reduce((s, r) => s + r.tonnage, 0),
+                          revenue: rows.reduce((s, r) => s + r.revenue, 0),
+                          cost: rows.reduce((s, r) => s + r.cost, 0),
+                          shipments: rows.reduce((s, r) => s + r.shipments, 0),
+                        };
+
+                        if (rows.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan={10} className="text-center py-6 text-slate-400">No airline aggregate data available.</td>
+                            </tr>
+                          );
+                        }
+
+                        return (
+                          <>
+                            {rows.map((row, i) => {
+                              const isOthers = row.airline.startsWith("Others");
+                              const gpMargin = row.revenue > 0 ? ((row.revenue - row.cost) / row.revenue * 100) : 0;
+                              const pct = grandTotal.tonnage > 0 ? (row.tonnage / grandTotal.tonnage * 100) : 0;
+                              return (
+                                <tr key={i} className={`hover:bg-slate-50/50 ${isOthers ? "bg-slate-50/30 italic" : ""}`}>
+                                  <td className="px-3 py-1.5 text-slate-400 font-bold tabular-nums">
+                                    {isOthers ? "—" : (
+                                      <span
+                                        className="inline-flex items-center justify-center w-4 h-4 rounded-full text-[8px] font-extrabold text-white"
+                                        style={{ backgroundColor: getAirlineColor(row.airline, i) }}
+                                      >
+                                        {i + 1}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-1.5">
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      {!isOthers && (
+                                        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: getAirlineColor(row.airline, i) }} />
+                                      )}
+                                      <span className={`font-semibold ${isOthers ? "text-slate-500" : "text-slate-800"}`}>
+                                        {row.airline}
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="px-3 py-1.5 text-slate-500">{row.originCountry}</td>
+                                  <td className="px-3 py-1.5 text-slate-500">{row.destCountry}</td>
+                                  <td className="px-3 py-1.5 text-right tabular-nums">
+                                    <div className="flex flex-col items-end gap-0.5">
+                                      <span className="font-bold text-blue-600">{formatNumber(row.tonnage)} kg</span>
+                                      <div className="h-0.5 rounded-full bg-slate-100 w-10 overflow-hidden">
+                                        <div
+                                          className="h-full rounded-full"
+                                          style={{ width: `${pct}%`, backgroundColor: getAirlineColor(row.airline, i) }}
+                                        />
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right text-slate-500 font-semibold tabular-nums">{formatNumber(row.shipments)}</td>
+                                  <td className="px-3 py-1.5 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
+                                  <td className="px-3 py-1.5 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td>
+                                  <td className="px-3 py-1.5 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue - row.cost)}</td>
+                                  <td className="px-3 py-1.5 text-right tabular-nums">
+                                    <span className={`font-bold px-1 py-0.2 rounded text-[8px] ${gpMargin >= 20 ? "bg-emerald-50 text-emerald-600" : gpMargin >= 10 ? "bg-amber-50 text-amber-600" : "bg-rose-50 text-rose-500"}`}>
+                                      {gpMargin.toFixed(1)}%
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                            {/* Grand Total Row */}
+                            <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-[9px]">
+                              <td className="px-3 py-1.5 text-slate-500" colSpan={2}>TOTAL</td>
+                              <td className="px-3 py-1.5" />
+                              <td className="px-3 py-1.5" />
+                              <td className="px-3 py-1.5 text-right text-blue-600 tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
+                              <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
+                              <td className="px-3 py-1.5 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
+                              <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td>
+                              <td className="px-3 py-1.5 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue - grandTotal.cost)}</td>
+                              <td className="px-3 py-1.5 text-right">
+                                <span className="font-bold text-slate-600 text-[8px]">
+                                  {grandTotal.revenue > 0 ? ((grandTotal.revenue - grandTotal.cost) / grandTotal.revenue * 100).toFixed(1) : "0.0"}%
+                                </span>
+                              </td>
+                            </tr>
+                          </>
+                        );
+                      })()
+                    ) : (
+                      data.slice(0, maxDataRows).map((row: any, i: number) => (
+                        <tr key={i} className="hover:bg-slate-50/50">
+                          <td className="px-3 py-1.5 font-bold text-slate-500">{row.Company_Code ?? "—"}</td>
+                          <td className="px-3 py-1.5 font-semibold text-slate-800 truncate max-w-[150px]">{row.Airline ?? "—"}</td>
+                          <td className="px-3 py-1.5 text-slate-500 truncate max-w-[150px]">
+                            {row.Origin_City ? `${row.Origin_City}, ` : ""}{row.Origin_Country ?? "—"}
+                          </td>
+                          <td className="px-3 py-1.5 text-slate-500 truncate max-w-[150px]">
+                            {row.Destination_City ? `${row.Destination_City}, ` : ""}{row.Destination_Country ?? "—"}
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-bold text-blue-600">
+                            {row.Total_Revenue != null ? formatCurrency(row.Total_Revenue) : "—"}
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-slate-600 font-semibold">
+                            {row.Total_Tonnage != null ? `${formatNumber(row.Total_Tonnage)} kg` : "—"}
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-slate-400">
+                            {row.Total_Shipments != null ? formatNumber(row.Total_Shipments) : "—"}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                    {data.length === 0 && (
+                      <tr>
+                        <td colSpan={10} className="text-center py-6 text-slate-400">No carrier ledger data available.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
 
-          {/* Right Column - Monthly Revenue Flow Area Chart */}
-          <div className="col-span-8 border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between h-[450px]">
-            <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Revenue Flow & Trends (Monthly)</span>
-            <div className="h-[390px] w-full mt-2">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={monthlyData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
-                  <defs>
-                    <linearGradient id="printAreaMonthly" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#319795" stopOpacity={0.25} />
-                      <stop offset="100%" stopColor="#FFFFFF" stopOpacity={0.0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} />
-                  <XAxis dataKey="month_label" tick={{ fontSize: 8, fill: "#718096" }} axisLine={{ stroke: "#E2E8F0" }} tickLine={false} />
-                  <YAxis tick={{ fontSize: 8, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
-                  <Area type="monotone" dataKey="Total_Revenue" stroke="#319795" strokeWidth={2} fill="url(#printAreaMonthly)" dot={{ fill: "#319795", r: 3 }} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+          {/* Print Footer */}
+          <div className="border-t border-slate-200 pt-2 mt-4 flex items-center justify-between text-[8px] text-slate-400">
+            <span>Generated via Headless Chromium PDF Print Engine</span>
+            <span>© 2026 Dart Global Logistics · {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Carrier Ledger"} Page</span>
           </div>
         </div>
-
-        {/* Print Footer */}
-        <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[8px] text-slate-400">
-          <span>Generated via Headless Chromium PDF Print Engine</span>
-          <span>© 2026 Dart Global Logistics · Visual Summary Page</span>
-        </div>
-      </div>
       )}
 
-      {/* ── SECTION 4: MONTHLY DETAILED FINANCIAL LEDGER (Page 4+, Dynamic Flow) ── */}
-      {selectedSections.monthlyLedger && (
-      <div className="bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0">
-        
-        <div className="flex flex-col print:block gap-6 flex-1">
+      {/* ── SECTION 3: MONTHLY VISUAL DASHBOARD / Trade Route Performance Summary (Page 3) ── */}
+      {selectedSections.monthlyVisual && (
+        <div className="bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+
           {/* Print Header */}
           <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
             <div className="flex items-center gap-2.5">
               <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
               <div>
                 <h1 className="text-lg font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
-                <p className="text-[10px] text-slate-400 mt-0.5">Dart Global Logistics · Monthly Strategic Analysis & Contribution Ledger</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  Dart Global Logistics · {mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Strategic Analysis & Contribution Dashboard"}
+                </p>
               </div>
             </div>
             <div className="flex flex-col items-end gap-0.5">
               <Badge className="bg-teal-50 text-teal-700 border border-teal-150 font-bold text-[9px] px-2 py-0.5 rounded shadow-sm">
-                📅 {startDate} to {endDate}
+                📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`}
               </Badge>
             </div>
           </div>
 
-          {/* Monthly Summary Table Complete Table */}
-          <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex-1">
-            <div className="flex items-center justify-between mb-2 pb-1 border-b border-[#F1F5F9]">
-              <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Monthly Financial Ledger</span>
-              <span className="text-[8px] text-slate-400 font-bold">All Monthly Records ({monthlyData.length})</span>
-            </div>
-            <div>
-              <table className="w-full text-left text-[10px] border-collapse">
-                <thead>
-                  <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[8px] tracking-wider bg-slate-50/55">
-                    <th className="px-3 py-1.5">Year</th>
-                    <th className="px-3 py-1.5">Month</th>
-                    <th className="px-3 py-1.5 text-right">Revenue (USD)</th>
-                    <th className="px-3 py-1.5 text-right">Tonnage</th>
-                    <th className="px-3 py-1.5 text-right">Shipments</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#F1F5F9]">
-                  {monthlyData.slice(0, maxDataRows).map((row: any, i: number) => (
-                    <tr key={i} className="hover:bg-slate-50/50">
-                      <td className="px-3 py-1.5 font-bold text-slate-500">{row.Year}</td>
-                      <td className="px-3 py-1.5 font-semibold text-slate-800">{row.month_label ? row.month_label.split(" '")[0] : "—"}</td>
-                      <td className="px-3 py-1.5 text-right font-bold text-teal-600">
-                        {row.Total_Revenue != null ? formatCurrency(row.Total_Revenue) : "$0"}
-                      </td>
-                      <td className="px-3 py-1.5 text-right text-slate-600 font-semibold">
-                        {row.Total_Tonnage != null ? `${formatNumber(row.Total_Tonnage)} kg` : "0 kg"}
-                      </td>
-                      <td className="px-3 py-1.5 text-right text-slate-400">
-                        {row.Total_Shipments != null ? formatNumber(row.Total_Shipments) : "0"}
-                      </td>
+          {mode === "custom-sql" ? (
+            /* Custom SQL Mode: Render Trade Route Performance Summary — Top 10 Table */
+            <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex-1 mt-4">
+              <div className="flex items-center justify-between mb-2 pb-1 border-b border-[#F1F5F9]">
+                <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Trade Route Performance Summary — Top 10</span>
+                <span className="text-[8px] text-slate-400 font-bold">Top 10 Routes + Others</span>
+              </div>
+              <div>
+                <table className="w-full text-left text-[10px] border-collapse">
+                  <thead>
+                    <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[8px] tracking-wider bg-slate-50/50">
+                      <th className="px-3 py-1.5 w-8">#</th>
+                      <th className="px-3 py-1.5">Origin Country</th>
+                      <th className="px-3 py-1.5">Origin City</th>
+                      <th className="px-3 py-1.5">Destination Country</th>
+                      <th className="px-3 py-1.5">Destination City</th>
+                      <th className="px-3 py-1.5 text-right">Tonnage (kg)</th>
+                      <th className="px-3 py-1.5 text-right">Shipments</th>
+                      <th className="px-3 py-1.5 text-right">Shipment Revenue (USD)</th>
+                      <th className="px-3 py-1.5 text-right">Shipment Cost</th>
+                      <th className="px-3 py-1.5 text-right">Gross Profit (USD)</th>
+                      <th className="px-3 py-1.5 text-right">GP Margin</th>
                     </tr>
-                  ))}
-                  {monthlyData.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="text-center py-6 text-slate-400">No monthly ledger data available.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-[#F1F5F9]">
+                    {(() => {
+                      // Aggregate raw rows by Origin Country + Dest Country + Origin City + Dest City
+                      const routeMap: {
+                        [key: string]: {
+                          originCountry: string; destCountry: string;
+                          originCity: string; destCity: string;
+                          tonnage: number; revenue: number; cost: number; shipments: number;
+                        }
+                      } = {};
+
+                      data.forEach((r: any) => {
+                        const originCountry = r.Origin_Country ?? r.ConLoadPortCountryName ?? r.origin_country ?? "—";
+                        const destCountry = r.Destination_Country ?? r.DestCountry ?? r.dest_country ?? "—";
+                        const originCity = r.Origin_City ?? r.OriginCity ?? r.origin_city ?? "—";
+                        const destCity = r.Destination_City ?? r.DestCity ?? r.dest_city ?? "—";
+                        const key = `${originCountry}||${destCountry}||${originCity}||${destCity}`;
+                        if (!routeMap[key]) {
+                          routeMap[key] = { originCountry, destCountry, originCity, destCity, tonnage: 0, revenue: 0, cost: 0, shipments: 0 };
+                        }
+                        routeMap[key].tonnage += Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
+                        routeMap[key].revenue += Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
+                        routeMap[key].cost += Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
+                        routeMap[key].shipments += Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
+                      });
+
+                      const sorted = Object.values(routeMap).sort((a, b) => b.tonnage - a.tonnage);
+                      const top10 = sorted.slice(0, 10);
+                      const others = sorted.slice(10);
+                      const othersRow = others.length > 0 ? {
+                        originCountry: `Others (${others.length} routes)`,
+                        destCountry: "—", originCity: "—", destCity: "—",
+                        tonnage: others.reduce((s, r) => s + r.tonnage, 0),
+                        revenue: others.reduce((s, r) => s + r.revenue, 0),
+                        cost: others.reduce((s, r) => s + r.cost, 0),
+                        shipments: others.reduce((s, r) => s + r.shipments, 0),
+                      } : null;
+
+                      const rows = othersRow ? [...top10, othersRow] : top10;
+                      const grandTotal = {
+                        tonnage: rows.reduce((s, r) => s + r.tonnage, 0),
+                        revenue: rows.reduce((s, r) => s + r.revenue, 0),
+                        cost: rows.reduce((s, r) => s + r.cost, 0),
+                        shipments: rows.reduce((s, r) => s + r.shipments, 0),
+                      };
+
+                      const ROUTE_COLORS = ["#319795", "#4299E1", "#805AD5", "#D69E2E", "#E53E3E", "#38A169", "#DD6B20", "#3182CE", "#744210", "#2B6CB0"];
+
+                      if (rows.length === 0) {
+                        return (
+                          <tr>
+                            <td colSpan={11} className="text-center py-6 text-slate-400">No trade route aggregate data available.</td>
+                          </tr>
+                        );
+                      }
+
+                      return (
+                        <>
+                          {rows.map((row, i) => {
+                            const isOthers = row.originCountry.startsWith("Others");
+                            const gpMargin = row.revenue > 0 ? ((row.revenue - row.cost) / row.revenue * 100) : 0;
+                            const pct = grandTotal.tonnage > 0 ? (row.tonnage / grandTotal.tonnage * 100) : 0;
+                            const color = ROUTE_COLORS[i % ROUTE_COLORS.length];
+                            return (
+                              <tr key={i} className={`hover:bg-slate-50/50 ${isOthers ? "bg-slate-50/30 italic" : ""}`}>
+                                <td className="px-3 py-1.5 text-slate-400 font-bold tabular-nums">
+                                  {isOthers ? "—" : (
+                                    <span
+                                      className="inline-flex items-center justify-center w-4 h-4 rounded-full text-[8px] font-extrabold text-white"
+                                      style={{ backgroundColor: color }}
+                                    >
+                                      {i + 1}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-1.5">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    {!isOthers && (
+                                      <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                                    )}
+                                    <span className={`font-semibold ${isOthers ? "text-slate-500" : "text-slate-800"}`}>
+                                      {row.originCountry}
+                                    </span>
+                                  </div>
+                                </td>
+                                <td className="px-3 py-1.5 text-slate-600 font-medium">{row.originCity}</td>
+                                <td className="px-3 py-1.5 text-slate-600 font-medium">{row.destCountry}</td>
+                                <td className="px-3 py-1.5 text-slate-600 font-medium">{row.destCity}</td>
+                                <td className="px-3 py-1.5 text-right tabular-nums">
+                                  <div className="flex flex-col items-end gap-0.5">
+                                    <span className="font-bold text-[#319795]">{formatNumber(row.tonnage)} kg</span>
+                                    <div className="h-0.5 rounded-full bg-slate-100 w-10 overflow-hidden">
+                                      <div
+                                        className="h-full rounded-full"
+                                        style={{ width: `${pct}%`, backgroundColor: color }}
+                                      />
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-3 py-1.5 text-right text-slate-500 font-semibold tabular-nums">{formatNumber(row.shipments)}</td>
+                                <td className="px-3 py-1.5 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
+                                <td className="px-3 py-1.5 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td>
+                                <td className="px-3 py-1.5 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue - row.cost)}</td>
+                                <td className="px-3 py-1.5 text-right tabular-nums">
+                                  <span className={`font-bold px-1 py-0.2 rounded text-[8px] ${gpMargin >= 20 ? "bg-emerald-50 text-emerald-600" : gpMargin >= 10 ? "bg-amber-50 text-amber-600" : "bg-rose-50 text-rose-500"}`}>
+                                    {gpMargin.toFixed(1)}%
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {/* Grand Total Row */}
+                          <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-[9px]">
+                            <td className="px-3 py-1.5 text-slate-500" colSpan={2}>TOTAL</td>
+                            <td className="px-3 py-1.5" />
+                            <td className="px-3 py-1.5" />
+                            <td className="px-3 py-1.5" />
+                            <td className="px-3 py-1.5 text-right text-[#319795] tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
+                            <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
+                            <td className="px-3 py-1.5 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
+                            <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td>
+                            <td className="px-3 py-1.5 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue - grandTotal.cost)}</td>
+                            <td className="px-3 py-1.5 text-right">
+                              <span className="font-bold text-slate-600 text-[8px]">
+                                {grandTotal.revenue > 0 ? ((grandTotal.revenue - grandTotal.cost) / grandTotal.revenue * 100).toFixed(1) : "0.0"}%
+                              </span>
+                            </td>
+                          </tr>
+                        </>
+                      );
+                    })()}
+                  </tbody>
+                </table>
+              </div>
             </div>
+          ) : (
+            /* Standard Mode: Render original monthly visual charts */
+            <>
+              {/* KPI Cards Row */}
+              <div className="grid grid-cols-4 gap-4 mt-4">
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
+                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Revenue</span>
+                  <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
+                  <span className="text-[8px] text-blue-500 font-semibold">✓ Consol Revenue</span>
+                </div>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
+                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Cost</span>
+                  <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
+                  <span className="text-[8px] text-rose-500 font-semibold">✗ Total Expenses</span>
+                </div>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
+                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Profit</span>
+                  <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
+                  <span className="text-[8px] text-emerald-600 font-semibold">✓ Net Earnings</span>
+                </div>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[72px]">
+                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Total Tonnage</span>
+                  <h3 className="text-lg font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
+                  <span className="text-[8px] text-indigo-600 font-semibold">✈️ Active Weight</span>
+                </div>
+              </div>
+
+              {/* Expanded Charts Grid */}
+              <div className="grid grid-cols-12 gap-6 my-4 flex-1 items-stretch">
+
+                {/* Left Column - Origin Contribution (Pie Chart) */}
+                <div className="col-span-4 border border-slate-200 rounded-xl p-4 bg-white shadow-sm h-[450px] flex flex-col justify-between">
+                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Origin Contribution</span>
+                  <div className="relative h-[220px] flex items-center justify-center mt-1">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={doughnutData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={50}
+                          outerRadius={75}
+                          paddingAngle={2}
+                          dataKey="value"
+                        >
+                          {doughnutData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                          ))}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="absolute text-center flex flex-col justify-center items-center">
+                      <span className="text-[7px] font-bold text-slate-400 uppercase tracking-widest">Share</span>
+                      <span className="text-[9px] font-extrabold text-[#2D3748]">{formatCurrency(kpi.Total_Revenue).slice(0, 7)}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1 mt-2 overflow-hidden flex-1">
+                    {doughnutData.slice(0, 4).map((entry, idx) => (
+                      <div key={entry.name} className="flex items-center justify-between text-[9px] text-slate-500">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }} />
+                          <span className="truncate max-w-[90px] font-semibold">{entry.name}</span>
+                        </div>
+                        <span className="font-bold text-slate-700">{formatCurrency(entry.value)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Right Column - Monthly Revenue Flow Area Chart */}
+                <div className="col-span-8 border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between h-[450px]">
+                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Revenue Flow & Trends (Monthly)</span>
+                  <div className="h-[390px] w-full mt-2">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={monthlyData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+                        <defs>
+                          <linearGradient id="printAreaMonthly" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#319795" stopOpacity={0.25} />
+                            <stop offset="100%" stopColor="#FFFFFF" stopOpacity={0.0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} />
+                        <XAxis dataKey="month_label" tick={{ fontSize: 8, fill: "#718096" }} axisLine={{ stroke: "#E2E8F0" }} tickLine={false} />
+                        <YAxis tick={{ fontSize: 8, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
+                        <Area type="monotone" dataKey="Total_Revenue" stroke="#319795" strokeWidth={2} fill="url(#printAreaMonthly)" dot={{ fill: "#319795", r: 3 }} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Print Footer */}
+          <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[8px] text-slate-400">
+            <span>Generated via Headless Chromium PDF Print Engine</span>
+            <span>© 2026 Dart Global Logistics · {mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Visual Summary"} Page</span>
           </div>
         </div>
+      )}
 
-        {/* Print Footer */}
-        <div className="border-t border-slate-200 pt-2 mt-4 flex items-center justify-between text-[8px] text-slate-400">
-          <span>Generated via Headless Chromium PDF Print Engine</span>
-          <span>© 2026 Dart Global Logistics · Monthly Ledger Page</span>
+      {/* ── SECTION 4: MONTHLY DETAILED FINANCIAL LEDGER / Detailed Raw Query Ledger (Page 4+, Dynamic Flow) ── */}
+      {selectedSections.monthlyLedger && mode !== "custom-sql" && (
+        <div className="bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0">
+
+          <div className="flex flex-col print:block gap-6 flex-1">
+            {/* Print Header */}
+            <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
+              <div className="flex items-center gap-2.5">
+                <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
+                <div>
+                  <h1 className="text-lg font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    Dart Global Logistics · {mode === "custom-sql" ? "Detailed Raw Query Ledger" : "Monthly Strategic Analysis & Contribution Ledger"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col items-end gap-0.5">
+                <Badge className="bg-teal-50 text-teal-700 border border-teal-150 font-bold text-[9px] px-2 py-0.5 rounded shadow-sm">
+                  📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`}
+                </Badge>
+              </div>
+            </div>
+
+            {/* Monthly Summary Table / Detailed Raw Query Ledger */}
+            <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex-1">
+              <div className="flex items-center justify-between mb-2 pb-1 border-b border-[#F1F5F9]">
+                <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">
+                  {mode === "custom-sql" ? "Detailed Raw Query Ledger" : "Monthly Financial Ledger"}
+                </span>
+                <span className="text-[8px] text-slate-400 font-bold">
+                  {mode === "custom-sql" ? `Query Result Records (${data.length})` : `All Monthly Records (${monthlyData.length})`}
+                </span>
+              </div>
+              <div>
+                <table className="w-full text-left text-[10px] border-collapse">
+                  <thead>
+                    <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[8px] tracking-wider bg-slate-50/55">
+                      {mode === "custom-sql" ? (
+                        data.length > 0 ? (
+                          Object.keys(data[0]).map((key) => (
+                            <th key={key} className="px-3 py-1.5 first:rounded-l-md last:rounded-r-md">
+                              {key.replace(/_/g, " ")}
+                            </th>
+                          ))
+                        ) : (
+                          <th className="px-3 py-1.5">Custom SQL Columns</th>
+                        )
+                      ) : (
+                        <>
+                          <th className="px-3 py-1.5">Year</th>
+                          <th className="px-3 py-1.5">Month</th>
+                          <th className="px-3 py-1.5 text-right">Revenue (USD)</th>
+                          <th className="px-3 py-1.5 text-right">Tonnage</th>
+                          <th className="px-3 py-1.5 text-right">Shipments</th>
+                        </>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#F1F5F9]">
+                    {mode === "custom-sql" ? (
+                      data.slice(0, maxDataRows).map((row: any, i: number) => (
+                        <tr key={i} className="hover:bg-slate-50/50">
+                          {Object.entries(row).map(([key, val]: any, cellIdx) => {
+                            const isPrice = key.toLowerCase().includes("revenue") || key.toLowerCase().includes("cost") || key.toLowerCase().includes("profit") || key.toLowerCase().includes("amount") || key.toLowerCase().includes("usd");
+                            const isWeight = key.toLowerCase().includes("tonnage") || key.toLowerCase().includes("weight");
+                            const isNumeric = typeof val === "number";
+
+                            let displayVal = val;
+                            if (val == null) {
+                              displayVal = "—";
+                            } else if (isPrice && isNumeric) {
+                              displayVal = formatCurrency(val);
+                            } else if (isWeight && isNumeric) {
+                              displayVal = `${formatNumber(val)} kg`;
+                            } else if (isNumeric) {
+                              displayVal = formatNumber(val);
+                            }
+
+                            return (
+                              <td
+                                key={cellIdx}
+                                className={`px-3 py-1.5 text-slate-700 font-medium ${isNumeric ? "text-right tabular-nums" : ""
+                                  } ${key.toLowerCase().includes("airline") || key.toLowerCase().includes("carrier") ? "font-bold text-slate-800" : ""}`}
+                              >
+                                {displayVal}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))
+                    ) : (
+                      monthlyData.slice(0, maxDataRows).map((row: any, i: number) => (
+                        <tr key={i} className="hover:bg-slate-50/50">
+                          <td className="px-3 py-1.5 font-bold text-slate-500">{row.Year}</td>
+                          <td className="px-3 py-1.5 font-semibold text-slate-800">{row.month_label ? row.month_label.split(" '")[0] : "—"}</td>
+                          <td className="px-3 py-1.5 text-right font-bold text-teal-600">
+                            {row.Total_Revenue != null ? formatCurrency(row.Total_Revenue) : "$0"}
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-slate-600 font-semibold">
+                            {row.Total_Tonnage != null ? `${formatNumber(row.Total_Tonnage)} kg` : "0 kg"}
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-slate-400">
+                            {row.Total_Shipments != null ? formatNumber(row.Total_Shipments) : "0"}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                    {data.length === 0 && (
+                      <tr>
+                        <td colSpan={10} className="text-center py-6 text-slate-400">No records available.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          {/* Print Footer */}
+          <div className="border-t border-slate-200 pt-2 mt-4 flex items-center justify-between text-[8px] text-slate-400">
+            <span>Generated via Headless Chromium PDF Print Engine</span>
+            <span>© 2026 Dart Global Logistics · {mode === "custom-sql" ? "Detailed Raw Query Ledger" : "Monthly Ledger"} Page</span>
+          </div>
         </div>
-      </div>
       )}
 
     </div>
