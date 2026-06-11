@@ -16,6 +16,19 @@ conn_str = f"mssql+pyodbc:///?odbc_connect=DRIVER={{ODBC Driver 17 for SQL Serve
 engine = create_engine(conn_str)
 
 
+def to_clean_records(df: pd.DataFrame) -> list:
+    """Converts a pandas DataFrame to a list of dictionaries, cleaning NaN, Inf, NaT, and <NA> values for JSON compliance."""
+    import math
+    records = df.to_dict(orient="records")
+    for r in records:
+        for k, v in r.items():
+            if isinstance(v, float) and not math.isfinite(v):
+                r[k] = None
+            elif pd.isna(v):
+                r[k] = None
+    return records
+
+
 def build_multi_in_clause(column_expr: str, value_str: str, params: dict, param_prefix: str) -> str:
     """
     Parses a comma-separated string of values, adds param bindings to params dict,
@@ -129,8 +142,7 @@ def get_filtered_data(
     """
     with engine.connect() as conn:
         df = pd.read_sql(text(query), conn, params=params)
-    df = df.where(pd.notnull(df), None)
-    return df.to_dict(orient="records")
+    return to_clean_records(df)
 
 
 def get_countries(start_date: str, end_date: str, company_code: str = None):
@@ -294,12 +306,11 @@ def get_weekly_data(
     """
     with engine.connect() as conn:
         df = pd.read_sql(text(query), conn, params=params)
-    df = df.where(pd.notnull(df), None)
     # Format week label
     df["week_label"] = df.apply(
         lambda r: f"W{int(r['Week'])} '{str(int(r['Year']))[2:]}" if pd.notnull(r["Week"]) else "", axis=1
     )
-    return df.to_dict(orient="records")
+    return to_clean_records(df)
 
 
 def get_monthly_data(
@@ -383,7 +394,6 @@ def get_monthly_data(
     """
     with engine.connect() as conn:
         df = pd.read_sql(text(query), conn, params=params)
-    df = df.where(pd.notnull(df), None)
     
     # Add formatted month label e.g. "Jun '25"
     months_names = {
@@ -399,7 +409,7 @@ def get_monthly_data(
         return f"{months_names[int(m)]} '{str(int(y))[2:]}"
         
     df["month_label"] = df.apply(format_label, axis=1)
-    return df.to_dict(orient="records")
+    return to_clean_records(df)
 
 
 def get_kpi_summary(
@@ -483,8 +493,8 @@ def get_kpi_summary(
     """
     with engine.connect() as conn:
         df = pd.read_sql(text(query), conn, params=params)
-    df = df.where(pd.notnull(df), None)
-    return df.to_dict(orient="records")[0] if len(df) > 0 else {}
+    records = to_clean_records(df)
+    return records[0] if len(records) > 0 else {}
 
 
 def get_company_codes(start_date: str, end_date: str):
@@ -497,7 +507,7 @@ def get_company_codes(start_date: str, end_date: str):
     """
     with engine.connect() as conn:
         df = pd.read_sql(text(query), conn)
-    return df.to_dict(orient="records")
+    return to_clean_records(df)
 
 
 def get_branches(company_code: str = None):
@@ -541,8 +551,7 @@ def get_branches(company_code: str = None):
     query += " ORDER BY BranchCode"
     with engine.connect() as conn:
         df = pd.read_sql(text(query), conn)
-    df = df.where(pd.notnull(df), None)
-    return df.to_dict(orient="records")
+    return to_clean_records(df)
 
 
 def get_origin_cities(start_date: str, end_date: str, country: str = None):
@@ -621,11 +630,7 @@ def execute_custom_query(sql_str: str):
             # Execute query and read results
             df = pd.read_sql(text(sql_str), conn)
         
-        # Convert NULL values to None for JSON serialization
-        df = df.where(pd.notnull(df), None)
-        
-        # Return as list of records
-        return df.to_dict(orient="records")
+        return to_clean_records(df)
     except Exception as e:
         # Re-raise with more context
         raise Exception(f"SQL execution error: {str(e)}")

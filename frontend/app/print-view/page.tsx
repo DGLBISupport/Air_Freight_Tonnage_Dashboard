@@ -192,6 +192,19 @@ function PrintViewContent() {
   const mode = searchParams?.get("mode") || "standard";
 
   const getSqlDateRange = () => {
+    if (sqlQuery) {
+      const startMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*>\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
+      const endMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*<\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
+      const betweenMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s+between\s+['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?\s+and\s+['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
+
+      const standardizeDate = (dStr: string) => dStr.replace(/[_/.]/g, '-');
+      if (betweenMatch) {
+        return `${standardizeDate(betweenMatch[1])} to ${standardizeDate(betweenMatch[2])}`;
+      } else if (startMatch && endMatch) {
+        return `${standardizeDate(startMatch[1])} to ${standardizeDate(endMatch[1])}`;
+      }
+    }
+
     if (data.length === 0) return "";
     const dates = data.map(r => {
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
@@ -211,6 +224,7 @@ function PrintViewContent() {
   const [monthlyData, setMonthlyData] = useState<any[]>([]);
   const [kpi, setKpi] = useState<any>({});
   const [loading, setLoading] = useState(true);
+  const [sqlQuery, setSqlQuery] = useState<string>("");
 
   // Section selection state - read from URL params or default to all true
   const [selectedSections, setSelectedSections] = useState({
@@ -269,6 +283,7 @@ function PrintViewContent() {
         }
 
         if (customSql) {
+          setSqlQuery(customSql);
           const res = await fetch(`${API}/api/custom-query`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -543,11 +558,12 @@ function PrintViewContent() {
 
   const tradeRouteData = getTradeRouteData();
 
-  // Process day-by-day stacked airline tonnage share
+  // Process day-by-day stacked airline tonnage share including empty/zero days and total aggregates
   const getDailyStackedAirlineData = () => {
     const topAirlines = getAirlineWiseData().map(a => a.name);
     const dayMap: { [key: string]: { date_label: string; sortKey: string;[key: string]: any } } = {};
 
+    // 1. Process database records
     data.forEach((r: any) => {
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
       if (!etdVal) return;
@@ -576,6 +592,77 @@ function PrintViewContent() {
       }
     });
 
+    // 2. Parse date range parameters and fill missing empty days
+    let startStr = startDate;
+    let endStr = endDate;
+
+    if (sqlQuery) {
+      const startMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*>\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
+      const endMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*<\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
+      const betweenMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s+between\s+['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?\s+and\s+['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
+
+      const standardizeDate = (dStr: string) => dStr.replace(/[_/.]/g, '-');
+      if (betweenMatch) {
+        startStr = standardizeDate(betweenMatch[1]);
+        endStr = standardizeDate(betweenMatch[2]);
+      } else if (startMatch && endMatch) {
+        startStr = standardizeDate(startMatch[1]);
+        endStr = standardizeDate(endMatch[1]);
+      }
+    }
+
+    // Fallback if custom SQL query has no date parameters, or for standard mode
+    if (data.length > 0 && (!startStr || (mode === "custom-sql" && !sqlQuery.match(/(?:etd|etd_date)/i)))) {
+      const dates = data.map(r => {
+        const etdVal = r.ETD ?? r.etd ?? r.etd_date;
+        if (!etdVal) return null;
+        const d = new Date(etdVal);
+        return isNaN(d.getTime()) ? null : d;
+      }).filter(Boolean) as Date[];
+      if (dates.length > 0) {
+        const minD = new Date(Math.min(...dates.map(d => d.getTime())));
+        const maxD = new Date(Math.max(...dates.map(d => d.getTime())));
+        const pad = (n: number) => String(n).padStart(2, '0');
+        startStr = `${minD.getFullYear()}-${pad(minD.getMonth() + 1)}-${pad(minD.getDate())}`;
+        endStr = `${maxD.getFullYear()}-${pad(maxD.getMonth() + 1)}-${pad(maxD.getDate())}`;
+      }
+    }
+
+    const start = new Date(startStr);
+    const end = new Date(endStr);
+
+    if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+      const current = new Date(start);
+      current.setHours(12, 0, 0, 0);
+      const last = new Date(end);
+      last.setHours(12, 0, 0, 0);
+
+      // Limit range generation to a maximum of 31 days to prevent chart overflow
+      let iterations = 0;
+      while (current <= last && iterations < 31) {
+        const dateStr = current.toISOString().slice(0, 10);
+        if (!dayMap[dateStr]) {
+          const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+          const label = `${dayNames[current.getDay()]} ${current.getDate()}/${current.getMonth() + 1}`;
+          dayMap[dateStr] = { date_label: label, sortKey: dateStr };
+          topAirlines.forEach((airlineName) => {
+            dayMap[dateStr][airlineName] = 0;
+          });
+          dayMap[dateStr]["Others"] = 0;
+        }
+        current.setDate(current.getDate() + 1);
+        iterations++;
+      }
+    }
+
+    // 3. Pre-calculate total tonnage and transparent label tracker for stack rendering
+    Object.keys(dayMap).forEach((dateStr) => {
+      const dayData = dayMap[dateStr];
+      const total = topAirlines.reduce((sum, name) => sum + (dayData[name] || 0), 0) + (dayData["Others"] || 0);
+      dayData.total_tonnage = total;
+      dayData.total_tonnage_label = 0;
+    });
+
     return Object.values(dayMap)
       .sort((a, b) => a.sortKey.localeCompare(b.sortKey));
   };
@@ -597,6 +684,24 @@ function PrintViewContent() {
     };
   });
 
+  const CustomLabel = (props: any) => {
+    const { x, y, width, index } = props;
+    const row = dailyStackedAirlineData[index];
+    if (!row || !row.total_tonnage || row.total_tonnage === 0) return null;
+    return (
+      <text
+        x={x + width / 2}
+        y={y - 4}
+        fill="#2D3748"
+        fontSize={6.5}
+        fontWeight="bold"
+        textAnchor="middle"
+      >
+        {formatNumber(row.total_tonnage)}
+      </text>
+    );
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-white p-12 flex flex-col items-center justify-center space-y-4">
@@ -608,6 +713,21 @@ function PrintViewContent() {
 
   return (
     <div className="flex flex-col items-center bg-slate-150 py-4 gap-8 print:block print:p-0 print:gap-0 print:bg-transparent select-none">
+      <style dangerouslySetInnerHTML={{ __html: `
+        @media print {
+          * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          span.rounded-full {
+            display: inline-block !important;
+          }
+          .print-page-container:last-child {
+            page-break-after: avoid !important;
+            break-after: avoid !important;
+          }
+        }
+      `}} />
       {/* Hidden indicator for PDF capture readiness */}
       <div id="pdf-ready" style={{ display: 'none' }}>ready</div>
 
@@ -628,7 +748,7 @@ function PrintViewContent() {
           </div>
           <span className="text-[10px] font-bold text-blue-600 bg-white px-2.5 py-1 rounded-full border border-blue-200">
             {mode === "custom-sql"
-              ? `${[selectedSections.weeklyVisual, selectedSections.weeklyLedger, selectedSections.monthlyVisual].filter(Boolean).length} / 3 Sections (${(selectedSections.weeklyVisual ? 2 : 0) +
+              ? `${[selectedSections.weeklyVisual, selectedSections.weeklyLedger, selectedSections.monthlyVisual].filter(Boolean).length} / 3 Sections (${(selectedSections.weeklyVisual ? 3 : 0) +
               (selectedSections.weeklyLedger ? 1 : 0) +
               (selectedSections.monthlyVisual ? 1 : 0)
               } Pages)`
@@ -776,7 +896,7 @@ function PrintViewContent() {
         mode === "custom-sql" ? (
           <>
             {/* PAGE 1: Operational Visuals - Airlines */}
-            <div className="bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+            <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
               {/* Print Header */}
               <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
                 <div className="flex items-center gap-2.5">
@@ -789,9 +909,9 @@ function PrintViewContent() {
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-0.5">
-                  <Badge className="bg-indigo-50 text-indigo-700 border border-indigo-150 font-bold text-[9px] px-2 py-0.5 rounded shadow-sm">
+                  <span className="text-black font-bold text-[11px] flex items-center gap-1">
                     📅 {getSqlDateRange() || `${startDate} to ${endDate}`}
-                  </Badge>
+                  </span>
                   <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
                     {companyCode && (
                       <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
@@ -803,17 +923,11 @@ function PrintViewContent() {
                         🏢 Branch: {branch}
                       </span>
                     )}
-                    <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                      🌍 From: {originCity ? `${originCity}, ` : ""}{country || "Global Markets"}
-                    </span>
                     {destinationCountry && (
                       <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
                         📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
                       </span>
                     )}
-                    <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded max-w-[150px] truncate">
-                      ✈️ Carrier: {airline || "All Carriers"}
-                    </span>
                   </div>
                 </div>
               </div>
@@ -843,153 +957,126 @@ function PrintViewContent() {
               </div>
 
               {/* Expanded Charts Grid */}
-              <div className="flex flex-col flex-1 min-h-0 gap-4 mt-4 justify-between">
-                {/* Row 1: Top 10 Airlines Tonnage Share (Left) + Airline Tonnage Share (Right) */}
-                <div className="grid grid-cols-12 gap-4 h-[260px]">
-                  {/* Left: Top 10 Airlines Tonnage Share */}
-                  <div className="col-span-8 border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-full">
-                    <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-1 shrink-0">
-                      <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Top 10 Airlines Tonnage Share</span>
-                      <span className="text-[7.5px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border">Day-by-Day Stack</span>
-                    </div>
-                    <div className="h-[210px] w-full mt-1">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart
-                          data={dailyStackedAirlineData}
-                          margin={{ top: 5, right: 10, left: 4, bottom: dailyStackedAirlineData.length > 10 ? 15 : 5 }}
-                        >
-                          <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} horizontal={true} />
-                          <XAxis
-                            dataKey="date_label"
-                            type="category"
-                            tick={{ fontSize: 7, fill: "#4A5568", fontWeight: 650 }}
-                            axisLine={{ stroke: "#E2E8F0" }}
-                            tickLine={false}
-                            interval={dailyStackedAirlineData.length > 14 ? Math.floor(dailyStackedAirlineData.length / 14) : 0}
-                          />
-                          <YAxis
-                            type="number"
-                            tick={{ fontSize: 7, fill: "#A0AEC0" }}
-                            axisLine={false}
-                            tickLine={false}
-                            tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
-                            width={28}
-                          />
-                          {top10AirlinesNames.map((airlineName, idx) => (
-                            <Bar
-                              key={airlineName}
-                              dataKey={airlineName}
-                              stackId="airlines"
-                              fill={getAirlineColor(airlineName, idx)}
-                            />
-                          ))}
-                          <Bar
-                            key="Others"
-                            dataKey="Others"
-                            stackId="airlines"
-                            fill="#CBD5E0"
-                          />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-
-                  {/* Right: Airline Tonnage Share (Pie) */}
-                  <div className="col-span-4 border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-full">
-                    <div className="border-b border-[#F1F5F9] pb-1 shrink-0">
-                      <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Airline Tonnage Share</span>
-                    </div>
-                    <div className="relative h-[135px] flex items-center justify-center mt-1 shrink-0">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={airlinePieData}
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={28}
-                            outerRadius={46}
-                            paddingAngle={2}
-                            dataKey="value"
-                          >
-                            {airlinePieData.map((entry: any, index: number) => (
-                              <Cell key={`cell-${index}`} fill={entry.name === "Others" ? "#CBD5E0" : getAirlineColor(entry.name, index)} />
-                            ))}
-                          </Pie>
-                        </PieChart>
-                      </ResponsiveContainer>
-                      <div className="absolute text-center flex flex-col justify-center items-center pointer-events-none">
-                        <span className="text-[6px] font-bold text-slate-400 uppercase">Total</span>
-                        <span className="text-[8px] font-extrabold text-[#2D3748] tracking-tight">
-                          {formatNumber(kpi.Total_Tonnage)} kg
-                        </span>
-                      </div>
-                    </div>
-                    <div className="space-y-1 mt-1 overflow-hidden flex-1">
-                      {airlinePieData.slice(0, 4).map((entry: any, idx: number) => {
-                        const pct = kpi.Total_Tonnage > 0 ? ((entry.value / kpi.Total_Tonnage) * 100).toFixed(1) : "0.0";
-                        return (
-                          <div key={entry.name} className="flex items-center justify-between text-[8px] text-slate-500">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: entry.name === "Others" ? "#CBD5E0" : getAirlineColor(entry.name, idx) }} />
-                              <span className="truncate max-w-[85px] font-semibold">{entry.name}</span>
-                            </div>
-                            <span className="font-bold text-slate-700 shrink-0 text-[8px]">{formatNumber(entry.value)} kg ({pct}%)</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Row 2: Airline Breakdown Airline Tonnage by Week Period */}
-                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[260px]">
+              <div className="grid grid-cols-12 gap-4 mt-4 h-[450px] flex-1">
+                {/* Left: Top 10 Airlines Tonnage Share */}
+                <div className="col-span-8 border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-full">
                   <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-1 shrink-0">
-                    <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Airline Tonnage by Week Period</span>
-                    <span className="bg-indigo-50 text-indigo-700 text-[7.5px] px-1.5 py-0.2 rounded font-black uppercase shrink-0">
-                      {airlineWeeklyStackData.length} Airlines
-                    </span>
+                    <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Top 10 Airlines Tonnage Share</span>
+                    <span className="text-[7.5px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border">Day-by-Day Stack</span>
                   </div>
-                  <div className="h-[210px] w-full mt-1">
+                  <div className="h-[250px] w-full mt-1">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart
-                        data={airlineWeeklyStackData}
-                        layout="vertical"
-                        margin={{ top: 2, right: 10, left: 4, bottom: 2 }}
+                        data={dailyStackedAirlineData}
+                        margin={{ top: 5, right: 10, left: 4, bottom: dailyStackedAirlineData.length > 10 ? 15 : 5 }}
                       >
-                        <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={true} horizontal={false} />
+                        <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} horizontal={true} />
                         <XAxis
+                          dataKey="date_label"
+                          type="category"
+                          tick={{ fontSize: 7, fill: "#4A5568", fontWeight: 650 }}
+                          axisLine={{ stroke: "#E2E8F0" }}
+                          tickLine={false}
+                          interval={dailyStackedAirlineData.length > 14 ? Math.floor(dailyStackedAirlineData.length / 14) : 0}
+                        />
+                        <YAxis
                           type="number"
                           tick={{ fontSize: 7, fill: "#A0AEC0" }}
                           axisLine={false}
                           tickLine={false}
                           tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+                          width={28}
                         />
-                        <YAxis
-                          dataKey="airline"
-                          type="category"
-                          tick={{ fontSize: 7, fill: "#4A5568", fontWeight: 600 }}
-                          axisLine={{ stroke: "#E2E8F0" }}
-                          tickLine={false}
-                          width={140}
-                        />
-                        {weekStackLabels.map((wkLabel, wIdx) => (
+                        {top10AirlinesNames.map((airlineName, idx) => (
                           <Bar
-                            key={wkLabel}
-                            dataKey={wkLabel}
-                            stackId="awstack"
-                            radius={wIdx === weekStackLabels.length - 1 ? [0, 3, 3, 0] : [0, 0, 0, 0]}
-                          >
-                            {airlineWeeklyStackData.map((row: any) => (
-                              <Cell
-                                key={`${row.airline}-${wkLabel}`}
-                                fill={getAirlineColor(row.airline, row.colorIdx)}
-                                fillOpacity={weekStackLabels.length > 1 ? 0.45 + (wIdx / (weekStackLabels.length - 1)) * 0.55 : 1}
-                              />
-                            ))}
-                          </Bar>
+                            key={airlineName}
+                            dataKey={airlineName}
+                            stackId="airlines"
+                            fill={getAirlineColor(airlineName, idx)}
+                          />
                         ))}
+                        <Bar
+                          key="Others"
+                          dataKey="Others"
+                          stackId="airlines"
+                          fill="#CBD5E0"
+                        />
+                        <Bar
+                          key="total_tonnage_label"
+                          dataKey="total_tonnage_label"
+                          stackId="airlines"
+                          fill="transparent"
+                          label={<CustomLabel />}
+                        />
                       </BarChart>
                     </ResponsiveContainer>
+                  </div>
+
+                  {/* Legends Grid (2-column layout for 10 items) */}
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-2 pr-1 border-t border-slate-100 pt-1.5 shrink-0">
+                    {top10Airlines.map((entry, idx) => {
+                      const pct = totalTop10Tonnage > 0 ? ((entry.tonnage / totalTop10Tonnage) * 100).toFixed(1) : "0.0";
+                      return (
+                        <div key={entry.name} className="flex items-center justify-between text-[7.5px] border-b border-slate-50 pb-0.5">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: getAirlineColor(entry.name, idx) }} />
+                            <span className="font-semibold text-slate-700 truncate max-w-[110px]" title={entry.name}>
+                              {entry.name}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0 text-right">
+                            <span className="font-bold text-[#2D3748] tabular-nums">{formatNumber(entry.tonnage)} kg</span>
+                            <span className="text-slate-400 font-medium">({pct}%)</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Right: Airline Tonnage Share (Pie) */}
+                <div className="col-span-4 border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-full">
+                  <div className="border-b border-[#F1F5F9] pb-1 shrink-0">
+                    <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Airline Tonnage Share</span>
+                  </div>
+                  <div className="relative h-[220px] flex items-center justify-center mt-1 shrink-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={airlinePieData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={48}
+                          outerRadius={64}
+                          paddingAngle={2}
+                          dataKey="value"
+                        >
+                          {airlinePieData.map((entry: any, index: number) => (
+                            <Cell key={`cell-${index}`} fill={entry.name === "Others" ? "#CBD5E0" : getAirlineColor(entry.name, index)} />
+                          ))}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="absolute text-center flex flex-col justify-center items-center pointer-events-none">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase">Total</span>
+                      <span className="text-xs font-extrabold text-[#2D3748] tracking-tight">
+                        {formatNumber(kpi.Total_Tonnage)} kg
+                      </span>
+                    </div>
+                  </div>
+                  <div className="space-y-1 mt-1 overflow-hidden flex-1">
+                    {airlinePieData.map((entry: any, idx: number) => {
+                      const pct = kpi.Total_Tonnage > 0 ? ((entry.value / kpi.Total_Tonnage) * 100).toFixed(1) : "0.0";
+                      return (
+                        <div key={entry.name} className="flex items-center justify-between text-[8px] text-slate-500">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: entry.name === "Others" ? "#CBD5E0" : getAirlineColor(entry.name, idx) }} />
+                            <span className="truncate max-w-[85px] font-semibold">{entry.name}</span>
+                          </div>
+                          <span className="font-bold text-slate-700 shrink-0 text-[8px]">{formatNumber(entry.value)} kg ({pct}%)</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -1001,8 +1088,125 @@ function PrintViewContent() {
               </div>
             </div>
 
-            {/* PAGE 2: Operational Visuals - Trade Routes */}
-            <div className="bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+            {/* PAGE 2: Operational Visuals - Airline Tonnage by Week Period */}
+            <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+              {/* Print Header */}
+              <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
+                  <div>
+                    <h1 className="text-lg font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Dart Global Logistics · Weekly Operational Performance — Weekly Airline Trend
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-0.5">
+                  <span className="text-black font-bold text-[11px] flex items-center gap-1">
+                    📅 {getSqlDateRange() || `${startDate} to ${endDate}`}
+                  </span>
+                  <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
+                    {companyCode && (
+                      <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                        🏢 Entity: {companyCode}
+                      </span>
+                    )}
+                    {branch && (
+                      <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                        🏢 Branch: {branch}
+                      </span>
+                    )}
+                    {destinationCountry && (
+                      <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                        📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Weekly Trend Chart in Large Container */}
+              <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between h-[540px] mt-4 flex-1">
+                <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-1.5 shrink-0">
+                  <span className="text-[10px] uppercase tracking-wider font-bold text-slate-400">Airline Tonnage by Week Period</span>
+                  <span className="bg-indigo-50 text-indigo-700 text-[8px] px-2 py-0.5 rounded font-black uppercase shrink-0">
+                    {airlineWeeklyStackData.length} Airlines
+                  </span>
+                </div>
+                <div className="h-[360px] w-full mt-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={airlineWeeklyStackData}
+                      layout="vertical"
+                      margin={{ top: 5, right: 15, left: 10, bottom: 5 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={true} horizontal={false} />
+                      <XAxis
+                        type="number"
+                        tick={{ fontSize: 8, fill: "#A0AEC0" }}
+                        axisLine={false}
+                        tickLine={false}
+                        tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+                      />
+                      <YAxis
+                        dataKey="airline"
+                        type="category"
+                        tick={{ fontSize: 8, fill: "#4A5568", fontWeight: 600 }}
+                        axisLine={{ stroke: "#E2E8F0" }}
+                        tickLine={false}
+                        width={150}
+                      />
+                      {weekStackLabels.map((wkLabel, wIdx) => (
+                        <Bar
+                          key={wkLabel}
+                          dataKey={wkLabel}
+                          stackId="awstack"
+                          radius={wIdx === weekStackLabels.length - 1 ? [0, 3, 3, 0] : [0, 0, 0, 0]}
+                        >
+                          {airlineWeeklyStackData.map((row: any) => (
+                            <Cell
+                              key={`${row.airline}-${wkLabel}`}
+                              fill={getAirlineColor(row.airline, row.colorIdx)}
+                              fillOpacity={weekStackLabels.length > 1 ? 0.45 + (wIdx / (weekStackLabels.length - 1)) * 0.55 : 1}
+                            />
+                          ))}
+                        </Bar>
+                      ))}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Legends Grid (2-column layout for 10 items) */}
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-2 pr-1 border-t border-slate-100 pt-1.5 shrink-0">
+                  {top10Airlines.map((entry, idx) => {
+                    const pct = totalTop10Tonnage > 0 ? ((entry.tonnage / totalTop10Tonnage) * 100).toFixed(1) : "0.0";
+                    return (
+                      <div key={entry.name} className="flex items-center justify-between text-[7.5px] border-b border-slate-50 pb-0.5">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: getAirlineColor(entry.name, idx) }} />
+                          <span className="font-semibold text-slate-700 truncate max-w-[110px]" title={entry.name}>
+                            {entry.name}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0 text-right">
+                          <span className="font-bold text-[#2D3748] tabular-nums">{formatNumber(entry.tonnage)} kg</span>
+                          <span className="text-slate-400 font-medium">({pct}%)</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Print Footer */}
+              <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[8px] text-slate-400 shrink-0 mt-4">
+                <span>Generated via Headless Chromium PDF Print Engine</span>
+                <span>© 2026 Dart Global Logistics · Operational Performance — Airline Tonnage by Week Period Page</span>
+              </div>
+            </div>
+
+            {/* PAGE 3: Operational Visuals - Trade Routes */}
+            <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
               {/* Print Header */}
               <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
                 <div className="flex items-center gap-2.5">
@@ -1015,9 +1219,9 @@ function PrintViewContent() {
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-0.5">
-                  <Badge className="bg-indigo-50 text-indigo-700 border border-indigo-150 font-bold text-[9px] px-2 py-0.5 rounded shadow-sm">
+                  <span className="text-black font-bold text-[11px] flex items-center gap-1">
                     📅 {getSqlDateRange() || `${startDate} to ${endDate}`}
-                  </Badge>
+                  </span>
                   <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
                     {companyCode && (
                       <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
@@ -1029,17 +1233,11 @@ function PrintViewContent() {
                         🏢 Branch: {branch}
                       </span>
                     )}
-                    <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                      🌍 From: {originCity ? `${originCity}, ` : ""}{country || "Global Markets"}
-                    </span>
                     {destinationCountry && (
                       <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
                         📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
                       </span>
                     )}
-                    <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded max-w-[150px] truncate">
-                      ✈️ Carrier: {airline || "All Carriers"}
-                    </span>
                   </div>
                 </div>
               </div>
@@ -1114,7 +1312,7 @@ function PrintViewContent() {
           </>
         ) : (
           /* Standard Page 1 */
-          <div className="bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+          <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
             {/* Print Header */}
             <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
               <div className="flex items-center gap-2.5">
@@ -1127,9 +1325,9 @@ function PrintViewContent() {
                 </div>
               </div>
               <div className="flex flex-col items-end gap-0.5">
-                <Badge className="bg-indigo-50 text-indigo-700 border border-indigo-150 font-bold text-[9px] px-2 py-0.5 rounded shadow-sm">
+                <span className="text-black font-bold text-[11px] flex items-center gap-1">
                   📅 {startDate} to {endDate}
-                </Badge>
+                </span>
                 <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
                   {companyCode && (
                     <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
@@ -1141,17 +1339,11 @@ function PrintViewContent() {
                       🏢 Branch: {branch}
                     </span>
                   )}
-                  <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                    🌍 From: {originCity ? `${originCity}, ` : ""}{country || "Global Markets"}
-                  </span>
                   {destinationCountry && (
                     <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
                       📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
                     </span>
                   )}
-                  <span className="text-[7px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded max-w-[150px] truncate">
-                    ✈️ Carrier: {airline || "All Carriers"}
-                  </span>
                 </div>
               </div>
             </div>
@@ -1261,7 +1453,7 @@ function PrintViewContent() {
 
       {/* ── SECTION 2: WEEKLY DETAILED CARRIER LEDGER / Airline Performance Summary (Page 2+, Dynamic Flow) ── */}
       {selectedSections.weeklyLedger && (
-        <div className="bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
 
           <div className="flex flex-col print:block gap-6 flex-1">
             {/* Print Header */}
@@ -1276,9 +1468,9 @@ function PrintViewContent() {
                 </div>
               </div>
               <div className="flex flex-col items-end gap-0.5">
-                <Badge className="bg-indigo-50 text-indigo-700 border border-indigo-150 font-bold text-[9px] px-2 py-0.5 rounded shadow-sm">
+                <span className="text-black font-bold text-[11px] flex items-center gap-1">
                   📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`}
-                </Badge>
+                </span>
               </div>
             </div>
 
@@ -1491,7 +1683,7 @@ function PrintViewContent() {
 
       {/* ── SECTION 3: MONTHLY VISUAL DASHBOARD / Trade Route Performance Summary (Page 3) ── */}
       {selectedSections.monthlyVisual && (
-        <div className="bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
 
           {/* Print Header */}
           <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
@@ -1505,9 +1697,9 @@ function PrintViewContent() {
               </div>
             </div>
             <div className="flex flex-col items-end gap-0.5">
-              <Badge className="bg-teal-50 text-teal-700 border border-teal-150 font-bold text-[9px] px-2 py-0.5 rounded shadow-sm">
+              <span className="text-black font-bold text-[11px] flex items-center gap-1">
                 📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`}
-              </Badge>
+              </span>
             </div>
           </div>
 
@@ -1786,7 +1978,7 @@ function PrintViewContent() {
 
       {/* ── SECTION 4: MONTHLY DETAILED FINANCIAL LEDGER / Detailed Raw Query Ledger (Page 4+, Dynamic Flow) ── */}
       {selectedSections.monthlyLedger && mode !== "custom-sql" && (
-        <div className="bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0">
+        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0">
 
           <div className="flex flex-col print:block gap-6 flex-1">
             {/* Print Header */}
@@ -1801,9 +1993,9 @@ function PrintViewContent() {
                 </div>
               </div>
               <div className="flex flex-col items-end gap-0.5">
-                <Badge className="bg-teal-50 text-teal-700 border border-teal-150 font-bold text-[9px] px-2 py-0.5 rounded shadow-sm">
+                <span className="text-black font-bold text-[11px] flex items-center gap-1">
                   📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`}
-                </Badge>
+                </span>
               </div>
             </div>
 

@@ -99,3 +99,108 @@
   box-shadow: 0 0 6px rgba(49, 130, 206, 0.5);
   animation: soft-pulse-light 2s infinite ease-in-out;
 }
+
+/* ── LEFT SIDEBAR NAVIGATION ── */
+.sidebar-nav {
+  width: 220px;
+  min-height: calc(100vh - 64px);
+  background: #ffffff;
+  border-right: 1px solid #E2E8F0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 0;
+  position: sticky;
+  top: 64px;
+  height: calc(100vh - 64px);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.sidebar-section-label {
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #A0AEC0;
+  padding: 8px 16px 4px;
+}
+
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  margin: 1px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: #4A5568;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  border: 1px solid transparent;
+}
+
+.sidebar-nav-item:hover {
+  background: #F7FAFC;
+  color: #1A202C;
+  border-color: #EDF2F7;
+}
+
+.sidebar-nav-item.active {
+  background: #EBF8FF;
+  color: #2B6CB0;
+  font-weight: 700;
+  border-color: #BEE3F8;
+}
+
+.sidebar-nav-item.active .nav-icon {
+  color: #3182CE;
+}
+
+.sidebar-nav-item .nav-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: #A0AEC0;
+  transition: color 0.15s ease;
+}
+
+.sidebar-nav-item:hover .nav-icon {
+  color: #4A5568;
+}
+
+.sidebar-badge {
+  margin-left: auto;
+  font-size: 8px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+/* Admin panel card styling */
+.admin-card {
+  background: #ffffff;
+  border: 1px solid #E2E8F0;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  transition: box-shadow 0.2s ease;
+}
+
+.admin-card:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+}
+
+/* Scheduling placeholder shimmer */
+@keyframes shimmer-light {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.coming-soon-shimmer {
+  background: linear-gradient(90deg, #F7FAFC 25%, #EDF2F7 50%, #F7FAFC 75%);
+  background-size: 800px 100%;
+  animation: shimmer-light 2.5s infinite linear;
+}

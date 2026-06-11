@@ -16,9 +16,9 @@ def send_pdf_via_graph(pdf_path: str, recipient_email: str):
     """
     Authenticates via MSAL and sends an email with the attached PDF using MS Graph API.
     """
-    tenant_id = os.getenv("AZURE_TENANT_ID")
-    client_id = os.getenv("AZURE_CLIENT_ID")
-    client_secret = os.getenv("AZURE_CLIENT_SECRET")
+    tenant_id = os.getenv("MAIL_AZURE_TENANT_ID") or os.getenv("AZURE_TENANT_ID")
+    client_id = os.getenv("MAIL_AZURE_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
+    client_secret = os.getenv("MAIL_AZURE_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET")
     sender = os.getenv("SENDER_EMAIL")
     
     try:

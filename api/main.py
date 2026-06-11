@@ -13,7 +13,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 # Load credentials
-load_dotenv()
+load_dotenv(override=True)
 
 # Import our custom modules
 from api.database import (
@@ -289,7 +289,7 @@ def process_pdf_and_email(req: ReportRequest):
             os.remove(temp_pdf_path)
 
 
-# --- ENDPOINT 5.5: Recipients list dropdown ---
+# --- ENDPOINT 5.5: Recipients list dropdown (static .env config) ---
 @app.get("/api/recipients")
 def fetch_recipients():
     """Returns the comma-separated candidate recipient emails from .env config."""
@@ -299,6 +299,124 @@ def fetch_recipients():
         return {"status": "success", "data": email_list}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- ENDPOINT 5.6: Fetch real Azure AD org users via Microsoft Graph ---
+@app.get("/api/org-users")
+def fetch_org_users():
+    """
+    Fetches all licensed users in the Azure AD tenant via Microsoft Graph API.
+    Groups them by department and jobTitle for the Admin Panel categorization.
+    Requires User.Read.All (or Directory.Read.All) Application permission granted in Azure.
+    """
+    try:
+        from msal import ConfidentialClientApplication
+        import requests as req_lib
+
+        tenant_id = os.getenv("FETCH_AZURE_TENANT_ID") or os.getenv("AZURE_TENANT_ID")
+        client_id = os.getenv("FETCH_AZURE_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
+        client_secret = os.getenv("FETCH_AZURE_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET")
+
+        if not all([tenant_id, client_id, client_secret]):
+            raise HTTPException(status_code=500, detail="Azure FETCH credentials not configured in .env")
+
+        # Authenticate with MSAL
+        msal_app = ConfidentialClientApplication(
+            client_id,
+            authority=f"https://login.microsoftonline.com/{tenant_id}",
+            client_credential=client_secret,
+        )
+        token_result = msal_app.acquire_token_for_client(
+            scopes=["https://graph.microsoft.com/.default"]
+        )
+
+        if "access_token" not in token_result:
+            error_desc = token_result.get("error_description", "Unknown auth error")
+            raise HTTPException(status_code=401, detail=f"Azure AD auth failed: {error_desc}")
+
+        headers = {
+            "Authorization": f"Bearer {token_result['access_token']}",
+            "Content-Type": "application/json",
+        }
+
+        # Fetch users — select only the fields we need to minimize payload
+        select_fields = "displayName,mail,userPrincipalName,jobTitle,department,officeLocation,accountEnabled,country"
+        url = f"https://graph.microsoft.com/v1.0/users?$select={select_fields}&$top=999&$filter=accountEnabled eq true"
+
+        all_users = []
+        while url:
+            resp = req_lib.get(url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                raise HTTPException(
+                    status_code=resp.status_code,
+                    detail=f"Graph API error: {resp.text[:400]}"
+                )
+            page = resp.json()
+            all_users.extend(page.get("value", []))
+            url = page.get("@odata.nextLink")  # Handle pagination
+
+        # Filter: only users with a real email address (skip service accounts etc.)
+        users_with_email = [
+            u for u in all_users
+            if u.get("mail") or u.get("userPrincipalName", "").endswith("@dartglobal.com")
+        ]
+
+        # Build categorised structure
+        by_department: dict = {}
+        by_job_title: dict = {}
+        flat_list = []
+
+        for u in users_with_email:
+            email = u.get("mail") or u.get("userPrincipalName", "")
+            display_name = u.get("displayName", email)
+            department = u.get("department") or "Unassigned"
+            job_title = u.get("jobTitle") or "No Title"
+            office = u.get("officeLocation") or ""
+            country = u.get("country") or ""
+
+            user_obj = {
+                "email": email,
+                "displayName": display_name,
+                "jobTitle": job_title,
+                "department": department,
+                "officeLocation": office,
+                "country": country,
+            }
+            flat_list.append(user_obj)
+
+            # Group by department
+            if department not in by_department:
+                by_department[department] = []
+            by_department[department].append(user_obj)
+
+            # Group by job title
+            if job_title not in by_job_title:
+                by_job_title[job_title] = []
+            by_job_title[job_title].append(user_obj)
+
+        # Sort departments and users within each department alphabetically
+        by_department_sorted = {
+            dept: sorted(users, key=lambda x: x["displayName"])
+            for dept, users in sorted(by_department.items())
+        }
+        by_job_title_sorted = {
+            title: sorted(users, key=lambda x: x["displayName"])
+            for title, users in sorted(by_job_title.items())
+        }
+
+        return {
+            "status": "success",
+            "total": len(flat_list),
+            "users": sorted(flat_list, key=lambda x: x["displayName"]),
+            "byDepartment": by_department_sorted,
+            "byJobTitle": by_job_title_sorted,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Org users fetch failed: {str(e)}")
+
 
 
 # --- ENDPOINT 6: Trigger PDF Email ---

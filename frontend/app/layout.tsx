@@ -7,6 +7,9 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 export const metadata: Metadata = {
   title: "Tonnage Stats · Dart Global Logistics",
   description: "Interactive dashboard for cargo tonnage, customer and revenue analytics.",
+  icons: {
+    icon: "/images/Dart_Logo_new.webp",
+  },
 };
 
 export default function RootLayout({

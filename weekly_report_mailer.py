@@ -21,7 +21,7 @@ logging.basicConfig(
 )
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # --- 1. DATA EXTRACTION ---
 def fetch_data():
@@ -106,9 +106,9 @@ def generate_pdf(df, output_path):
 def send_email_via_graph(pdf_path):
     logging.info("Authenticating with Microsoft Graph API...")
     try:
-        tenant_id = os.getenv("AZURE_TENANT_ID")
-        client_id = os.getenv("AZURE_CLIENT_ID")
-        client_secret = os.getenv("AZURE_CLIENT_SECRET")
+        tenant_id = os.getenv("MAIL_AZURE_TENANT_ID") or os.getenv("AZURE_TENANT_ID")
+        client_id = os.getenv("MAIL_AZURE_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
+        client_secret = os.getenv("MAIL_AZURE_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET")
         sender = os.getenv("SENDER_EMAIL")
         recipients = os.getenv("RECIPIENT_EMAILS").split(',')
         
