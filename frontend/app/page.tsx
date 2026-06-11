@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar,
@@ -203,6 +203,7 @@ export default function Dashboard() {
   const [selectedDestCountries, setSelectedDestCountries] = useState<string[]>([]);
   const [selectedDestCities, setSelectedDestCities] = useState<string[]>([]);
   const [selectedAirlines, setSelectedAirlines] = useState<string[]>([]);
+  const [expandedAirlines, setExpandedAirlines] = useState<Record<string, boolean>>({});
 
   // Dropdown option lists
   const [countries, setCountries] = useState<string[]>([]);
@@ -2872,7 +2873,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                   <div className="flex items-center justify-between mb-4 pb-2 border-b border-[#F1F5F9]">
                     <div>
                       <h4 className="text-sm font-bold text-[#1A202C]">Airline Performance Summary — Top 10</h4>
-                      <p className="text-xs text-slate-400 mt-0.5">Aggregated by airline · origin &amp; destination country · ranked by chargeable tonnage</p>
+                      <p className="text-xs text-slate-400 mt-0.5">Aggregated by airline · ranked by chargeable tonnage · click row to toggle route breakdown</p>
                     </div>
                     <Badge variant="outline" className="border-[#E2E8F0] text-[#3182CE] font-semibold px-2 py-0.5">
                       Top 10 + Others
@@ -2881,26 +2882,61 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
 
                   <div className="overflow-x-auto">
                     {(() => {
-                      // Aggregate raw rows by Airline + Origin Country + Destination Country
+                      // Aggregate raw rows by Airline and Route
                       const aggMap: {
                         [key: string]: {
-                          airline: string; originCountry: string; destCountry: string;
-                          tonnage: number; revenue: number; cost: number; shipments: number;
+                          airline: string;
+                          tonnage: number;
+                          revenue: number;
+                          cost: number;
+                          shipments: number;
+                          routes: {
+                            [routeKey: string]: {
+                              originCountry: string;
+                              destCountry: string;
+                              tonnage: number;
+                              revenue: number;
+                              cost: number;
+                              shipments: number;
+                            };
+                          };
                         }
                       } = {};
 
                       data.forEach((r: any) => {
                         const airline = r.Airline ?? r.AirlineName1 ?? r.carrier ?? "Unknown";
+                        if (!aggMap[airline]) {
+                          aggMap[airline] = { airline, tonnage: 0, revenue: 0, cost: 0, shipments: 0, routes: {} };
+                        }
+                        const tonnage = Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
+                        const revenue = Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
+                        const cost = Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
+                        const shipments = Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
+
+                        aggMap[airline].tonnage += tonnage;
+                        aggMap[airline].revenue += revenue;
+                        aggMap[airline].cost += cost;
+                        aggMap[airline].shipments += shipments;
+
                         const originCountry = r.Origin_Country ?? r.ConLoadPortCountryName ?? r.origin_country ?? "—";
                         const destCountry = r.Destination_Country ?? r.DestCountry ?? r.dest_country ?? "—";
-                        const key = `${airline}||${originCountry}||${destCountry}`;
-                        if (!aggMap[key]) {
-                          aggMap[key] = { airline, originCountry, destCountry, tonnage: 0, revenue: 0, cost: 0, shipments: 0 };
+                        const routeKey = `${originCountry} → ${destCountry}`;
+
+                        if (!aggMap[airline].routes[routeKey]) {
+                          aggMap[airline].routes[routeKey] = {
+                            originCountry,
+                            destCountry,
+                            tonnage: 0,
+                            revenue: 0,
+                            cost: 0,
+                            shipments: 0
+                          };
                         }
-                        aggMap[key].tonnage += Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
-                        aggMap[key].revenue += Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
-                        aggMap[key].cost += Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
-                        aggMap[key].shipments += Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
+                        const rt = aggMap[airline].routes[routeKey];
+                        rt.tonnage += tonnage;
+                        rt.revenue += revenue;
+                        rt.cost += cost;
+                        rt.shipments += shipments;
                       });
 
                       const sorted = Object.values(aggMap).sort((a, b) => b.tonnage - a.tonnage);
@@ -2908,11 +2944,24 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                       const others = sorted.slice(10);
                       const othersRow = others.length > 0 ? {
                         airline: `Others (${others.length} airlines)`,
-                        originCountry: "—", destCountry: "—",
                         tonnage: others.reduce((s, r) => s + r.tonnage, 0),
                         revenue: others.reduce((s, r) => s + r.revenue, 0),
                         cost: others.reduce((s, r) => s + r.cost, 0),
                         shipments: others.reduce((s, r) => s + r.shipments, 0),
+                        routes: others.reduce((acc: any, o) => {
+                          Object.values(o.routes || {}).forEach((rt: any) => {
+                            const routeKey = `${rt.originCountry} → ${rt.destCountry}`;
+                            if (!acc[routeKey]) {
+                              acc[routeKey] = { ...rt };
+                            } else {
+                              acc[routeKey].tonnage += rt.tonnage;
+                              acc[routeKey].revenue += rt.revenue;
+                              acc[routeKey].cost += rt.cost;
+                              acc[routeKey].shipments += rt.shipments;
+                            }
+                          });
+                          return acc;
+                        }, {})
                       } : null;
 
                       const rows = othersRow ? [...top10, othersRow] : top10;
@@ -2927,7 +2976,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                         return (
                           <div className="py-14 flex flex-col items-center gap-2 text-slate-400">
                             <span className="text-3xl">✈️</span>
-                            <p className="text-xs font-medium text-center">No airline data available.<br />Run a SQL query that returns <code className="bg-slate-100 px-1 rounded">Airline</code>, <code className="bg-slate-100 px-1 rounded">Origin_Country</code>, <code className="bg-slate-100 px-1 rounded">Revenue_USD</code> columns.</p>
+                            <p className="text-xs font-medium text-center">No airline data available.<br />Run a SQL query that returns <code className="bg-slate-100 px-1 rounded">Airline</code>, <code className="bg-slate-100 px-1 rounded">Revenue_USD</code> columns.</p>
                           </div>
                         );
                       }
@@ -2938,8 +2987,6 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                             <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[10px] tracking-wider bg-slate-50/70">
                               <th className="px-3 py-3 w-8">#</th>
                               <th className="px-3 py-3">Airline</th>
-                              <th className="px-3 py-3">Origin Country</th>
-                              <th className="px-3 py-3">Destination Country</th>
                               <th className="px-3 py-3 text-right">Tonnage (kg)</th>
                               <th className="px-3 py-3 text-right">Shipments</th>
                               <th className="px-3 py-3 text-right">Shipment Revenue (USD)</th>
@@ -2954,57 +3001,75 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                               const gpMargin = row.revenue > 0 ? ((row.revenue + row.cost) / row.revenue * 100) : 0;
                               const totalTonnage = grandTotal.tonnage;
                               const pct = totalTonnage > 0 ? (row.tonnage / totalTonnage * 100) : 0;
+                              const sortedRoutes = (Object.values(row.routes || {}) as any[]).sort((a, b) => b.tonnage - a.tonnage);
+
                               return (
-                                <tr
-                                  key={i}
-                                  className={`hover:bg-slate-50/60 transition-colors ${isOthers ? "bg-slate-50/50 italic" : ""}`}
-                                >
-                                  <td className="px-3 py-3 text-slate-400 font-bold tabular-nums">
-                                    {isOthers ? "—" : (
-                                      <span
-                                        className="inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-extrabold text-white"
-                                        style={{ backgroundColor: getAirlineColor(row.airline, i) }}
-                                      >
-                                        {i + 1}
-                                      </span>
-                                    )}
-                                  </td>
-                                  <td className="px-3 py-3">
-                                    <div className="flex items-center gap-2">
-                                      {!isOthers && (
+                                <Fragment key={i}>
+                                  <tr
+                                    className={`hover:bg-slate-50/60 transition-colors ${isOthers ? "bg-slate-50/50 italic" : ""}`}
+                                  >
+                                    <td className="px-3 py-3 text-slate-400 font-bold tabular-nums">
+                                      {isOthers ? "—" : (
                                         <span
-                                          className="w-2 h-2 rounded-full flex-shrink-0"
+                                          className="inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-extrabold text-white"
                                           style={{ backgroundColor: getAirlineColor(row.airline, i) }}
-                                        />
+                                        >
+                                          {i + 1}
+                                        </span>
                                       )}
-                                      <span className={`font-bold ${isOthers ? "text-slate-400" : "text-[#2D3748]"}`}>
-                                        {row.airline}
-                                      </span>
-                                    </div>
-                                  </td>
-                                  <td className="px-3 py-3 text-slate-600 font-medium">{row.originCountry}</td>
-                                  <td className="px-3 py-3 text-slate-600 font-medium">{row.destCountry}</td>
-                                  <td className="px-3 py-3 text-right tabular-nums">
-                                    <div className="flex flex-col items-end gap-0.5">
-                                      <span className="font-bold text-[#3182CE]">{formatNumber(row.tonnage)} kg</span>
-                                      <div className="h-1 rounded-full bg-slate-100 w-16 overflow-hidden">
-                                        <div
-                                          className="h-full rounded-full"
-                                          style={{ width: `${pct}%`, backgroundColor: getAirlineColor(row.airline, i) }}
-                                        />
+                                    </td>
+                                    <td className="px-3 py-3">
+                                      <div className="flex items-center gap-2 select-none">
+                                        <span className={`font-bold ${isOthers ? "text-slate-400" : "text-[#2D3748]"}`}>
+                                          {row.airline}
+                                        </span>
                                       </div>
-                                    </div>
-                                  </td>
-                                  <td className="px-3 py-3 text-right font-semibold text-slate-700 tabular-nums">{formatNumber(row.shipments)}</td>
-                                  <td className="px-3 py-3 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
-                                  <td className="px-3 py-3 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td>
-                                  <td className="px-3 py-3 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td>
-                                  <td className="px-3 py-3 text-right tabular-nums">
-                                    <span className={`font-bold text-[10px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
-                                      {gpMargin.toFixed(1)}%
-                                    </span>
-                                  </td>
-                                </tr>
+                                    </td>
+                                    <td className="px-3 py-3 text-right tabular-nums">
+                                      <div className="flex flex-col items-end gap-0.5">
+                                        <span className="font-bold text-[#3182CE]">{formatNumber(row.tonnage)} kg</span>
+                                        <div className="h-1 rounded-full bg-slate-100 w-16 overflow-hidden">
+                                          <div
+                                            className="h-full rounded-full"
+                                            style={{ width: `${pct}%`, backgroundColor: getAirlineColor(row.airline, i) }}
+                                          />
+                                        </div>
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-3 text-right font-semibold text-slate-700 tabular-nums">{formatNumber(row.shipments)}</td>
+                                    <td className="px-3 py-3 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
+                                    <td className="px-3 py-3 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td>
+                                    <td className="px-3 py-3 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td>
+                                    <td className="px-3 py-3 text-right tabular-nums">
+                                      <span className={`font-bold text-[10px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
+                                        {gpMargin.toFixed(1)}%
+                                      </span>
+                                    </td>
+                                  </tr>
+                                  {sortedRoutes.length > 0 && (
+                                    sortedRoutes.map((route, rIdx) => {
+                                      const routeGpMargin = route.revenue > 0 ? ((route.revenue + route.cost) / route.revenue * 100) : 0;
+                                      return (
+                                        <tr key={`${i}-route-${rIdx}`} className="bg-[#EBF8FF]/50 text-slate-950 text-[11px] border-l-4 border-blue-300 hover:bg-[#EBF8FF]/70 transition-colors">
+                                          <td className="px-3 py-1 text-center text-[8px] text-blue-400 font-bold"></td>
+                                          <td className="px-3 py-2 pl-8">
+                                            <span className="font-semibold text-slate-950">{route.originCountry} → {route.destCountry}</span>
+                                          </td>
+                                          <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatNumber(route.tonnage)} kg</td>
+                                          <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatNumber(route.shipments)}</td>
+                                          <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatCurrency(route.revenue)}</td>
+                                          <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatCurrency(route.cost)}</td>
+                                          <td className="px-3 py-2 text-right tabular-nums font-extrabold text-slate-950">{formatCurrency(route.revenue + route.cost)}</td>
+                                          <td className="px-3 py-2 text-right tabular-nums">
+                                            <span className="font-extrabold text-slate-950">
+                                              {routeGpMargin.toFixed(1)}%
+                                            </span>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })
+                                  )}
+                                </Fragment>
                               );
                             })}
                           </tbody>
@@ -3012,8 +3077,6 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                           <tfoot>
                             <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-xs">
                               <td className="px-3 py-3 text-slate-500" colSpan={2}>TOTAL</td>
-                              <td className="px-3 py-3" />
-                              <td className="px-3 py-3" />
                               <td className="px-3 py-3 text-right text-[#3182CE] tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
                               <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                               <td className="px-3 py-3 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>

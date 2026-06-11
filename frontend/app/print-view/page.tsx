@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { useState, useEffect, useCallback, Suspense, Fragment } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -225,6 +225,7 @@ function PrintViewContent() {
   const [kpi, setKpi] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [sqlQuery, setSqlQuery] = useState<string>("");
+  const [showRouteBreakdown, setShowRouteBreakdown] = useState(searchParams?.get("show_route_breakdown") !== "false");
 
   // Section selection state - read from URL params or default to all true
   const [selectedSections, setSelectedSections] = useState({
@@ -361,7 +362,8 @@ function PrintViewContent() {
       monthlyVisual: searchParams?.get("include_monthly_visual") !== "false",
       monthlyLedger: searchParams?.get("include_monthly_ledger") !== "false",
     });
-  }, [searchParams?.get("include_weekly_visual"), searchParams?.get("include_weekly_ledger"), searchParams?.get("include_monthly_visual"), searchParams?.get("include_monthly_ledger")]);
+    setShowRouteBreakdown(searchParams?.get("show_route_breakdown") !== "false");
+  }, [searchParams?.get("include_weekly_visual"), searchParams?.get("include_weekly_ledger"), searchParams?.get("include_monthly_visual"), searchParams?.get("include_monthly_ledger"), searchParams?.get("show_route_breakdown")]);
 
   // Process data for Doughnut distribution (top 4 countries + others)
   const getDoughnutData = () => {
@@ -713,7 +715,8 @@ function PrintViewContent() {
 
   return (
     <div className="flex flex-col items-center bg-slate-150 py-4 gap-8 print:block print:p-0 print:gap-0 print:bg-transparent select-none">
-      <style dangerouslySetInnerHTML={{ __html: `
+      <style dangerouslySetInnerHTML={{
+        __html: `
         @media print {
           * {
             -webkit-print-color-adjust: exact !important;
@@ -884,6 +887,21 @@ function PrintViewContent() {
               </button>
             )}
           </div>
+
+          {mode === "custom-sql" && (
+            <div className="flex items-center gap-2 mt-2 pt-3 border-t border-slate-250/80">
+              <input
+                type="checkbox"
+                id="show-route-breakdown"
+                checked={showRouteBreakdown}
+                onChange={(e) => setShowRouteBreakdown(e.target.checked)}
+                className="w-3.5 h-3.5 text-indigo-600 rounded border-slate-300 cursor-pointer"
+              />
+              <label htmlFor="show-route-breakdown" className="text-xs font-semibold text-slate-600 cursor-pointer select-none">
+                Include detailed Route Breakdowns (Origin Country → Destination Country) under each Airline row
+              </label>
+            </div>
+          )}
 
           <div className="bg-slate-50 border border-slate-200 rounded-md p-2 text-xs text-slate-600">
             <span className="font-semibold">Tip:</span> Deselect sections you don't need to reduce file size and printing time. Use Ctrl+P to print when ready.
@@ -1492,8 +1510,6 @@ function PrintViewContent() {
                         <>
                           <th className="px-3 py-1.5 w-8">#</th>
                           <th className="px-3 py-1.5">Airline</th>
-                          <th className="px-3 py-1.5">Origin Country</th>
-                          <th className="px-3 py-1.5">Destination Country</th>
                           <th className="px-3 py-1.5 text-right">Tonnage (kg)</th>
                           <th className="px-3 py-1.5 text-right">Shipments</th>
                           <th className="px-3 py-1.5 text-right">Shipment Revenue (USD)</th>
@@ -1517,26 +1533,61 @@ function PrintViewContent() {
                   <tbody className="divide-y divide-[#F1F5F9]">
                     {mode === "custom-sql" ? (
                       (() => {
-                        // Aggregate raw rows by Airline + Origin Country + Destination Country
+                        // Aggregate raw rows by Airline and Route
                         const aggMap: {
                           [key: string]: {
-                            airline: string; originCountry: string; destCountry: string;
-                            tonnage: number; revenue: number; cost: number; shipments: number;
+                            airline: string;
+                            tonnage: number;
+                            revenue: number;
+                            cost: number;
+                            shipments: number;
+                            routes: {
+                              [routeKey: string]: {
+                                originCountry: string;
+                                destCountry: string;
+                                tonnage: number;
+                                revenue: number;
+                                cost: number;
+                                shipments: number;
+                              };
+                            };
                           }
                         } = {};
 
                         data.forEach((r: any) => {
                           const airline = r.Airline ?? r.AirlineName1 ?? r.carrier ?? "Unknown";
+                          if (!aggMap[airline]) {
+                            aggMap[airline] = { airline, tonnage: 0, revenue: 0, cost: 0, shipments: 0, routes: {} };
+                          }
+                          const tonnage = Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
+                          const revenue = Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
+                          const cost = Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
+                          const shipments = Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
+
+                          aggMap[airline].tonnage += tonnage;
+                          aggMap[airline].revenue += revenue;
+                          aggMap[airline].cost += cost;
+                          aggMap[airline].shipments += shipments;
+
                           const originCountry = r.Origin_Country ?? r.ConLoadPortCountryName ?? r.origin_country ?? "—";
                           const destCountry = r.Destination_Country ?? r.DestCountry ?? r.dest_country ?? "—";
-                          const key = `${airline}||${originCountry}||${destCountry}`;
-                          if (!aggMap[key]) {
-                            aggMap[key] = { airline, originCountry, destCountry, tonnage: 0, revenue: 0, cost: 0, shipments: 0 };
+                          const routeKey = `${originCountry} → ${destCountry}`;
+
+                          if (!aggMap[airline].routes[routeKey]) {
+                            aggMap[airline].routes[routeKey] = {
+                              originCountry,
+                              destCountry,
+                              tonnage: 0,
+                              revenue: 0,
+                              cost: 0,
+                              shipments: 0
+                            };
                           }
-                          aggMap[key].tonnage += Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
-                          aggMap[key].revenue += Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
-                          aggMap[key].cost += Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
-                          aggMap[key].shipments += Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
+                          const rt = aggMap[airline].routes[routeKey];
+                          rt.tonnage += tonnage;
+                          rt.revenue += revenue;
+                          rt.cost += cost;
+                          rt.shipments += shipments;
                         });
 
                         const sorted = Object.values(aggMap).sort((a, b) => b.tonnage - a.tonnage);
@@ -1544,11 +1595,24 @@ function PrintViewContent() {
                         const others = sorted.slice(10);
                         const othersRow = others.length > 0 ? {
                           airline: `Others (${others.length} airlines)`,
-                          originCountry: "—", destCountry: "—",
                           tonnage: others.reduce((s, r) => s + r.tonnage, 0),
                           revenue: others.reduce((s, r) => s + r.revenue, 0),
                           cost: others.reduce((s, r) => s + r.cost, 0),
                           shipments: others.reduce((s, r) => s + r.shipments, 0),
+                          routes: others.reduce((acc: any, o) => {
+                            Object.values(o.routes || {}).forEach((rt: any) => {
+                              const routeKey = `${rt.originCountry} → ${rt.destCountry}`;
+                              if (!acc[routeKey]) {
+                                acc[routeKey] = { ...rt };
+                              } else {
+                                acc[routeKey].tonnage += rt.tonnage;
+                                acc[routeKey].revenue += rt.revenue;
+                                acc[routeKey].cost += rt.cost;
+                                acc[routeKey].shipments += rt.shipments;
+                              }
+                            });
+                            return acc;
+                          }, {})
                         } : null;
 
                         const rows = othersRow ? [...top10, othersRow] : top10;
@@ -1562,7 +1626,7 @@ function PrintViewContent() {
                         if (rows.length === 0) {
                           return (
                             <tr>
-                              <td colSpan={10} className="text-center py-6 text-slate-400">No airline aggregate data available.</td>
+                              <td colSpan={8} className="text-center py-6 text-slate-400">No airline aggregate data available.</td>
                             </tr>
                           );
                         }
@@ -1573,58 +1637,77 @@ function PrintViewContent() {
                               const isOthers = row.airline.startsWith("Others");
                               const gpMargin = row.revenue > 0 ? ((row.revenue + row.cost) / row.revenue * 100) : 0;
                               const pct = grandTotal.tonnage > 0 ? (row.tonnage / grandTotal.tonnage * 100) : 0;
+                              const sortedRoutes = (Object.values(row.routes || {}) as any[]).sort((a, b) => b.tonnage - a.tonnage);
                               return (
-                                <tr key={i} className={`hover:bg-slate-50/50 ${isOthers ? "bg-slate-50/30 italic" : ""}`}>
-                                  <td className="px-3 py-1.5 text-slate-400 font-bold tabular-nums">
-                                    {isOthers ? "—" : (
-                                      <span
-                                        className="inline-flex items-center justify-center w-4 h-4 rounded-full text-[8px] font-extrabold text-white"
-                                        style={{ backgroundColor: getAirlineColor(row.airline, i) }}
-                                      >
-                                        {i + 1}
-                                      </span>
-                                    )}
-                                  </td>
-                                  <td className="px-3 py-1.5">
-                                    <div className="flex items-center gap-1.5 min-w-0">
-                                      {!isOthers && (
-                                        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: getAirlineColor(row.airline, i) }} />
+                                <Fragment key={i}>
+                                  <tr className={`hover:bg-slate-50/50 ${isOthers ? "bg-slate-50/30 italic" : ""}`}>
+                                    <td className="px-3 py-1.5 text-slate-400 font-bold tabular-nums">
+                                      {isOthers ? "—" : (
+                                        <span
+                                          className="inline-flex items-center justify-center w-4 h-4 rounded-full text-[8px] font-extrabold text-white"
+                                          style={{ backgroundColor: getAirlineColor(row.airline, i) }}
+                                        >
+                                          {i + 1}
+                                        </span>
                                       )}
-                                      <span className={`font-semibold ${isOthers ? "text-slate-500" : "text-slate-800"}`}>
-                                        {row.airline}
-                                      </span>
-                                    </div>
-                                  </td>
-                                  <td className="px-3 py-1.5 text-slate-500">{row.originCountry}</td>
-                                  <td className="px-3 py-1.5 text-slate-500">{row.destCountry}</td>
-                                  <td className="px-3 py-1.5 text-right tabular-nums">
-                                    <div className="flex flex-col items-end gap-0.5">
-                                      <span className="font-bold text-blue-600">{formatNumber(row.tonnage)} kg</span>
-                                      <div className="h-0.5 rounded-full bg-slate-100 w-10 overflow-hidden">
-                                        <div
-                                          className="h-full rounded-full"
-                                          style={{ width: `${pct}%`, backgroundColor: getAirlineColor(row.airline, i) }}
-                                        />
+                                    </td>
+                                    <td className="px-3 py-1.5">
+                                      <div className="flex items-center gap-1.5 min-w-0">
+                                        <span className={`font-semibold ${isOthers ? "text-slate-500 italic" : "text-slate-800"}`}>
+                                          {row.airline}
+                                        </span>
                                       </div>
-                                    </div>
-                                  </td>
-                                  <td className="px-3 py-1.5 text-right text-slate-500 font-semibold tabular-nums">{formatNumber(row.shipments)}</td>
-                                  <td className="px-3 py-1.5 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
-                                  <td className="px-3 py-1.5 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td>
-                                  <td className="px-3 py-1.5 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td>
-                                  <td className="px-3 py-1.5 text-right tabular-nums">
-                                    <span className={`font-bold text-[8px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
-                                      {gpMargin.toFixed(1)}%
-                                    </span>
-                                  </td>
-                                </tr>
+                                    </td>
+                                    <td className="px-3 py-1.5 text-right tabular-nums">
+                                      <div className="flex flex-col items-end gap-0.5">
+                                        <span className="font-bold text-blue-600">{formatNumber(row.tonnage)} kg</span>
+                                        <div className="h-0.5 rounded-full bg-slate-100 w-10 overflow-hidden">
+                                          <div
+                                            className="h-full rounded-full"
+                                            style={{ width: `${pct}%`, backgroundColor: getAirlineColor(row.airline, i) }}
+                                          />
+                                        </div>
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-1.5 text-right text-slate-500 font-semibold tabular-nums">{formatNumber(row.shipments)}</td>
+                                    <td className="px-3 py-1.5 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
+                                    <td className="px-3 py-1.5 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td>
+                                    <td className="px-3 py-1.5 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td>
+                                    <td className="px-3 py-1.5 text-right tabular-nums">
+                                      <span className={`font-bold text-[8px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
+                                        {gpMargin.toFixed(1)}%
+                                      </span>
+                                    </td>
+                                  </tr>
+                                  {showRouteBreakdown && sortedRoutes.length > 0 && (
+                                    sortedRoutes.map((route, rIdx) => {
+                                      const routeGpMargin = route.revenue > 0 ? ((route.revenue + route.cost) / route.revenue * 100) : 0;
+                                      return (
+                                        <tr key={`${i}-route-${rIdx}`} className="bg-[#EBF8FF]/50 text-slate-950 text-[8.5px] border-l-4 border-blue-300">
+                                          <td className="px-3 py-1 text-center text-[8px] text-blue-400 font-bold"></td>
+                                          <td className="px-3 py-1 pl-8">
+                                            <span className="font-semibold text-slate-950">{route.originCountry} → {route.destCountry}</span>
+                                          </td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-950 font-bold">{formatNumber(route.tonnage)} kg</td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-950 font-semibold">{formatNumber(route.shipments)}</td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-950 font-bold">{formatCurrency(route.revenue)}</td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-950 font-semibold">{formatCurrency(route.cost)}</td>
+                                          <td className="px-3 py-1 text-right tabular-nums font-extrabold text-slate-950">{formatCurrency(route.revenue + route.cost)}</td>
+                                          <td className="px-3 py-1 text-right tabular-nums">
+                                            <span className="font-extrabold text-slate-950">
+                                              {routeGpMargin.toFixed(1)}%
+                                            </span>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })
+                                  )}
+                                </Fragment>
                               );
                             })}
                             {/* Grand Total Row */}
                             <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-[9px]">
                               <td className="px-3 py-1.5 text-slate-500" colSpan={2}>TOTAL</td>
-                              <td className="px-3 py-1.5" />
-                              <td className="px-3 py-1.5" />
                               <td className="px-3 py-1.5 text-right text-blue-600 tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
                               <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                               <td className="px-3 py-1.5 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
