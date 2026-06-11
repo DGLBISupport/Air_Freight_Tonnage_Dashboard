@@ -1870,6 +1870,30 @@ function PrintViewContent() {
                         return countryColorsMap[country];
                       };
 
+                      const DEST_BG_CLASSES = [
+                        "bg-[#EBF8FF]/50", // Light Blue
+                        "bg-[#F0FDF4]/50", // Light Green
+                        "bg-[#FEF3C7]/40", // Light Amber
+                        "bg-[#FAF5FF]/50", // Light Purple
+                        "bg-[#FFF1F2]/50", // Light Rose
+                        "bg-[#F0FDFA]/50", // Light Teal
+                        "bg-[#EEF2FF]/50", // Light Indigo
+                        "bg-[#FFFAF0]/50", // Light Orange
+                        "bg-[#ECFEFF]/50", // Light Cyan
+                        "bg-[#FDF2F8]/50", // Light Pink
+                      ];
+
+                      const destBgColorsMap: { [country: string]: string } = {};
+                      let nextDestColorIdx = 0;
+                      const getDestBgColorClass = (country: string): string => {
+                        if (country === "—" || country.startsWith("Others") || !country) return "";
+                        if (!destBgColorsMap[country]) {
+                          destBgColorsMap[country] = DEST_BG_CLASSES[nextDestColorIdx % DEST_BG_CLASSES.length];
+                          nextDestColorIdx++;
+                        }
+                        return destBgColorsMap[country];
+                      };
+
                       if (rows.length === 0) {
                         return (
                           <tr>
@@ -1882,11 +1906,12 @@ function PrintViewContent() {
                         <>
                           {rows.map((row, i) => {
                             const isOthers = row.originCountry.startsWith("Others");
+                            const color = getCountryColor(row.originCountry);
+                            const bgClass = isOthers ? "bg-slate-50/30 italic" : getDestBgColorClass(row.destCountry);
                             const gpMargin = row.revenue > 0 ? ((row.revenue + row.cost) / row.revenue * 100) : 0;
                             const pct = grandTotal.tonnage > 0 ? (row.tonnage / grandTotal.tonnage * 100) : 0;
-                            const color = getCountryColor(row.originCountry);
                             return (
-                              <tr key={i} className={`hover:bg-slate-50/50 ${isOthers ? "bg-slate-50/30 italic" : ""}`}>
+                              <tr key={i} className={`hover:bg-slate-50/50 ${bgClass}`}>
                                 <td className="px-3 py-1.5 text-slate-400 font-bold tabular-nums">
                                   {isOthers ? "—" : (
                                     <span

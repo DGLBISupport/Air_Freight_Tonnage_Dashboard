@@ -3167,6 +3167,30 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                         return countryColorsMap[country];
                       };
 
+                      const DEST_BG_CLASSES = [
+                        "bg-[#EBF8FF]/50", // Light Blue
+                        "bg-[#F0FDF4]/50", // Light Green
+                        "bg-[#FEF3C7]/40", // Light Amber
+                        "bg-[#FAF5FF]/50", // Light Purple
+                        "bg-[#FFF1F2]/50", // Light Rose
+                        "bg-[#F0FDFA]/50", // Light Teal
+                        "bg-[#EEF2FF]/50", // Light Indigo
+                        "bg-[#FFFAF0]/50", // Light Orange
+                        "bg-[#ECFEFF]/50", // Light Cyan
+                        "bg-[#FDF2F8]/50", // Light Pink
+                      ];
+
+                      const destBgColorsMap: { [country: string]: string } = {};
+                      let nextDestColorIdx = 0;
+                      const getDestBgColorClass = (country: string): string => {
+                        if (country === "—" || country.startsWith("Others") || !country) return "";
+                        if (!destBgColorsMap[country]) {
+                          destBgColorsMap[country] = DEST_BG_CLASSES[nextDestColorIdx % DEST_BG_CLASSES.length];
+                          nextDestColorIdx++;
+                        }
+                        return destBgColorsMap[country];
+                      };
+
                       if (rows.length === 0) {
                         return (
                           <div className="py-14 flex flex-col items-center gap-2 text-slate-400">
@@ -3200,10 +3224,11 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                               const totalTonnage = grandTotal.tonnage;
                               const pct = totalTonnage > 0 ? (row.tonnage / totalTonnage * 100) : 0;
                               const color = getCountryColor(row.originCountry);
+                              const bgClass = isOthers ? "bg-slate-50/50 italic" : getDestBgColorClass(row.destCountry);
                               return (
                                 <tr
                                   key={i}
-                                  className={`hover:bg-slate-50/60 transition-colors ${isOthers ? "bg-slate-50/50 italic" : ""}`}
+                                  className={`hover:bg-slate-50/60 transition-colors ${bgClass}`}
                                 >
                                   <td className="px-3 py-3 text-slate-400 font-bold tabular-nums">
                                     {isOthers ? "—" : (
