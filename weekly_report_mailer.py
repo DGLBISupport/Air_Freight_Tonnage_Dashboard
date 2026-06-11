@@ -63,7 +63,7 @@ def fetch_data():
         LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs ON vs.ShipmentNumber = vsc.Link_ShipmentNum
         WHERE vt.ConLoadPortCountryName = 'Viet Nam'
             AND vt.ETD >= '2025-06-01'
-            AND vt.ETD <= '2026-05-21'
+            AND vt.ETD <= '2026-06-07'
             AND vt.AirlineName1 LIKE '%Turkish%'
             AND vt.TransportMode = 'AIR'
         GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1, vt.ConsolTransportMode, vt.ETD, vt.ConLoadPortCountryName, vt.Air_ChargebleWeight, vt.Air_ActualWeight, vt.Revenue_USD, vt.Cost_USD, vt.Profit_USD

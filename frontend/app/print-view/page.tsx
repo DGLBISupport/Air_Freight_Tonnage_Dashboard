@@ -1908,6 +1908,11 @@ function PrintViewContent() {
                             const isOthers = row.originCountry.startsWith("Others");
                             const color = getCountryColor(row.originCountry);
                             const bgClass = isOthers ? "bg-slate-50/30 italic" : getDestBgColorClass(row.destCountry);
+                            
+                            // Extract solid hex color from bgClass (e.g. "bg-[#EBF8FF]/50" -> "#EBF8FF")
+                            const bgMatch = bgClass.match(/bg-\[([^\]]+)\]/);
+                            const solidBgColor = bgMatch ? bgMatch[1].split('/')[0] : (bgClass.includes("bg-slate") ? "#F1F5F9" : "#CBD5E0");
+
                             const gpMargin = row.revenue > 0 ? ((row.revenue + row.cost) / row.revenue * 100) : 0;
                             const pct = grandTotal.tonnage > 0 ? (row.tonnage / grandTotal.tonnage * 100) : 0;
                             return (
@@ -1915,8 +1920,8 @@ function PrintViewContent() {
                                 <td className="px-3 py-1.5 text-slate-400 font-bold tabular-nums">
                                   {isOthers ? "—" : (
                                     <span
-                                      className="inline-flex items-center justify-center w-4 h-4 rounded-full text-[8px] font-extrabold text-white"
-                                      style={{ backgroundColor: color }}
+                                      className="inline-flex items-center justify-center w-4 h-4 rounded-full text-[8px] font-extrabold text-slate-800 border border-slate-300"
+                                      style={{ backgroundColor: solidBgColor }}
                                     >
                                       {i + 1}
                                     </span>
@@ -1924,9 +1929,6 @@ function PrintViewContent() {
                                 </td>
                                 <td className="px-3 py-1.5">
                                   <div className="flex items-center gap-1.5 min-w-0">
-                                    {!isOthers && (
-                                      <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
-                                    )}
                                     <span className={`font-semibold ${isOthers ? "text-slate-500" : "text-slate-800"}`}>
                                       {row.originCountry}
                                     </span>

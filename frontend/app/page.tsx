@@ -192,8 +192,8 @@ export default function Dashboard() {
   const dashboardMode = (activeSection === "weekly-reports" || activeSection === "monthly-reports") ? "custom-sql" : "standard";
 
   // Filter States
-  const [startDate, setStartDate] = useState("2025-06-01");
-  const [endDate, setEndDate] = useState("2026-05-21");
+  const [startDate, setStartDate] = useState("2026-06-01");
+  const [endDate, setEndDate] = useState("2026-06-07");
 
   // Multi-Select filter selections
   const [selectedCompanies, setSelectedCompanies] = useState<string[]>([]);
@@ -357,8 +357,8 @@ LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc
 LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs
     ON vs.ShipmentNumber = vsc.Link_ShipmentNum
 WHERE vt.ConLoadPortCountryName = 'Viet Nam'
-    AND vt.ETD >= '2025-06-01'
-    AND vt.ETD <= '2026-05-21'
+    AND vt.ETD >= '2026-06-01'
+    AND vt.ETD <= '2026-06-07'
     AND vt.TransportMode = 'AIR'
 GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
          vt.ConsolTransportMode, vt.ETD, vt.ConLoadPortCountryName,
@@ -394,8 +394,8 @@ WITH ConsolBase AS (
          WHERE Link_ConsolNumber = vt.ConsoleNumber) AS ShipmentCount
     FROM dbo.ChatData_ViewShipConsolTransport vt
     WHERE vt.ConLoadPortCountryName = 'Viet Nam'
-        AND vt.ETD >= '2025-06-01'
-        AND vt.ETD <= '2026-05-21'
+        AND vt.ETD >= '2026-06-01'
+        AND vt.ETD <= '2026-06-07'
         AND vt.TransportMode = 'AIR'
 )
 SELECT
@@ -2742,7 +2742,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                       <div className="flex items-center justify-between mb-3 pb-2 border-b border-[#F1F5F9] shrink-0">
                         <div>
                           <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Route Distribution</p>
-                          <h4 className="text-sm font-bold text-slate-800 mt-0.5">Trade Routes by Tonnage (Top 5 + Others)</h4>
+                          <h4 className="text-sm font-bold text-slate-800 mt-0.5">Trade Routes by Tonnage (Top 5)</h4>
                         </div>
                         <span className="text-xs font-bold text-[#4299E1] px-2 py-0.5 rounded-full bg-[#EBF8FF] border border-[#BEE3F8] shrink-0">
                           {tradeRouteData.length} Routes
@@ -2873,11 +2873,8 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                   <div className="flex items-center justify-between mb-4 pb-2 border-b border-[#F1F5F9]">
                     <div>
                       <h4 className="text-sm font-bold text-[#1A202C]">Airline Performance Summary — Top 10</h4>
-                      <p className="text-xs text-slate-400 mt-0.5">Aggregated by airline · ranked by chargeable tonnage · click row to toggle route breakdown</p>
+                      <p className="text-xs text-slate-400 mt-0.5">Aggregated by airline · ranked by chargeable tonnage</p>
                     </div>
-                    <Badge variant="outline" className="border-[#E2E8F0] text-[#3182CE] font-semibold px-2 py-0.5">
-                      Top 10 + Others
-                    </Badge>
                   </div>
 
                   <div className="overflow-x-auto">
@@ -3102,9 +3099,6 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                       <h4 className="text-sm font-bold text-[#1A202C]">Trade Route Performance Summary — Top 10</h4>
                       <p className="text-xs text-slate-400 mt-0.5">Aggregated by origin &amp; destination · ranked by chargeable tonnage</p>
                     </div>
-                    <Badge variant="outline" className="border-[#E2E8F0] text-[#319795] font-semibold px-2 py-0.5">
-                      Top 10 + Others
-                    </Badge>
                   </div>
 
                   <div className="overflow-x-auto">
@@ -3225,6 +3219,11 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                               const pct = totalTonnage > 0 ? (row.tonnage / totalTonnage * 100) : 0;
                               const color = getCountryColor(row.originCountry);
                               const bgClass = isOthers ? "bg-slate-50/50 italic" : getDestBgColorClass(row.destCountry);
+
+                              // Extract solid hex color from bgClass (e.g. "bg-[#EBF8FF]/50" -> "#EBF8FF")
+                              const bgMatch = bgClass.match(/bg-\[([^\]]+)\]/);
+                              const solidBgColor = bgMatch ? bgMatch[1].split('/')[0] : (bgClass.includes("bg-slate") ? "#F1F5F9" : "#CBD5E0");
+
                               return (
                                 <tr
                                   key={i}
@@ -3233,8 +3232,8 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                                   <td className="px-3 py-3 text-slate-400 font-bold tabular-nums">
                                     {isOthers ? "—" : (
                                       <span
-                                        className="inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-extrabold text-white"
-                                        style={{ backgroundColor: color }}
+                                        className="inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-extrabold text-slate-800 border border-slate-300"
+                                        style={{ backgroundColor: solidBgColor }}
                                       >
                                         {i + 1}
                                       </span>
@@ -3242,9 +3241,6 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                                   </td>
                                   <td className="px-3 py-3">
                                     <div className="flex items-center gap-2">
-                                      {!isOthers && (
-                                        <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
-                                      )}
                                       <span className={`font-bold ${isOthers ? "text-slate-400" : "text-[#2D3748]"}`}>
                                         {row.originCountry}
                                       </span>
