@@ -41,9 +41,9 @@
     </style>
 </head>
 <body>
-    <h1>Weekly Tonnage Analysis - Turkish Airlines (Vietnam)</h1>
+    <h1>Weekly Tonnage Analysis - {{ station_name }}</h1>
     <div class="summary">
-        <p>Report generated for the period: June 1, 2025 to May 21, 2026</p>
+        <p>Report generated for the period: {{ start_date }} to {{ end_date }}</p>
     </div>
     
     {{ table_data | safe }}

@@ -279,7 +279,38 @@ def process_pdf_and_email(req: ReportRequest):
             custom_sql=req.custom_sql,
             query_id=query_id,
         )
-        send_pdf_via_graph(pdf_path=temp_pdf_path, recipient_email=req.recipient_email)
+        # Format a meaningful subject and body based on request filters
+        station_label = "Global"
+        if req.country and req.company_code:
+            station_label = f"{req.country} ({req.company_code})"
+        elif req.country:
+            station_label = req.country
+        elif req.company_code:
+            station_label = req.company_code
+            if req.company_code == "OTHER":
+                station_label = "Corporate / Other"
+
+        date_range_label = ""
+        if req.start_date and req.end_date:
+            date_range_label = f" ({req.start_date} to {req.end_date})"
+
+        subject = f"Weekly Air Freight Tonnage Dashboard - {station_label}{date_range_label}"
+        body = (
+            f"Dear Recipient,\n\n"
+            f"Please find attached the Weekly Air Freight Tonnage and Revenue Performance Dashboard for {station_label} "
+            f"covering the period from {req.start_date or 'N/A'} to {req.end_date or 'N/A'}.\n\n"
+            f"Best Regards,\n"
+            f"BI Support Team"
+        )
+        attachment_name = f"Weekly_Tonnage_Report_{req.company_code or 'Global'}.pdf"
+
+        send_pdf_via_graph(
+            pdf_path=temp_pdf_path,
+            recipient_email=req.recipient_email,
+            subject=subject,
+            body=body,
+            attachment_name=attachment_name
+        )
     except Exception as e:
         from api.email_service import log_email_transaction
         log_email_transaction(req.recipient_email, "TASK_ERROR", str(e))
@@ -297,6 +328,22 @@ def fetch_recipients():
         emails = os.getenv("RECIPIENT_EMAILS", "shashini.hq@dartglobal.com")
         email_list = [email.strip() for email in emails.split(",") if email.strip()]
         return {"status": "success", "data": email_list}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- ENDPOINT 5.5.1: Station-specific recipients from .env ---
+@app.get("/api/station-recipients")
+def fetch_station_recipients():
+    """Returns the configured recipients for each station from .env config."""
+    try:
+        stations = ["CMB", "IND", "VNM", "DAC", "PKI", "NYC"]
+        result = {}
+        for code in stations:
+            emails_str = os.getenv(f"RECIPIENTS_{code}") or os.getenv("RECIPIENT_EMAILS", "")
+            emails = [email.strip() for email in emails_str.split(",") if email.strip()]
+            result[code] = emails
+        return {"status": "success", "data": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

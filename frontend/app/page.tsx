@@ -61,6 +61,55 @@ const getAirlineColor = (airlineName: string, fallbackIdx: number): string => {
   return TEN_COLORS[fallbackIdx % TEN_COLORS.length];
 };
 
+interface StationInfo {
+  code: string;
+  country: string;
+  name: string;
+  envVar: string;
+  matchCountries: string[];
+  flag: string;
+}
+
+const STATIONS: StationInfo[] = [
+  { code: "CMB", country: "Sri Lanka", name: "Colombo (Sri Lanka)", envVar: "RECIPIENTS_CMB", matchCountries: ["sri lanka"], flag: "🇱🇰" },
+  { code: "IND", country: "India", name: "India", envVar: "RECIPIENTS_IND", matchCountries: ["india"], flag: "🇮🇳" },
+  { code: "VNM", country: "Viet Nam", name: "Viet Nam", envVar: "RECIPIENTS_VNM", matchCountries: ["viet nam", "vietnam"], flag: "🇻🇳" },
+  { code: "DAC", country: "Bangladesh", name: "Bangladesh", envVar: "RECIPIENTS_DAC", matchCountries: ["bangladesh"], flag: "🇧🇩" },
+  { code: "PKI", country: "Pakistan", name: "Pakistan", envVar: "RECIPIENTS_PKI", matchCountries: ["pakistan"], flag: "🇵🇰" },
+  { code: "NYC", country: "United States", name: "United States", envVar: "RECIPIENTS_NYC", matchCountries: ["united states", "usa", "us", "new york"], flag: "🇺🇸" },
+];
+
+const getStationForUser = (user: any) => {
+  const userCountry = (user.country || "").toLowerCase().trim();
+  const userOffice = (user.officeLocation || "").toLowerCase().trim();
+  const userEmail = (user.email || "").toLowerCase().trim();
+
+  // Try country first
+  for (const station of STATIONS) {
+    if (station.matchCountries.some(c => userCountry.includes(c))) {
+      return station.code;
+    }
+  }
+
+  // Try officeLocation
+  for (const station of STATIONS) {
+    if (station.matchCountries.some(c => userOffice.includes(c)) || userOffice.includes(station.code.toLowerCase())) {
+      return station.code;
+    }
+  }
+
+  // Fallbacks for cities or codes in officeLocation/email
+  if (userOffice.includes("colombo") || userOffice.includes("cmb") || userEmail.includes("cmb")) return "CMB";
+  if (userOffice.includes("india") || userOffice.includes("ind") || userEmail.includes("ind")) return "IND";
+  if (userOffice.includes("vietnam") || userOffice.includes("viet nam") || userOffice.includes("hanoi") || userOffice.includes("hcm") || userOffice.includes("vnm") || userEmail.includes("vnm")) return "VNM";
+  if (userOffice.includes("bangladesh") || userOffice.includes("dhaka") || userOffice.includes("dac") || userEmail.includes("dac")) return "DAC";
+  if (userOffice.includes("pakistan") || userOffice.includes("karachi") || userOffice.includes("lahore") || userOffice.includes("pki") || userEmail.includes("pki")) return "PKI";
+  if (userOffice.includes("usa") || userOffice.includes("new york") || userOffice.includes("nyc") || userEmail.includes("nyc") || userEmail.includes(".us")) return "NYC";
+
+  return "OTHER";
+};
+
+
 
 
 // Premium Multi-Select Dropdown Component
@@ -274,6 +323,39 @@ export default function Dashboard() {
   const [deptFilter, setDeptFilter] = useState("__all__");
   const [userSearch, setUserSearch] = useState("");
 
+  // Station-wise state
+  const [stationSelectedEmails, setStationSelectedEmails] = useState<Record<string, string[]>>({});
+  const [stationDefaultRecipients, setStationDefaultRecipients] = useState<Record<string, string[]>>({});
+  const [stationEmailLoading, setStationEmailLoading] = useState<Record<string, boolean>>({});
+  const [stationEmailStatus, setStationEmailStatus] = useState<Record<string, string>>({});
+  const [stationEmailSuccess, setStationEmailSuccess] = useState<Record<string, boolean | null>>({});
+  const [expandedStation, setExpandedStation] = useState<Record<string, boolean>>({});
+  const [adminTab, setAdminTab] = useState<"stations" | "global">("stations");
+  const [stationCustomEmailInput, setStationCustomEmailInput] = useState<Record<string, string>>({});
+
+  const fetchStationRecipients = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/station-recipients`);
+      const d = await res.json();
+      if (d.status === "success") {
+        setStationDefaultRecipients(d.data);
+        // Also initialize selection state for each station with its default recipients
+        setStationSelectedEmails((prev) => {
+          const updated = { ...prev };
+          Object.entries(d.data).forEach(([code, emails]) => {
+            if (!updated[code]) {
+              updated[code] = emails as string[];
+            }
+          });
+          return updated;
+        });
+      }
+    } catch (e) {
+      console.error("Failed to fetch station recipients", e);
+    }
+  }, []);
+
+
   const fetchOrgUsers = useCallback(async () => {
     if (orgUsers.length > 0) return; // already loaded
     setOrgUsersLoading(true);
@@ -300,12 +382,13 @@ export default function Dashboard() {
     }
   }, [orgUsers.length]);
 
-  // Fetch org users when admin section is activated
+  // Fetch org users and station recipients when admin section is activated
   useEffect(() => {
     if (activeSection === "admin") {
       fetchOrgUsers();
+      fetchStationRecipients();
     }
-  }, [activeSection, fetchOrgUsers]);
+  }, [activeSection, fetchOrgUsers, fetchStationRecipients]);
 
   const [standardRecords, setStandardRecords] = useState<any[]>([]);
   const [standardWeeklyData, setStandardWeeklyData] = useState<any[]>([]);
@@ -917,6 +1000,11 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
         // Custom SQL mode - include the query
         requestBody.mode = "custom-sql";
         requestBody.custom_sql = activeSection === "weekly-reports" ? weeklySqlText : monthlySqlText;
+        // Include context for metadata (subject and body construction)
+        requestBody.start_date = startDate;
+        requestBody.end_date = endDate;
+        requestBody.country = countryParam || null;
+        requestBody.company_code = companyCodeParam || null;
       } else {
         // Standard mode - include date range and filters
         requestBody.start_date = startDate;
@@ -943,6 +1031,137 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
       setEmailSuccess(false);
     }
     setEmailLoading(false);
+  };
+
+  const handleSendStationEmail = async (stationCode: string, country: string) => {
+    const emails = stationSelectedEmails[stationCode] || [];
+    if (emails.length === 0) {
+      setStationEmailStatus(prev => ({ ...prev, [stationCode]: "Please select at least one recipient." }));
+      setStationEmailSuccess(prev => ({ ...prev, [stationCode]: false }));
+      return;
+    }
+    setStationEmailLoading(prev => ({ ...prev, [stationCode]: true }));
+    setStationEmailStatus(prev => ({ ...prev, [stationCode]: "Generating & transmitting report..." }));
+    setStationEmailSuccess(prev => ({ ...prev, [stationCode]: null }));
+    try {
+      const emailString = emails.join(", ");
+      // Format default SQL template dynamically with station parameters
+      let formattedSql = "";
+      if (stationCode === "OTHER") {
+        const knownCompanies = STATIONS.map(s => `'${s.code}'`).join(", ");
+        formattedSql = `
+SELECT
+    vt.ConsoleNumber AS Console_Number,
+    vt.MasterBillNum AS Master_Airway_Bill,
+    vt.AirlineName1 AS Airline,
+    vt.ConsolTransportMode AS Transport_Mode,
+    vt.ETD,
+    vt.ConLoadPortCountryName AS Origin_Country,
+    COALESCE(MAX(vs.OriginCity), 'N/A') AS Origin_City,
+    COALESCE(MAX(vs.DestCity), 'N/A') AS Destination_City,
+    COALESCE(MAX(vs.DestCountry), 'N/A') AS Destination_Country,
+    COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
+    COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
+    ROUND(vt.Air_ChargebleWeight, 2) AS Tonnage_Chargeable,
+    ROUND(vt.Air_ActualWeight, 2) AS Tonnage_Actual,
+    ROUND(vt.Revenue_USD, 2) AS Revenue_USD,
+    ROUND(vt.Cost_USD, 2) AS Cost_USD,
+    ROUND(vt.Profit_USD, 2) AS Profit_USD,
+    ROUND((vt.Profit_USD / NULLIF(vt.Revenue_USD, 0)) * 100, 2) AS GP_Margin_Percent
+FROM dbo.ChatData_ViewShipConsolTransport vt
+LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc ON vsc.Link_ConsolNumber = vt.ConsoleNumber
+LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs ON vs.ShipmentNumber = vsc.Link_ShipmentNum
+WHERE vt.ETD >= '${startDate}'
+    AND vt.ETD <= '${endDate}'
+    AND vt.TransportMode = 'AIR'
+    AND vs.Company NOT IN (${knownCompanies})
+GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1, vt.ConsolTransportMode, vt.ETD, vt.ConLoadPortCountryName, vt.Air_ChargebleWeight, vt.Air_ActualWeight, vt.Revenue_USD, vt.Cost_USD, vt.Profit_USD
+ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
+        `.trim();
+      } else {
+        formattedSql = `
+SELECT
+    vt.ConsoleNumber AS Console_Number,
+    vt.MasterBillNum AS Master_Airway_Bill,
+    vt.AirlineName1 AS Airline,
+    vt.ConsolTransportMode AS Transport_Mode,
+    vt.ETD,
+    vt.ConLoadPortCountryName AS Origin_Country,
+    COALESCE(MAX(vs.OriginCity), 'N/A') AS Origin_City,
+    COALESCE(MAX(vs.DestCity), 'N/A') AS Destination_City,
+    COALESCE(MAX(vs.DestCountry), 'N/A') AS Destination_Country,
+    COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
+    COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
+    ROUND(vt.Air_ChargebleWeight, 2) AS Tonnage_Chargeable,
+    ROUND(vt.Air_ActualWeight, 2) AS Tonnage_Actual,
+    ROUND(vt.Revenue_USD, 2) AS Revenue_USD,
+    ROUND(vt.Cost_USD, 2) AS Cost_USD,
+    ROUND(vt.Profit_USD, 2) AS Profit_USD,
+    ROUND((vt.Profit_USD / NULLIF(vt.Revenue_USD, 0)) * 100, 2) AS GP_Margin_Percent
+FROM dbo.ChatData_ViewShipConsolTransport vt
+LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc ON vsc.Link_ConsolNumber = vt.ConsoleNumber
+LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs ON vs.ShipmentNumber = vsc.Link_ShipmentNum
+WHERE vt.ConLoadPortCountryName = '${country}'
+    AND vt.ETD >= '${startDate}'
+    AND vt.ETD <= '${endDate}'
+    AND vt.TransportMode = 'AIR'
+    AND vs.Company = '${stationCode}'
+GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1, vt.ConsolTransportMode, vt.ETD, vt.ConLoadPortCountryName, vt.Air_ChargebleWeight, vt.Air_ActualWeight, vt.Revenue_USD, vt.Cost_USD, vt.Profit_USD
+ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
+        `.trim();
+      }
+
+      const requestBody = {
+        recipient_email: emailString,
+        mode: "custom-sql",
+        custom_sql: formattedSql,
+        include_weekly_visual: true,
+        include_weekly_ledger: true,
+        include_monthly_visual: true,
+        include_monthly_ledger: true,
+        max_data_rows: 100,
+        country: country,
+        company_code: stationCode,
+        start_date: startDate,
+        end_date: endDate,
+      };
+
+      const res = await fetch(`${API}/api/send-report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+      const result = await res.json();
+      setStationEmailStatus(prev => ({ ...prev, [stationCode]: result.message || "Report dispatch started." }));
+      setStationEmailSuccess(prev => ({ ...prev, [stationCode]: true }));
+    } catch {
+      setStationEmailStatus(prev => ({ ...prev, [stationCode]: "Failed to send report." }));
+      setStationEmailSuccess(prev => ({ ...prev, [stationCode]: false }));
+    }
+    setStationEmailLoading(prev => ({ ...prev, [stationCode]: false }));
+  };
+
+  const handleAddStationCustomEmail = (stationCode: string) => {
+    const inputVal = (stationCustomEmailInput[stationCode] || "").trim();
+    if (!inputVal) return;
+    if (!inputVal.includes("@") || !inputVal.includes(".")) {
+      alert("Please enter a valid email address.");
+      return;
+    }
+
+    setStationSelectedEmails((prev) => {
+      const current = prev[stationCode] || [];
+      if (current.includes(inputVal)) return prev;
+      return {
+        ...prev,
+        [stationCode]: [...current, inputVal],
+      };
+    });
+
+    setStationCustomEmailInput((prev) => ({
+      ...prev,
+      [stationCode]: "",
+    }));
   };
 
   // Intercepting the "Send Stats" button to trigger the new verification step
@@ -1761,7 +1980,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
             <div className="max-w-[1380px] mx-auto px-6 py-8 space-y-8 animate-in fade-in-0 duration-200">
 
               {/* Admin Header */}
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4 mb-6">
                 <div>
                   <div className="flex items-center gap-2.5 mb-1">
                     <ShieldCheck className="w-5 h-5 text-[#3182CE]" />
@@ -1769,9 +1988,28 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                   </div>
                   <p className="text-sm text-slate-400">Manage report recipients, email dispatch, and system scheduling.</p>
                 </div>
-                <span className="text-[10px] text-slate-400 bg-slate-100 px-3 py-1.5 rounded-full font-semibold border border-slate-200">
-                  System Administration
-                </span>
+                
+                {/* Date range selector for report dispatches */}
+                <div className="flex items-center gap-3 bg-white p-3 rounded-xl border border-slate-200 shadow-sm shrink-0">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Start Date</span>
+                    <Input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="h-8 w-32 text-xs bg-slate-50 border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">End Date</span>
+                    <Input
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="h-8 w-32 text-xs bg-slate-50 border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
+                    />
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-12 gap-6">
@@ -1779,353 +2017,673 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                 {/* ── LEFT COL: Recipients Management ── */}
                 <div className="col-span-12 lg:col-span-7 space-y-6">
 
-                  {/* Recipients List Card */}
-                  <div className="admin-card p-6">
-                    {/* Card Header */}
-                    <div className="flex items-center justify-between mb-5 pb-4 border-b border-[#EDF2F7]">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-[#EBF8FF] flex items-center justify-center">
-                          <Users className="w-4 h-4 text-[#3182CE]" />
-                        </div>
-                        <div>
-                          <h3 className="text-sm font-bold text-[#1A202C]">Organisation Users</h3>
-                          <p className="text-[10.5px] text-slate-400">
-                            {orgUsersLoading ? "Fetching from Azure AD..." : orgUsers.length > 0 ? `${orgUsers.length} users · ${Object.keys(orgUsersByDept).length} departments` : "From Azure Active Directory"}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {orgUsers.length > 0 && (
-                          <Badge variant="outline" className="border-[#BEE3F8] text-[#3182CE] bg-[#EBF8FF] text-[10px] font-bold">
-                            {selectedEmails.length} Selected
-                          </Badge>
-                        )}
-                        <button
-                          onClick={() => { setOrgUsers([]); fetchOrgUsers(); }}
-                          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
-                          title="Refresh users"
-                        >
-                          <RefreshCw className={`w-3.5 h-3.5 ${orgUsersLoading ? "animate-spin" : ""}`} />
-                        </button>
-                      </div>
-                    </div>
+                  {/* Admin Sub-Tabs */}
+                  <div className="flex border-b border-slate-200 mb-4">
+                    <button
+                      onClick={() => setAdminTab("stations")}
+                      className={`pb-2.5 px-4 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${adminTab === "stations" ? "border-[#3182CE] text-[#3182CE]" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+                    >
+                      <Globe className="w-3.5 h-3.5" />
+                      Station-wise Mailers
+                    </button>
+                    <button
+                      onClick={() => setAdminTab("global")}
+                      className={`pb-2.5 px-4 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${adminTab === "global" ? "border-[#3182CE] text-[#3182CE]" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                      Global Mailer
+                    </button>
+                  </div>
 
-                    {/* Loading state */}
-                    {orgUsersLoading && (
-                      <div className="py-10 flex flex-col items-center gap-3 text-slate-400">
-                        <RefreshCw className="w-6 h-6 animate-spin text-[#3182CE]" />
-                        <p className="text-xs font-medium">Fetching users from Azure AD...</p>
-                      </div>
-                    )}
+                  {adminTab === "stations" ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {STATIONS.map((station) => {
+                        const stationUsers = orgUsers.filter(u => getStationForUser(u) === station.code);
+                        const selectedEmailsForStation = stationSelectedEmails[station.code] || [];
+                        const isSending = stationEmailLoading[station.code] || false;
+                        const statusMessage = stationEmailStatus[station.code] || "";
+                        const sendSuccess = stationEmailSuccess[station.code];
+                        const showUsers = expandedStation[station.code] || false;
+                        const customInput = stationCustomEmailInput[station.code] || "";
 
-                    {/* Error state — with permission guidance */}
-                    {!orgUsersLoading && orgUsersError && (
-                      <div className="mb-4 p-4 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 space-y-2">
-                        <p className="font-bold flex items-center gap-1.5"><Bell className="w-3.5 h-3.5" /> Azure AD Error</p>
-                        <p className="leading-relaxed">{orgUsersError}</p>
-                        {orgUsersError.includes("Insufficient privileges") || orgUsersError.includes("Authorization") ? (
-                          <div className="mt-2 p-3 bg-white border border-rose-100 rounded-lg space-y-1">
-                            <p className="font-bold text-rose-800">🔐 Missing Permission: Grant <code>User.Read.All</code></p>
-                            <ol className="list-decimal ml-4 space-y-0.5 text-rose-700 leading-relaxed">
-                              <li>Go to Azure Portal → App Registrations</li>
-                              <li>Select your app → API permissions</li>
-                              <li>Add <strong>Microsoft Graph → Application → User.Read.All</strong></li>
-                              <li>Click <strong>"Grant admin consent"</strong></li>
-                            </ol>
-                          </div>
-                        ) : null}
-                      </div>
-                    )}
+                        return (
+                          <div key={station.code} className="admin-card p-5 flex flex-col justify-between border border-slate-200 bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200">
+                            <div>
+                              <div className="flex items-center justify-between pb-3 border-b border-[#EDF2F7] mb-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xl">{station.flag}</span>
+                                  <div>
+                                    <h4 className="text-xs font-bold text-[#1A202C]">{station.name}</h4>
+                                    <span className="text-[9px] font-extrabold text-[#3182CE] bg-[#EBF8FF] px-1.5 py-0.5 rounded uppercase">{station.code}</span>
+                                  </div>
+                                </div>
+                                <span className="text-[10px] text-slate-400 font-semibold bg-slate-50 px-2 py-0.5 rounded border">
+                                  {selectedEmailsForStation.length} Recipient(s)
+                                </span>
+                              </div>
 
-                    {/* Users loaded */}
-                    {!orgUsersLoading && orgUsers.length > 0 && (
-                      <>
-                        {/* Search + Department filter */}
-                        <div className="space-y-3 mb-4">
-                          <Input
-                            placeholder="Search by name or email..."
-                            value={userSearch}
-                            onChange={(e) => setUserSearch(e.target.value)}
-                            className="h-8 text-xs bg-white border-[#CBD5E0] rounded-lg text-slate-700"
-                          />
-                          {/* Department filter chips */}
-                          <div className="flex flex-wrap gap-1.5">
-                            <button
-                              onClick={() => setDeptFilter("__all__")}
-                              className={`text-[10px] font-bold px-2.5 py-1 rounded-full border transition-all ${deptFilter === "__all__" ? "bg-[#3182CE] text-white border-[#3182CE]" : "bg-slate-50 text-slate-500 border-slate-200 hover:border-slate-300"}`}
-                            >
-                              All ({orgUsers.length})
-                            </button>
-                            {Object.entries(orgUsersByDept).map(([dept, users]) => (
+                              {/* Toggle Users list */}
                               <button
-                                key={dept}
-                                onClick={() => setDeptFilter(dept)}
-                                className={`text-[10px] font-bold px-2.5 py-1 rounded-full border transition-all ${deptFilter === dept ? "bg-[#3182CE] text-white border-[#3182CE]" : "bg-slate-50 text-slate-500 border-slate-200 hover:border-slate-300"}`}
+                                onClick={() => setExpandedStation(prev => ({ ...prev, [station.code]: !showUsers }))}
+                                className="w-full flex items-center justify-between p-2 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-600 transition-colors mb-3"
                               >
-                                {dept} ({users.length})
+                                <span className="flex items-center gap-1.5">👥 {showUsers ? "Hide Station Users" : `View Mapped Users (${stationUsers.length})`}</span>
+                                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${showUsers ? "rotate-180" : ""}`} />
                               </button>
+
+                              {/* Collapsible list */}
+                              {showUsers && (
+                                <div className="space-y-1.5 max-h-48 overflow-y-auto mb-3 border border-slate-200 p-2 rounded-lg bg-slate-50/50">
+                                  {stationUsers.length === 0 ? (
+                                    <p className="text-[10px] text-slate-400 italic p-1">No AD users mapped to this station</p>
+                                  ) : (
+                                    stationUsers.map((u: any) => {
+                                      const isChecked = selectedEmailsForStation.includes(u.email);
+                                      return (
+                                        <div
+                                          key={u.email}
+                                          onClick={() => {
+                                            if (isChecked) {
+                                              setStationSelectedEmails(prev => ({
+                                                ...prev,
+                                                [station.code]: (prev[station.code] || []).filter(x => x !== u.email)
+                                              }));
+                                            } else {
+                                              setStationSelectedEmails(prev => ({
+                                                ...prev,
+                                                [station.code]: [...(prev[station.code] || []), u.email]
+                                              }));
+                                            }
+                                          }}
+                                          className={`flex items-center justify-between p-1.5 rounded border text-[10px] cursor-pointer transition-all ${isChecked ? "bg-[#EBF8FF] border-[#BEE3F8] text-[#2B6CB0] font-semibold" : "bg-white border-slate-100 hover:border-slate-200 text-slate-700"}`}
+                                        >
+                                          <div className="truncate pr-1 min-w-0 flex-1">
+                                            <p className="truncate font-semibold text-slate-800">{u.displayName}</p>
+                                            <p className="truncate text-[8px] text-slate-400 font-medium">{u.email}</p>
+                                          </div>
+                                          <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center shrink-0 ${isChecked ? "border-[#3182CE] bg-[#3182CE]" : "border-slate-300"}`}>
+                                            {isChecked && <Check className="w-2 h-2 text-white" />}
+                                          </div>
+                                        </div>
+                                      );
+                                    })
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Custom Email Input inside Card */}
+                              <div className="flex gap-1.5 mb-4">
+                                <Input
+                                  placeholder="Add custom email..."
+                                  value={customInput}
+                                  onChange={(e) => setStationCustomEmailInput(prev => ({ ...prev, [station.code]: e.target.value }))}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      handleAddStationCustomEmail(station.code);
+                                    }
+                                  }}
+                                  className="h-7 text-[10px] bg-white border-[#CBD5E0] focus:border-[#4299E1] rounded-md text-slate-700 placeholder:text-slate-400"
+                                />
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleAddStationCustomEmail(station.code)}
+                                  className="h-7 px-2.5 bg-[#4299E1] hover:bg-[#3182CE] text-white text-[10px] font-bold rounded-md shrink-0"
+                                >
+                                  + Add
+                                </Button>
+                              </div>
+
+                              {/* Recipient summary / badge cloud */}
+                              {selectedEmailsForStation.length > 0 && (
+                                <div className="mb-4">
+                                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Recipients List</p>
+                                  <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto p-1.5 border border-dashed border-slate-200 rounded-lg bg-slate-50">
+                                    {selectedEmailsForStation.map((email) => (
+                                      <Badge
+                                        key={email}
+                                        className="bg-white hover:bg-slate-50 text-slate-750 border border-[#CBD5E0] font-semibold text-[8px] px-1.5 py-0.5 rounded-full flex items-center gap-1 shadow-sm"
+                                      >
+                                        <span className="truncate max-w-[100px]">{email}</span>
+                                        <X
+                                          className="w-2 h-2 text-slate-400 hover:text-slate-605 cursor-pointer shrink-0"
+                                          onClick={() => setStationSelectedEmails(prev => ({
+                                            ...prev,
+                                            [station.code]: (prev[station.code] || []).filter(x => x !== email)
+                                          }))}
+                                        />
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Card Bottom / Sending controls */}
+                            <div className="border-t border-[#EDF2F7] pt-3 mt-auto">
+                              <Button
+                                onClick={() => handleSendStationEmail(station.code, station.country)}
+                                disabled={selectedEmailsForStation.length === 0 || isSending}
+                                className="w-full h-8 bg-[#3182CE] hover:bg-[#2B6CB0] disabled:opacity-50 text-white text-[10.5px] font-bold rounded-lg flex items-center justify-center gap-1.5 shadow"
+                              >
+                                {isSending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                                Send {station.code} Report
+                              </Button>
+
+                              {statusMessage && (
+                                <div className={`mt-2 p-1.5 rounded text-[9.5px] leading-snug flex items-center justify-between ${sendSuccess === true ? "bg-emerald-50 text-emerald-800 border border-emerald-100" : "bg-blue-50 text-blue-800 border border-blue-100"}`}>
+                                  <span className="truncate pr-1">{statusMessage}</span>
+                                  <button
+                                    onClick={() => setStationEmailStatus(prev => ({ ...prev, [station.code]: "" }))}
+                                    className="hover:opacity-70 text-slate-400 shrink-0"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {/* Other / Corporate card */}
+                      {(() => {
+                        const otherUsers = orgUsers.filter(u => getStationForUser(u) === "OTHER");
+                        const stationCode = "OTHER";
+                        const selectedEmailsForStation = stationSelectedEmails[stationCode] || [];
+                        const showUsers = expandedStation[stationCode] || false;
+                        const customInput = stationCustomEmailInput[stationCode] || "";
+                        const isSending = stationEmailLoading[stationCode] || false;
+                        const statusMessage = stationEmailStatus[stationCode] || "";
+                        const sendSuccess = stationEmailSuccess[stationCode];
+
+                        return (
+                          <div className="admin-card p-5 flex flex-col justify-between border border-slate-200 bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200">
+                            <div>
+                              <div className="flex items-center justify-between pb-3 border-b border-[#EDF2F7] mb-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xl">🏢</span>
+                                  <div>
+                                    <h4 className="text-xs font-bold text-[#1A202C]">Other / Corporate</h4>
+                                    <span className="text-[9px] font-extrabold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded uppercase">OTHER</span>
+                                  </div>
+                                </div>
+                                <span className="text-[10px] text-slate-400 font-semibold bg-slate-50 px-2 py-0.5 rounded border">
+                                  {selectedEmailsForStation.length} Recipient(s)
+                                </span>
+                              </div>
+
+                              <button
+                                onClick={() => setExpandedStation(prev => ({ ...prev, [stationCode]: !showUsers }))}
+                                className="w-full flex items-center justify-between p-2 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-600 transition-colors mb-3"
+                              >
+                                <span className="flex items-center gap-1.5">👥 {showUsers ? "Hide Users" : `View Mapped Users (${otherUsers.length})`}</span>
+                                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${showUsers ? "rotate-180" : ""}`} />
+                              </button>
+
+                              {showUsers && (
+                                <div className="space-y-1.5 max-h-48 overflow-y-auto mb-3 border border-slate-200 p-2 rounded-lg bg-slate-50/50">
+                                  {otherUsers.length === 0 ? (
+                                    <p className="text-[10px] text-slate-400 italic p-1">No unmatched users</p>
+                                  ) : (
+                                    otherUsers.map((u: any) => {
+                                      const isChecked = selectedEmailsForStation.includes(u.email);
+                                      return (
+                                        <div
+                                          key={u.email}
+                                          onClick={() => {
+                                            if (isChecked) {
+                                              setStationSelectedEmails(prev => ({
+                                                ...prev,
+                                                [stationCode]: (prev[stationCode] || []).filter(x => x !== u.email)
+                                              }));
+                                            } else {
+                                              setStationSelectedEmails(prev => ({
+                                                ...prev,
+                                                [stationCode]: [...(prev[stationCode] || []), u.email]
+                                              }));
+                                            }
+                                          }}
+                                          className={`flex items-center justify-between p-1.5 rounded border text-[10px] cursor-pointer transition-all ${isChecked ? "bg-[#EBF8FF] border-[#BEE3F8] text-[#2B6CB0] font-semibold" : "bg-white border-slate-100 hover:border-slate-200 text-slate-700"}`}
+                                        >
+                                          <div className="truncate pr-1 min-w-0 flex-1">
+                                            <p className="truncate font-semibold text-slate-800">{u.displayName}</p>
+                                            <p className="truncate text-[8px] text-slate-400 font-medium">{u.email}</p>
+                                          </div>
+                                          <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center shrink-0 ${isChecked ? "border-[#3182CE] bg-[#3182CE]" : "border-slate-300"}`}>
+                                            {isChecked && <Check className="w-2 h-2 text-white" />}
+                                          </div>
+                                        </div>
+                                      );
+                                    })
+                                  )}
+                                </div>
+                              )}
+
+                              <div className="flex gap-1.5 mb-4">
+                                <Input
+                                  placeholder="Add custom email..."
+                                  value={customInput}
+                                  onChange={(e) => setStationCustomEmailInput(prev => ({ ...prev, [stationCode]: e.target.value }))}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      handleAddStationCustomEmail(stationCode);
+                                    }
+                                  }}
+                                  className="h-7 text-[10px] bg-white border-[#CBD5E0] focus:border-[#4299E1] rounded-md text-slate-700 placeholder:text-slate-400"
+                                />
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleAddStationCustomEmail(stationCode)}
+                                  className="h-7 px-2.5 bg-[#4299E1] hover:bg-[#3182CE] text-white text-[10px] font-bold rounded-md shrink-0"
+                                >
+                                  + Add
+                                </Button>
+                              </div>
+
+                              {selectedEmailsForStation.length > 0 && (
+                                <div className="mb-4">
+                                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Recipients List</p>
+                                  <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto p-1.5 border border-dashed border-slate-200 rounded-lg bg-slate-50">
+                                    {selectedEmailsForStation.map((email) => (
+                                      <Badge
+                                        key={email}
+                                        className="bg-white hover:bg-slate-50 text-slate-750 border border-[#CBD5E0] font-semibold text-[8px] px-1.5 py-0.5 rounded-full flex items-center gap-1 shadow-sm"
+                                      >
+                                        <span className="truncate max-w-[100px]">{email}</span>
+                                        <X
+                                          className="w-2 h-2 text-slate-400 hover:text-slate-600 cursor-pointer shrink-0"
+                                          onClick={() => setStationSelectedEmails(prev => ({
+                                            ...prev,
+                                            [stationCode]: (prev[stationCode] || []).filter(x => x !== email)
+                                          }))}
+                                        />
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="border-t border-[#EDF2F7] pt-3 mt-auto">
+                              <p className="text-[8.5px] text-slate-400 italic mb-2">Note: Corporate reports are generated without country/station filters.</p>
+                              <Button
+                                onClick={() => handleSendStationEmail("OTHER", "")}
+                                disabled={selectedEmailsForStation.length === 0 || isSending}
+                                className="w-full h-8 bg-slate-500 hover:bg-slate-600 disabled:opacity-50 text-white text-[10.5px] font-bold rounded-lg flex items-center justify-center gap-1.5 shadow"
+                              >
+                                {isSending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                                Send Corporate Report
+                              </Button>
+
+                              {statusMessage && (
+                                <div className={`mt-2 p-1.5 rounded text-[9.5px] leading-snug flex items-center justify-between ${sendSuccess === true ? "bg-emerald-50 text-emerald-800 border border-emerald-100" : "bg-blue-50 text-blue-800 border border-blue-100"}`}>
+                                  <span className="truncate pr-1">{statusMessage}</span>
+                                  <button
+                                    onClick={() => setStationEmailStatus(prev => ({ ...prev, [stationCode]: "" }))}
+                                    className="hover:opacity-70 text-slate-400 shrink-0"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  ) : (
+                    <>
+                      {/* Recipients List Card (Original Global) */}
+                      <div className="admin-card p-6">
+                        {/* Card Header */}
+                        <div className="flex items-center justify-between mb-5 pb-4 border-b border-[#EDF2F7]">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-[#EBF8FF] flex items-center justify-center">
+                              <Users className="w-4 h-4 text-[#3182CE]" />
+                            </div>
+                            <div>
+                              <h3 className="text-sm font-bold text-[#1A202C]">Organisation Users</h3>
+                              <p className="text-[10.5px] text-slate-400">
+                                {orgUsersLoading ? "Fetching from Azure AD..." : orgUsers.length > 0 ? `${orgUsers.length} users · ${Object.keys(orgUsersByDept).length} departments` : "From Azure Active Directory"}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {orgUsers.length > 0 && (
+                              <Badge variant="outline" className="border-[#BEE3F8] text-[#3182CE] bg-[#EBF8FF] text-[10px] font-bold">
+                                {selectedEmails.length} Selected
+                              </Badge>
+                            )}
+                            <button
+                              onClick={() => { setOrgUsers([]); fetchOrgUsers(); }}
+                              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-655 transition-colors"
+                              title="Refresh users"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${orgUsersLoading ? "animate-spin" : ""}`} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Loading state */}
+                        {orgUsersLoading && (
+                          <div className="py-10 flex flex-col items-center gap-3 text-slate-400">
+                            <RefreshCw className="w-6 h-6 animate-spin text-[#3182CE]" />
+                            <p className="text-xs font-medium">Fetching users from Azure AD...</p>
+                          </div>
+                        )}
+
+                        {/* Error state — with permission guidance */}
+                        {!orgUsersLoading && orgUsersError && (
+                          <div className="mb-4 p-4 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 space-y-2">
+                            <p className="font-bold flex items-center gap-1.5"><Bell className="w-3.5 h-3.5" /> Azure AD Error</p>
+                            <p className="leading-relaxed">{orgUsersError}</p>
+                            {orgUsersError.includes("Insufficient privileges") || orgUsersError.includes("Authorization") ? (
+                              <div className="mt-2 p-3 bg-white border border-rose-100 rounded-lg space-y-1">
+                                <p className="font-bold text-rose-800">🔐 Missing Permission: Grant <code>User.Read.All</code></p>
+                                <ol className="list-decimal ml-4 space-y-0.5 text-rose-700 leading-relaxed">
+                                  <li>Go to Azure Portal → App Registrations</li>
+                                  <li>Select your app → API permissions</li>
+                                  <li>Add <strong>Microsoft Graph → Application → User.Read.All</strong></li>
+                                  <li>Click <strong>"Grant admin consent"</strong></li>
+                                </ol>
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
+
+                        {/* Users loaded */}
+                        {!orgUsersLoading && orgUsers.length > 0 && (
+                          <>
+                            {/* Search + Department filter */}
+                            <div className="space-y-3 mb-4">
+                              <Input
+                                placeholder="Search by name or email..."
+                                value={userSearch}
+                                onChange={(e) => setUserSearch(e.target.value)}
+                                className="h-8 text-xs bg-white border-[#CBD5E0] rounded-lg text-slate-700"
+                              />
+                              {/* Department filter chips */}
+                              <div className="flex flex-wrap gap-1.5">
+                                <button
+                                  onClick={() => setDeptFilter("__all__")}
+                                  className={`text-[10px] font-bold px-2.5 py-1 rounded-full border transition-all ${deptFilter === "__all__" ? "bg-[#3182CE] text-white border-[#3182CE]" : "bg-slate-50 text-slate-500 border-slate-200 hover:border-slate-300"}`}
+                                >
+                                  All ({orgUsers.length})
+                                </button>
+                                {Object.entries(orgUsersByDept).map(([dept, users]) => (
+                                  <button
+                                    key={dept}
+                                    onClick={() => setDeptFilter(dept)}
+                                    className={`text-[10px] font-bold px-2.5 py-1 rounded-full border transition-all ${deptFilter === dept ? "bg-[#3182CE] text-white border-[#3182CE]" : "bg-slate-50 text-slate-500 border-slate-200 hover:border-slate-300"}`}
+                                  >
+                                    {dept} ({users.length})
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* User list */}
+                            <div className="space-y-2 max-h-72 overflow-y-auto mb-5 pr-1">
+                              {(deptFilter === "__all__" ? orgUsers : (orgUsersByDept[deptFilter] || []))
+                                .filter((u: any) => {
+                                  if (!userSearch) return true;
+                                  const q = userSearch.toLowerCase();
+                                  return (u.displayName || "").toLowerCase().includes(q) || (u.email || "").toLowerCase().includes(q);
+                                })
+                                .map((u: any) => {
+                                  const isSelected = selectedEmails.includes(u.email);
+                                  return (
+                                    <div
+                                      key={u.email}
+                                      className={`flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer ${isSelected ? "bg-[#EBF8FF] border-[#BEE3F8]" : "bg-slate-50 border-slate-200 hover:border-slate-300 hover:bg-white"}`}
+                                      onClick={() => {
+                                        if (isSelected) {
+                                          setSelectedEmails(selectedEmails.filter((x) => x !== u.email));
+                                        } else {
+                                          setSelectedEmails([...selectedEmails, u.email]);
+                                        }
+                                      }}
+                                    >
+                                      <div className="flex items-center gap-3 min-w-0">
+                                        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${isSelected ? "bg-[#3182CE] text-white" : "bg-white border border-slate-200 text-slate-600"}`}>
+                                          {(u.displayName || u.email).charAt(0).toUpperCase()}
+                                        </div>
+                                        <div className="min-w-0">
+                                          <p className={`text-xs font-semibold truncate ${isSelected ? "text-[#2B6CB0]" : "text-slate-700"}`}>
+                                            {u.displayName || u.email}
+                                          </p>
+                                          <p className="text-[10px] text-slate-400 truncate">{u.email}</p>
+                                          {(u.jobTitle || u.department) && (
+                                            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                              {u.jobTitle && <span className="text-[9px] font-semibold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">{u.jobTitle}</span>}
+                                              {u.department && <span className="text-[9px] font-semibold text-[#3182CE] bg-[#EBF8FF] px-1.5 py-0.5 rounded-full">{u.department}</span>}
+                                              {u.officeLocation && <span className="text-[9px] text-slate-400">📍 {u.officeLocation}</span>}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ml-2 transition-all ${isSelected ? "border-[#3182CE] bg-[#3182CE]" : "border-slate-300"}`}>
+                                        {isSelected && <Check className="w-3 h-3 text-white" />}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                            </div>
+
+                            {/* Bulk actions */}
+                            <div className="flex gap-2 mb-4 border-t border-[#EDF2F7] pt-4">
+                              <button
+                                onClick={() => {
+                                  const visible = (deptFilter === "__all__" ? orgUsers : (orgUsersByDept[deptFilter] || []))
+                                    .filter((u: any) => !userSearch || (u.displayName || "").toLowerCase().includes(userSearch.toLowerCase()) || (u.email || "").toLowerCase().includes(userSearch.toLowerCase()))
+                                    .map((u: any) => u.email).filter(Boolean);
+                                  setSelectedEmails((prev) => prev.concat(visible).filter((v, i, a) => a.indexOf(v) === i));
+                                }}
+                                className="text-[10px] font-bold text-[#3182CE] hover:text-[#2B6CB0] px-3 py-1.5 rounded-lg border border-[#BEE3F8] bg-[#EBF8FF] hover:bg-[#BEE3F8]/50 transition-all"
+                              >
+                                Select All Visible
+                              </button>
+                              <button
+                                onClick={() => setSelectedEmails([])}
+                                className="text-[10px] font-bold text-slate-500 hover:text-slate-700 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-all"
+                              >
+                                Clear All
+                              </button>
+                            </div>
+                          </>
+                        )}
+
+                        {/* Fallback: no org users yet — show static list */}
+                        {!orgUsersLoading && orgUsers.length === 0 && !orgUsersError && (
+                          <div className="space-y-2 mb-5">
+                            {availableEmails.length === 0 ? (
+                              <div className="py-8 flex flex-col items-center gap-2 text-slate-400">
+                                <Users className="w-8 h-8 opacity-30" />
+                                <p className="text-xs">No recipients configured. Add one below.</p>
+                              </div>
+                            ) : (
+                              availableEmails.map((email) => {
+                                const isSelected = selectedEmails.includes(email);
+                                return (
+                                  <div
+                                    key={email}
+                                    className={`flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer ${isSelected ? "bg-[#EBF8FF] border-[#BEE3F8]" : "bg-slate-50 border-slate-200 hover:border-slate-300 hover:bg-white"}`}
+                                    onClick={() => {
+                                      if (isSelected) {
+                                        setSelectedEmails(selectedEmails.filter((x) => x !== email));
+                                      } else {
+                                        setSelectedEmails([...selectedEmails, email]);
+                                      }
+                                    }}
+                                  >
+                                    <div className="flex items-center gap-3">
+                                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${isSelected ? "bg-[#3182CE] text-white" : "bg-white border border-slate-200 text-slate-500"}`}>
+                                        {email.charAt(0).toUpperCase()}
+                                      </div>
+                                      <p className={`text-xs font-semibold ${isSelected ? "text-[#2B6CB0]" : "text-slate-700"}`}>{email}</p>
+                                    </div>
+                                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${isSelected ? "border-[#3182CE] bg-[#3182CE]" : "border-slate-300"}`}>
+                                      {isSelected && <Check className="w-3 h-3 text-white" />}
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        )}
+
+                        {/* Add Custom Email */}
+                        <div className="border-t border-[#EDF2F7] pt-4">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2.5">Add Custom Email</p>
+                          <div className="flex gap-2">
+                            <Input
+                              placeholder="recipient@company.com"
+                              value={adminCustomEmail}
+                              onChange={(e) => setAdminCustomEmail(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  const trimmed = adminCustomEmail.trim();
+                                  if (trimmed && !availableEmails.includes(trimmed)) {
+                                    setAvailableEmails([...availableEmails, trimmed]);
+                                    setSelectedEmails([...selectedEmails, trimmed]);
+                                    setAdminCustomEmail("");
+                                    setAdminAddStatus(`✓ ${trimmed} added successfully`);
+                                    setTimeout(() => setAdminAddStatus(""), 3000);
+                                  }
+                                }
+                              }}
+                              className="h-9 text-xs bg-white border-[#CBD5E0] focus:border-[#4299E1] rounded-lg text-slate-700"
+                            />
+                            <Button
+                              onClick={() => {
+                                const trimmed = adminCustomEmail.trim();
+                                if (trimmed && !availableEmails.includes(trimmed)) {
+                                  setAvailableEmails([...availableEmails, trimmed]);
+                                  setSelectedEmails([...selectedEmails, trimmed]);
+                                  setAdminCustomEmail("");
+                                  setAdminAddStatus(`✓ ${trimmed} added successfully`);
+                                  setTimeout(() => setAdminAddStatus(""), 3000);
+                                }
+                              }}
+                              className="h-9 px-4 bg-[#4299E1] hover:bg-[#3182CE] text-white text-xs font-bold rounded-lg shrink-0 flex items-center gap-1.5"
+                            >
+                              <Plus className="w-3.5 h-3.5" /> Add
+                            </Button>
+                          </div>
+                          {adminAddStatus && (
+                            <p className="text-[10.5px] text-emerald-600 font-semibold mt-2 flex items-center gap-1">
+                              <CheckCircle className="w-3.5 h-3.5" /> {adminAddStatus}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Send Report Card */}
+                      <div className="admin-card p-6">
+                        <div className="flex items-center gap-2.5 mb-5 pb-4 border-b border-[#EDF2F7]">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
+                            <Send className="w-4 h-4 text-emerald-600" />
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-bold text-[#1A202C]">Send Report</h3>
+                            <p className="text-[10.5px] text-slate-400">Dispatch PDF via Microsoft Graph to selected recipients</p>
+                          </div>
+                        </div>
+
+                        {/* Selected recipients summary */}
+                        <div className="mb-5">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Sending To</p>
+                          {selectedEmails.length === 0 ? (
+                            <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+                              <Bell className="w-3.5 h-3.5 shrink-0" />
+                              <span>Select at least one recipient from the list above.</span>
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap gap-1.5">
+                              {selectedEmails.map((e) => (
+                                <Badge
+                                  key={e}
+                                  className="bg-[#EBF8FF] text-[#2B6CB0] border border-[#BEE3F8] font-semibold text-[10px] px-2 py-0.5 rounded-full flex items-center gap-1"
+                                >
+                                  {e}
+                                  <X
+                                    className="w-2.5 h-2.5 cursor-pointer hover:opacity-70"
+                                    onClick={() => setSelectedEmails(selectedEmails.filter((x) => x !== e))}
+                                  />
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* PDF Section selector inline */}
+                        <div className="mb-5">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2.5">Report Sections</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            {([
+                              { key: "weeklyVisual", label: "Weekly Charts", color: "blue" },
+                              { key: "weeklyLedger", label: "Airline Table", color: "blue" },
+                              { key: "monthlyVisual", label: "Monthly Charts", color: "teal" },
+                              { key: "monthlyLedger", label: "Monthly Table", color: "teal" },
+                            ] as const).map(({ key, label, color }) => (
+                              <div
+                                key={key}
+                                onClick={() => setPdfSections({ ...pdfSections, [key]: !pdfSections[key] })}
+                                className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-all text-xs ${pdfSections[key]
+                                  ? color === "teal"
+                                    ? "bg-teal-50 border-teal-200 text-teal-800"
+                                    : "bg-blue-50 border-blue-200 text-blue-800"
+                                  : "bg-slate-50 border-slate-200 text-slate-500"
+                                  }`}
+                              >
+                                <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-all ${pdfSections[key]
+                                  ? color === "teal" ? "border-teal-500 bg-teal-500" : "border-[#4299E1] bg-[#4299E1]"
+                                  : "border-slate-300"
+                                  }`}>
+                                  {pdfSections[key] && <Check className="w-2.5 h-2.5 text-white" />}
+                                </div>
+                                <span className="font-semibold">{label}</span>
+                              </div>
                             ))}
                           </div>
                         </div>
 
-                        {/* User list */}
-                        <div className="space-y-2 max-h-72 overflow-y-auto mb-5 pr-1">
-                          {(deptFilter === "__all__" ? orgUsers : (orgUsersByDept[deptFilter] || []))
-                            .filter((u: any) => {
-                              if (!userSearch) return true;
-                              const q = userSearch.toLowerCase();
-                              return (u.displayName || "").toLowerCase().includes(q) || (u.email || "").toLowerCase().includes(q);
-                            })
-                            .map((u: any) => {
-                              const isSelected = selectedEmails.includes(u.email);
-                              return (
-                                <div
-                                  key={u.email}
-                                  className={`flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer ${isSelected ? "bg-[#EBF8FF] border-[#BEE3F8]" : "bg-slate-50 border-slate-200 hover:border-slate-300 hover:bg-white"}`}
-                                  onClick={() => {
-                                    if (isSelected) {
-                                      setSelectedEmails(selectedEmails.filter((x) => x !== u.email));
-                                    } else {
-                                      setSelectedEmails([...selectedEmails, u.email]);
-                                    }
-                                  }}
-                                >
-                                  <div className="flex items-center gap-3 min-w-0">
-                                    <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${isSelected ? "bg-[#3182CE] text-white" : "bg-white border border-slate-200 text-slate-600"}`}>
-                                      {(u.displayName || u.email).charAt(0).toUpperCase()}
-                                    </div>
-                                    <div className="min-w-0">
-                                      <p className={`text-xs font-semibold truncate ${isSelected ? "text-[#2B6CB0]" : "text-slate-700"}`}>
-                                        {u.displayName || u.email}
-                                      </p>
-                                      <p className="text-[10px] text-slate-400 truncate">{u.email}</p>
-                                      {(u.jobTitle || u.department) && (
-                                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                                          {u.jobTitle && <span className="text-[9px] font-semibold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">{u.jobTitle}</span>}
-                                          {u.department && <span className="text-[9px] font-semibold text-[#3182CE] bg-[#EBF8FF] px-1.5 py-0.5 rounded-full">{u.department}</span>}
-                                          {u.officeLocation && <span className="text-[9px] text-slate-400">📍 {u.officeLocation}</span>}
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ml-2 transition-all ${isSelected ? "border-[#3182CE] bg-[#3182CE]" : "border-slate-300"}`}>
-                                    {isSelected && <Check className="w-3 h-3 text-white" />}
-                                  </div>
-                                </div>
-                              );
-                            })}
+                        {/* Action buttons */}
+                        <div className="flex gap-3">
+                          <Button
+                            onClick={openPdfPreview}
+                            className="flex-1 h-9 bg-white hover:bg-slate-50 border border-[#CBD5E0] text-slate-700 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 shadow-sm"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-slate-500" />
+                            PDF Preview
+                          </Button>
+                          <Button
+                            onClick={handleSendStatsClick}
+                            disabled={selectedEmails.length === 0 || emailLoading}
+                            className="flex-1 h-9 bg-[#4299E1] hover:bg-[#3182CE] disabled:opacity-50 text-white text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 shadow-sm"
+                          >
+                            {emailLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                            Send to ({selectedEmails.length})
+                          </Button>
                         </div>
 
-                        {/* Bulk actions */}
-                        <div className="flex gap-2 mb-4 border-t border-[#EDF2F7] pt-4">
-                          <button
-                            onClick={() => {
-                              const visible = (deptFilter === "__all__" ? orgUsers : (orgUsersByDept[deptFilter] || []))
-                                .filter((u: any) => !userSearch || (u.displayName || "").toLowerCase().includes(userSearch.toLowerCase()) || (u.email || "").toLowerCase().includes(userSearch.toLowerCase()))
-                                .map((u: any) => u.email).filter(Boolean);
-                              setSelectedEmails((prev) => prev.concat(visible).filter((v, i, a) => a.indexOf(v) === i));
-                            }}
-                            className="text-[10px] font-bold text-[#3182CE] hover:text-[#2B6CB0] px-3 py-1.5 rounded-lg border border-[#BEE3F8] bg-[#EBF8FF] hover:bg-[#BEE3F8]/50 transition-all"
-                          >
-                            Select All Visible
-                          </button>
-                          <button
-                            onClick={() => setSelectedEmails([])}
-                            className="text-[10px] font-bold text-slate-500 hover:text-slate-700 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-all"
-                          >
-                            Clear All
-                          </button>
-                        </div>
-                      </>
-                    )}
-
-                    {/* Fallback: no org users yet — show static list */}
-                    {!orgUsersLoading && orgUsers.length === 0 && !orgUsersError && (
-                      <div className="space-y-2 mb-5">
-                        {availableEmails.length === 0 ? (
-                          <div className="py-8 flex flex-col items-center gap-2 text-slate-400">
-                            <Users className="w-8 h-8 opacity-30" />
-                            <p className="text-xs">No recipients configured. Add one below.</p>
+                        {/* Email feedback */}
+                        {emailStatus && (
+                          <div className={`mt-3 p-3 rounded-lg border text-xs flex items-center justify-between ${emailSuccess === true ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-blue-50 border-blue-200 text-blue-700"
+                            }`}>
+                            <span className="flex items-center gap-1.5">
+                              {emailSuccess === true && <CheckCircle className="w-3.5 h-3.5" />}
+                              {emailStatus}
+                            </span>
+                            <button onClick={() => setEmailStatus("")} className="hover:opacity-70"><X className="w-3 h-3" /></button>
                           </div>
-                        ) : (
-                          availableEmails.map((email) => {
-                            const isSelected = selectedEmails.includes(email);
-                            return (
-                              <div
-                                key={email}
-                                className={`flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer ${isSelected ? "bg-[#EBF8FF] border-[#BEE3F8]" : "bg-slate-50 border-slate-200 hover:border-slate-300 hover:bg-white"}`}
-                                onClick={() => {
-                                  if (isSelected) {
-                                    setSelectedEmails(selectedEmails.filter((x) => x !== email));
-                                  } else {
-                                    setSelectedEmails([...selectedEmails, email]);
-                                  }
-                                }}
-                              >
-                                <div className="flex items-center gap-3">
-                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${isSelected ? "bg-[#3182CE] text-white" : "bg-white border border-slate-200 text-slate-500"}`}>
-                                    {email.charAt(0).toUpperCase()}
-                                  </div>
-                                  <p className={`text-xs font-semibold ${isSelected ? "text-[#2B6CB0]" : "text-slate-700"}`}>{email}</p>
-                                </div>
-                                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${isSelected ? "border-[#3182CE] bg-[#3182CE]" : "border-slate-300"}`}>
-                                  {isSelected && <Check className="w-3 h-3 text-white" />}
-                                </div>
-                              </div>
-                            );
-                          })
                         )}
                       </div>
-                    )}
-
-                    {/* Add Custom Email */}
-                    <div className="border-t border-[#EDF2F7] pt-4">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2.5">Add Custom Email</p>
-                      <div className="flex gap-2">
-                        <Input
-                          placeholder="recipient@company.com"
-                          value={adminCustomEmail}
-                          onChange={(e) => setAdminCustomEmail(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              const trimmed = adminCustomEmail.trim();
-                              if (trimmed && !availableEmails.includes(trimmed)) {
-                                setAvailableEmails([...availableEmails, trimmed]);
-                                setSelectedEmails([...selectedEmails, trimmed]);
-                                setAdminCustomEmail("");
-                                setAdminAddStatus(`✓ ${trimmed} added successfully`);
-                                setTimeout(() => setAdminAddStatus(""), 3000);
-                              }
-                            }
-                          }}
-                          className="h-9 text-xs bg-white border-[#CBD5E0] focus:border-[#4299E1] rounded-lg text-slate-700"
-                        />
-                        <Button
-                          onClick={() => {
-                            const trimmed = adminCustomEmail.trim();
-                            if (trimmed && !availableEmails.includes(trimmed)) {
-                              setAvailableEmails([...availableEmails, trimmed]);
-                              setSelectedEmails([...selectedEmails, trimmed]);
-                              setAdminCustomEmail("");
-                              setAdminAddStatus(`✓ ${trimmed} added successfully`);
-                              setTimeout(() => setAdminAddStatus(""), 3000);
-                            }
-                          }}
-                          className="h-9 px-4 bg-[#4299E1] hover:bg-[#3182CE] text-white text-xs font-bold rounded-lg shrink-0 flex items-center gap-1.5"
-                        >
-                          <Plus className="w-3.5 h-3.5" /> Add
-                        </Button>
-                      </div>
-                      {adminAddStatus && (
-                        <p className="text-[10.5px] text-emerald-600 font-semibold mt-2 flex items-center gap-1">
-                          <CheckCircle className="w-3.5 h-3.5" /> {adminAddStatus}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Send Report Card */}
-                  <div className="admin-card p-6">
-                    <div className="flex items-center gap-2.5 mb-5 pb-4 border-b border-[#EDF2F7]">
-                      <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
-                        <Send className="w-4 h-4 text-emerald-600" />
-                      </div>
-                      <div>
-                        <h3 className="text-sm font-bold text-[#1A202C]">Send Report</h3>
-                        <p className="text-[10.5px] text-slate-400">Dispatch PDF via Microsoft Graph to selected recipients</p>
-                      </div>
-                    </div>
-
-                    {/* Selected recipients summary */}
-                    <div className="mb-5">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Sending To</p>
-                      {selectedEmails.length === 0 ? (
-                        <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
-                          <Bell className="w-3.5 h-3.5 shrink-0" />
-                          <span>Select at least one recipient from the list above.</span>
-                        </div>
-                      ) : (
-                        <div className="flex flex-wrap gap-1.5">
-                          {selectedEmails.map((e) => (
-                            <Badge
-                              key={e}
-                              className="bg-[#EBF8FF] text-[#2B6CB0] border border-[#BEE3F8] font-semibold text-[10px] px-2 py-0.5 rounded-full flex items-center gap-1"
-                            >
-                              {e}
-                              <X
-                                className="w-2.5 h-2.5 cursor-pointer hover:opacity-70"
-                                onClick={() => setSelectedEmails(selectedEmails.filter((x) => x !== e))}
-                              />
-                            </Badge>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* PDF Section selector inline */}
-                    <div className="mb-5">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2.5">Report Sections</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        {([
-                          { key: "weeklyVisual", label: "Weekly Charts", color: "blue" },
-                          { key: "weeklyLedger", label: "Airline Table", color: "blue" },
-                          { key: "monthlyVisual", label: "Monthly Charts", color: "teal" },
-                          { key: "monthlyLedger", label: "Monthly Table", color: "teal" },
-                        ] as const).map(({ key, label, color }) => (
-                          <div
-                            key={key}
-                            onClick={() => setPdfSections({ ...pdfSections, [key]: !pdfSections[key] })}
-                            className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-all text-xs ${pdfSections[key]
-                              ? color === "teal"
-                                ? "bg-teal-50 border-teal-200 text-teal-800"
-                                : "bg-blue-50 border-blue-200 text-blue-800"
-                              : "bg-slate-50 border-slate-200 text-slate-500"
-                              }`}
-                          >
-                            <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-all ${pdfSections[key]
-                              ? color === "teal" ? "border-teal-500 bg-teal-500" : "border-[#4299E1] bg-[#4299E1]"
-                              : "border-slate-300"
-                              }`}>
-                              {pdfSections[key] && <Check className="w-2.5 h-2.5 text-white" />}
-                            </div>
-                            <span className="font-semibold">{label}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Action buttons */}
-                    <div className="flex gap-3">
-                      <Button
-                        onClick={openPdfPreview}
-                        className="flex-1 h-9 bg-white hover:bg-slate-50 border border-[#CBD5E0] text-slate-700 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 shadow-sm"
-                      >
-                        <Eye className="w-3.5 h-3.5 text-slate-500" />
-                        PDF Preview
-                      </Button>
-                      <Button
-                        onClick={handleSendStatsClick}
-                        disabled={selectedEmails.length === 0 || emailLoading}
-                        className="flex-1 h-9 bg-[#4299E1] hover:bg-[#3182CE] disabled:opacity-50 text-white text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 shadow-sm"
-                      >
-                        {emailLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                        Send to ({selectedEmails.length})
-                      </Button>
-                    </div>
-
-                    {/* Email feedback */}
-                    {emailStatus && (
-                      <div className={`mt-3 p-3 rounded-lg border text-xs flex items-center justify-between ${emailSuccess === true ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-blue-50 border-blue-200 text-blue-700"
-                        }`}>
-                        <span className="flex items-center gap-1.5">
-                          {emailSuccess === true && <CheckCircle className="w-3.5 h-3.5" />}
-                          {emailStatus}
-                        </span>
-                        <button onClick={() => setEmailStatus("")} className="hover:opacity-70"><X className="w-3 h-3" /></button>
-                      </div>
-                    )}
-                  </div>
+                    </>
+                  )}
 
                 </div>
 
@@ -2186,37 +2744,6 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                     </div>
                   </div>
 
-                  {/* Access Control Placeholder */}
-                  <div className="admin-card p-6">
-                    <div className="flex items-center justify-between mb-5 pb-4 border-b border-[#EDF2F7]">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-rose-50 flex items-center justify-center">
-                          <Lock className="w-4 h-4 text-rose-500" />
-                        </div>
-                        <div>
-                          <h3 className="text-sm font-bold text-[#1A202C]">Access Control</h3>
-                          <p className="text-[10.5px] text-slate-400">Role-based send permissions</p>
-                        </div>
-                      </div>
-                      <span className="text-[9px] font-black text-rose-600 bg-rose-50 px-2 py-1 rounded-full uppercase tracking-wider">Coming Soon</span>
-                    </div>
-                    <div className="space-y-2 opacity-40 pointer-events-none">
-                      {["Admin — Full Access", "Manager — Send + View", "Viewer — View Only"].map((role) => (
-                        <div key={role} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600">
-                          <div className="flex items-center gap-2">
-                            <UserCheck className="w-3.5 h-3.5 text-slate-400" />
-                            {role}
-                          </div>
-                          <ChevronRight className="w-3.5 h-3.5 text-slate-300" />
-                        </div>
-                      ))}
-                    </div>
-                    <div className="mt-4 flex justify-center">
-                      <p className="text-[10px] text-slate-400 font-semibold bg-slate-50 px-3 py-1 rounded-full border border-slate-200">
-                        🔒 User access management coming in next release
-                      </p>
-                    </div>
-                  </div>
 
                 </div>
               </div>

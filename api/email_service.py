@@ -12,7 +12,13 @@ def log_email_transaction(recipient: str, status: str, details: str = ""):
     with open("logs/email_history.log", "a", encoding="utf-8") as f:
         f.write(log_entry)
 
-def send_pdf_via_graph(pdf_path: str, recipient_email: str):
+def send_pdf_via_graph(
+    pdf_path: str,
+    recipient_email: str,
+    subject: str = "Weekly Air Freight Performance Report",
+    body: str = "Dear {recipient_name},\n\nPlease find your requested custom tonnage dashboard view attached.\n\nBest Regards,\nBI Support Team",
+    attachment_name: str = "Custom_Tonnage_Dashboard.pdf"
+):
     """
     Authenticates via MSAL and sends an email with the attached PDF using MS Graph API.
     """
@@ -42,16 +48,16 @@ def send_pdf_via_graph(pdf_path: str, recipient_email: str):
         
         email_msg = {
             "message": {
-                "subject": "Weekly Air Freight Performance Report",
+                "subject": subject,
                 "body": {
                     "contentType": "Text",
-                    "content": "Hello,\n\nPlease find your requested custom tonnage dashboard view attached.\n\nBest Regards,\nBI Support Team"
+                    "content": body
                 },
                 "toRecipients": to_recipients,
                 "attachments": [
                     {
                         "@odata.type": "#microsoft.graph.fileAttachment",
-                        "name": "Custom_Tonnage_Dashboard.pdf",
+                        "name": attachment_name,
                         "contentType": "application/pdf",
                         "contentBytes": b64_pdf
                     }
