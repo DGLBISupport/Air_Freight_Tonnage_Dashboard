@@ -1,5 +1,6 @@
-# Use an official lightweight Python image
-FROM python:3.11-slim
+# Use Microsoft's official Playwright image (matches your playwright==1.41.0 version)
+# This comes pre-packaged with Python, Chromium, and all Linux dependencies.
+FROM mcr.microsoft.com/playwright/python:v1.41.0-jammy
 
 # Set environment variables to prevent Python from writing pyc files and buffering stdout
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -13,12 +14,8 @@ COPY requirements.txt .
 # Install your Python packages
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright and force it to download Chromium AND its Linux system dependencies
-RUN pip install playwright && playwright install --with-deps chromium
-
 # Copy the rest of your application code
 COPY . .
 
 # Start your Python application
-# Note: Cloud Run requires your app to listen on the port provided by the $PORT environment variable
 CMD ["python", "api/main.py"]
