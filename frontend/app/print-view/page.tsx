@@ -9,7 +9,10 @@ import {
 import { Plane, Globe, CheckSquare, Square, Printer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_API_URL || 
+  (typeof window !== "undefined" && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1"
+    ? "https://air-freight-tonnage-dashboard.vercel.app"
+    : "http://localhost:8000");
 
 const formatCurrency = (val: number | null | undefined) => {
   if (val == null) return "$0";
