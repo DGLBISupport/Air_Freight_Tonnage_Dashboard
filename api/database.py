@@ -7,17 +7,23 @@ import requests
 
 load_dotenv()
 
-# Build the connection engine once
-db_pass = urllib.parse.quote_plus(os.getenv("DB_PASSWORD", ""))
-db_server = os.getenv("DB_SERVER", "")
-db_name = "DartBIDW"
-db_user = os.getenv("DB_USER", "")
+# Lazy-loaded database connection engine
+_engine = None
 
-conn_str = f"mssql+pyodbc:///?odbc_connect=DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={db_server};DATABASE={db_name};UID={db_user};PWD={db_pass}"
-engine = create_engine(conn_str)
+def get_engine():
+    global _engine
+    if _engine is None:
+        db_pass = urllib.parse.quote_plus(os.getenv("DB_PASSWORD", ""))
+        db_server = os.getenv("DB_SERVER", "")
+        db_name = "DartBIDW"
+        db_user = os.getenv("DB_USER", "")
+        conn_str = f"mssql+pyodbc:///?odbc_connect=DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={db_server};DATABASE={db_name};UID={db_user};PWD={db_pass}"
+        _engine = create_engine(conn_str)
+    return _engine
 
 # On-Prem API endpoint configuration
 ONPREM_API_URL = os.getenv("ONPREM_API_URL", "https://survey.dartglobal.com/chatbot/v1.0/data")
+
 
 
 def run_query(sql_str: str, params: dict = None) -> pd.DataFrame:
@@ -48,7 +54,7 @@ def run_query(sql_str: str, params: dict = None) -> pd.DataFrame:
         except Exception as e:
             print(f"API Query failed ({e}). Falling back to direct database connection...")
     
-    with engine.connect() as conn:
+    with get_engine().connect() as conn:
         return pd.read_sql(text(sql_str), conn, params=params)
 
 

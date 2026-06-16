@@ -776,16 +776,22 @@ def load_active_jobs_into_scheduler():
 
 @app.on_event("startup")
 def startup_scheduler():
-    print("FastAPI Startup: Initializing local SQLite database and starting scheduler...")
+    print("FastAPI Startup: Initializing local SQLite database...")
     init_scheduler_db()
-    load_active_jobs_into_scheduler()
-    scheduler.start()
+    if not os.environ.get("VERCEL"):
+        print("FastAPI Startup: Starting background scheduler...")
+        load_active_jobs_into_scheduler()
+        scheduler.start()
+    else:
+        print("FastAPI Startup: Running on Vercel, background scheduler disabled.")
 
 
 @app.on_event("shutdown")
 def shutdown_scheduler():
-    print("FastAPI Shutdown: Stopping background scheduler...")
-    scheduler.shutdown()
+    if not os.environ.get("VERCEL"):
+        print("FastAPI Shutdown: Stopping background scheduler...")
+        scheduler.shutdown()
+
 
 
 @app.get("/api/schedules")

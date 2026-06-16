@@ -3,7 +3,11 @@ import sqlite3
 import json
 from typing import List, Dict, Optional
 
-DB_PATH = "schedules.db"
+import os
+if os.environ.get("VERCEL") or os.environ.get("NOW_REGION"):
+    DB_PATH = "/tmp/schedules.db"
+else:
+    DB_PATH = "schedules.db"
 
 def init_scheduler_db():
     """Initializes the SQLite database table for report schedules."""
