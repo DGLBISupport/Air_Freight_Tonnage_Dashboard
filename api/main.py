@@ -32,6 +32,21 @@ from api.database import (
 )
 from api.pdf_service import generate_dashboard_pdf
 from api.email_service import send_pdf_via_graph
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from api.scheduler_db import (
+    init_scheduler_db,
+    save_schedule,
+    get_all_schedules,
+    get_schedule,
+    delete_schedule,
+    update_schedule_status,
+)
+import json
+import datetime
+
+# Create background scheduler
+scheduler = AsyncIOScheduler()
 
 app = FastAPI(title="Tonnage Reporting API")
 
@@ -519,6 +534,352 @@ def custom_query(req: CustomQueryRequest):
         error_msg = str(e)
         raise HTTPException(status_code=400, detail=f"Query execution failed: {error_msg}")
 
+
+# --- REPORT SCHEDULING SYSTEM ---
+
+class ScheduleCreateRequest(BaseModel):
+    recipient_email: str
+    frequency: str  # 'weekly', 'monthly', 'daily'
+    day_of_week: Optional[int] = None
+    day_of_month: Optional[int] = None
+    time_of_day: str  # "HH:MM" in 24-hour format
+    filters: dict
+    is_active: Optional[bool] = True
+
+
+def get_report_dates_by_frequency(frequency: str):
+    """Calculates start and end dates relative to execution time."""
+    today = datetime.date.today()
+    if frequency == "weekly":
+        # Monday to Sunday of previous complete week
+        start = today - datetime.timedelta(days=today.weekday() + 7)
+        end = today - datetime.timedelta(days=today.weekday() + 1)
+    elif frequency == "monthly":
+        # First to last day of previous calendar month
+        first_of_this_month = today.replace(day=1)
+        end = first_of_this_month - datetime.timedelta(days=1)
+        start = end.replace(day=1)
+    else:
+        # Fallback daily or daily schedules cover last 7 days of trend data
+        start = today - datetime.timedelta(days=7)
+        end = today
+    return start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
+
+
+def execute_scheduled_report_job(schedule_id: str):
+    """Fired by APScheduler to generate and email a scheduled report."""
+    print(f"APScheduler: Starting report execution for schedule {schedule_id}")
+    config = get_schedule(schedule_id)
+    if not config or not config.get("is_active"):
+        print(f"APScheduler: Schedule {schedule_id} is inactive or does not exist. Aborting job.")
+        return
+        
+    recipient_email = config["recipient_email"]
+    frequency = config["frequency"]
+    filters = config["filters"]
+    
+    # Check if custom dates are specified in filters, otherwise calculate relative dates
+    if filters.get("start_date") and filters.get("end_date"):
+        start_date = filters["start_date"]
+        end_date = filters["end_date"]
+    else:
+        start_date, end_date = get_report_dates_by_frequency(frequency)
+    temp_pdf_path = f"outputs/scheduled_report_{uuid.uuid4().hex}.pdf"
+    os.makedirs("outputs", exist_ok=True)
+    
+    # Process mode and cache custom SQL query if needed
+    company_val = filters.get("company_code")
+    country_val = filters.get("country")
+    
+    if company_val and company_val != "all":
+        mode = "custom-sql"
+        if company_val == "OTHER":
+            custom_sql = f"""
+SELECT
+    vt.ConsoleNumber AS Console_Number,
+    vt.MasterBillNum AS Master_Airway_Bill,
+    vt.AirlineName1 AS Airline,
+    vt.ConsolTransportMode AS Transport_Mode,
+    vt.ETD,
+    vt.ConLoadPortCountryName AS Origin_Country,
+    COALESCE(MAX(vs.OriginCity), 'N/A') AS Origin_City,
+    COALESCE(MAX(vs.DestCity), 'N/A') AS Destination_City,
+    COALESCE(MAX(vs.DestCountry), 'N/A') AS Destination_Country,
+    COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
+    COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
+    ROUND(vt.Air_ChargebleWeight, 2) AS Tonnage_Chargeable,
+    ROUND(vt.Air_ActualWeight, 2) AS Tonnage_Actual,
+    ROUND(vt.Revenue_USD, 2) AS Revenue_USD,
+    ROUND(vt.Cost_USD, 2) AS Cost_USD,
+    ROUND(vt.Profit_USD, 2) AS Profit_USD,
+    ROUND((vt.Profit_USD / NULLIF(vt.Revenue_USD, 0)) * 100, 2) AS GP_Margin_Percent
+FROM dbo.ChatData_ViewShipConsolTransport vt
+LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc ON vsc.Link_ConsolNumber = vt.ConsoleNumber
+LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs ON vs.ShipmentNumber = vsc.Link_ShipmentNum
+WHERE vt.ETD >= '{start_date}'
+    AND vt.ETD <= '{end_date}'
+    AND vt.TransportMode = 'AIR'
+    AND vs.Company NOT IN ('CMB', 'IND', 'VNM', 'DAC', 'PKI', 'NYC')
+GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1, vt.ConsolTransportMode, vt.ETD, vt.ConLoadPortCountryName, vt.Air_ChargebleWeight, vt.Air_ActualWeight, vt.Revenue_USD, vt.Cost_USD, vt.Profit_USD
+ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
+            """.strip()
+        else:
+            custom_sql = f"""
+SELECT
+    vt.ConsoleNumber AS Console_Number,
+    vt.MasterBillNum AS Master_Airway_Bill,
+    vt.AirlineName1 AS Airline,
+    vt.ConsolTransportMode AS Transport_Mode,
+    vt.ETD,
+    vt.ConLoadPortCountryName AS Origin_Country,
+    COALESCE(MAX(vs.OriginCity), 'N/A') AS Origin_City,
+    COALESCE(MAX(vs.DestCity), 'N/A') AS Destination_City,
+    COALESCE(MAX(vs.DestCountry), 'N/A') AS Destination_Country,
+    COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
+    COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
+    ROUND(vt.Air_ChargebleWeight, 2) AS Tonnage_Chargeable,
+    ROUND(vt.Air_ActualWeight, 2) AS Tonnage_Actual,
+    ROUND(vt.Revenue_USD, 2) AS Revenue_USD,
+    ROUND(vt.Cost_USD, 2) AS Cost_USD,
+    ROUND(vt.Profit_USD, 2) AS Profit_USD,
+    ROUND((vt.Profit_USD / NULLIF(vt.Revenue_USD, 0)) * 100, 2) AS GP_Margin_Percent
+FROM dbo.ChatData_ViewShipConsolTransport vt
+LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc ON vsc.Link_ConsolNumber = vt.ConsoleNumber
+LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs ON vs.ShipmentNumber = vsc.Link_ShipmentNum
+WHERE vt.ConLoadPortCountryName = '{country_val}'
+    AND vt.ETD >= '{start_date}'
+    AND vt.ETD <= '{end_date}'
+    AND vt.TransportMode = 'AIR'
+    AND vs.Company = '{company_val}'
+GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1, vt.ConsolTransportMode, vt.ETD, vt.ConLoadPortCountryName, vt.Air_ChargebleWeight, vt.Air_ActualWeight, vt.Revenue_USD, vt.Cost_USD, vt.Profit_USD
+ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
+            """.strip()
+    else:
+        mode = filters.get("mode", "standard")
+        custom_sql = filters.get("custom_sql")
+        
+    query_id = None
+    if mode == "custom-sql" and custom_sql:
+        query_id = str(uuid.uuid4())
+        query_cache[query_id] = custom_sql
+        
+    try:
+        generate_dashboard_pdf(
+            start_date=start_date,
+            end_date=end_date,
+            country=filters.get("country"),
+            airline=filters.get("airline"),
+            output_path=temp_pdf_path,
+            company_code=filters.get("company_code"),
+            origin_city=filters.get("origin_city"),
+            destination_country=filters.get("destination_country"),
+            destination_city=filters.get("destination_city"),
+            branch=filters.get("branch"),
+            include_weekly_visual=filters.get("include_weekly_visual", True),
+            include_weekly_ledger=filters.get("include_weekly_ledger", True),
+            include_monthly_visual=filters.get("include_monthly_visual", True),
+            include_monthly_ledger=filters.get("include_monthly_ledger", True),
+            max_data_rows=filters.get("max_data_rows", 100),
+            mode=mode,
+            custom_sql=custom_sql,
+            query_id=query_id,
+        )
+        
+        # Build email subject and description labels
+        station_label = "Global"
+        country_val = filters.get("country")
+        company_val = filters.get("company_code")
+        if country_val and company_val:
+            station_label = f"{country_val} ({company_val})"
+        elif country_val:
+            station_label = country_val
+        elif company_val:
+            station_label = company_val
+            if company_val == "OTHER":
+                station_label = "Corporate / Other"
+                
+        subject = f"Scheduled Air Freight Tonnage Dashboard - {station_label} ({start_date} to {end_date})"
+        body = (
+            f"Dear Recipient,\n\n"
+            f"Please find attached the scheduled Air Freight Tonnage and Revenue Performance Dashboard for {station_label} "
+            f"covering the period from {start_date} to {end_date}.\n\n"
+            f"Best Regards,\n"
+            f"BI Support Team"
+        )
+        attachment_name = f"Scheduled_Tonnage_Report_{company_val or 'Global'}.pdf"
+        
+        send_pdf_via_graph(
+            pdf_path=temp_pdf_path,
+            recipient_email=recipient_email,
+            subject=subject,
+            body=body,
+            attachment_name=attachment_name
+        )
+        print(f"APScheduler: Successfully sent report for schedule {schedule_id}")
+    except Exception as e:
+        from api.email_service import log_email_transaction
+        log_email_transaction(recipient_email, "SCHEDULED_JOB_ERROR", str(e))
+        print(f"APScheduler: Job execution failed for schedule {schedule_id}: {str(e)}")
+    finally:
+        if os.path.exists(temp_pdf_path):
+            try:
+                os.remove(temp_pdf_path)
+            except Exception:
+                pass
+
+
+def register_schedule_in_apscheduler(config: dict):
+    """Schedules or updates a cron job in APScheduler according to its DB config."""
+    job_id = config["id"]
+    
+    # Remove existing job if it is registered
+    if scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+        
+    if not config["is_active"]:
+        return
+        
+    frequency = config["frequency"]
+    time_str = config["time_of_day"]
+    hour, minute = map(int, time_str.split(":"))
+    
+    trigger = None
+    if frequency == "weekly":
+        trigger = CronTrigger(day_of_week=config["day_of_week"], hour=hour, minute=minute)
+    elif frequency == "monthly":
+        trigger = CronTrigger(day=config["day_of_month"], hour=hour, minute=minute)
+    elif frequency == "daily":
+        trigger = CronTrigger(hour=hour, minute=minute)
+        
+    if trigger:
+        scheduler.add_job(
+            execute_scheduled_report_job,
+            trigger=trigger,
+            args=[job_id],
+            id=job_id,
+            max_instances=1,
+            replace_existing=True
+        )
+        print(f"APScheduler: Job {job_id} scheduled for {frequency} run at {time_str}")
+
+
+def load_active_jobs_into_scheduler():
+    """Initializes schedules from local SQLite and loads them as background tasks."""
+    schedules = get_all_schedules()
+    for s in schedules:
+        if s.get("is_active"):
+            try:
+                register_schedule_in_apscheduler(s)
+            except Exception as e:
+                print(f"APScheduler: Failed to load schedule {s.get('id')}: {e}")
+
+
+@app.on_event("startup")
+def startup_scheduler():
+    print("FastAPI Startup: Initializing local SQLite database and starting scheduler...")
+    init_scheduler_db()
+    load_active_jobs_into_scheduler()
+    scheduler.start()
+
+
+@app.on_event("shutdown")
+def shutdown_scheduler():
+    print("FastAPI Shutdown: Stopping background scheduler...")
+    scheduler.shutdown()
+
+
+@app.get("/api/schedules")
+def api_list_schedules():
+    """Returns a list of all defined report schedules."""
+    try:
+        schedules = get_all_schedules()
+        return {"status": "success", "data": schedules}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/schedules")
+def api_create_schedule(req: ScheduleCreateRequest):
+    """Registers a new schedule in SQLite and loads it into the running APScheduler."""
+    if req.frequency == "weekly" and req.day_of_week is None:
+        raise HTTPException(status_code=400, detail="day_of_week is required for weekly schedules")
+    if req.frequency == "monthly" and req.day_of_month is None:
+        raise HTTPException(status_code=400, detail="day_of_month is required for monthly schedules")
+        
+    try:
+        hour, minute = map(int, req.time_of_day.split(":"))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError()
+    except Exception:
+        raise HTTPException(status_code=400, detail="time_of_day must be in 'HH:MM' 24-hour format")
+        
+    try:
+        schedule_id = str(uuid.uuid4())
+        save_schedule(
+            schedule_id=schedule_id,
+            recipient_email=req.recipient_email,
+            frequency=req.frequency,
+            day_of_week=req.day_of_week,
+            day_of_month=req.day_of_month,
+            time_of_day=req.time_of_day,
+            filters_dict=req.filters,
+            is_active=1 if req.is_active else 0
+        )
+        
+        config = get_schedule(schedule_id)
+        if config:
+            register_schedule_in_apscheduler(config)
+            
+        return {"status": "success", "message": "Schedule created successfully", "id": schedule_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/schedules/{schedule_id}/toggle")
+def api_toggle_schedule(schedule_id: str):
+    """Enables or disables a report schedule, adding/removing it from the active scheduler."""
+    config = get_schedule(schedule_id)
+    if not config:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+        
+    try:
+        new_status = 0 if config["is_active"] else 1
+        update_schedule_status(schedule_id, new_status)
+        
+        updated_config = get_schedule(schedule_id)
+        if updated_config:
+            register_schedule_in_apscheduler(updated_config)
+            
+        status_label = "activated" if new_status else "deactivated"
+        return {"status": "success", "message": f"Schedule successfully {status_label}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/schedules/{schedule_id}/run")
+def api_run_schedule_manually(schedule_id: str, background_tasks: BackgroundTasks):
+    """Immediately triggers the execution of a schedule, running it as a background task."""
+    config = get_schedule(schedule_id)
+    if not config:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+        
+    try:
+        background_tasks.add_task(execute_scheduled_report_job, schedule_id)
+        return {"status": "success", "message": "Report generation and email dispatch started."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/schedules/{schedule_id}")
+def api_delete_schedule(schedule_id: str):
+    """Deletes a schedule from both SQLite and APScheduler."""
+    try:
+        delete_schedule(schedule_id)
+        if scheduler.get_job(schedule_id):
+            scheduler.remove_job(schedule_id)
+        return {"status": "success", "message": "Schedule deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- RUNNER FOR DEVELOPMENT ---

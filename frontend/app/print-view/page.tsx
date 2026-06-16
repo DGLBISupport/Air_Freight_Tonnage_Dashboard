@@ -9,7 +9,7 @@ import {
 import { Plane, Globe, CheckSquare, Square, Printer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
-const API = "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const formatCurrency = (val: number | null | undefined) => {
   if (val == null) return "$0";
@@ -217,6 +217,52 @@ function PrintViewContent() {
     const maxD = new Date(Math.max(...dates.map(d => d.getTime())));
     const pad = (n: number) => String(n).padStart(2, '0');
     return `${minD.getFullYear()}-${pad(minD.getMonth() + 1)}-${pad(minD.getDate())} to ${maxD.getFullYear()}-${pad(maxD.getMonth() + 1)}-${pad(maxD.getDate())}`;
+  };
+
+  const [branchMap, setBranchMap] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const fetchBranches = async () => {
+      try {
+        const res = await fetch(`${API}/api/branches`);
+        const d = await res.json();
+        if (d.status === "success" && Array.isArray(d.data)) {
+          const mapping: Record<string, string> = {};
+          d.data.forEach((b: any) => {
+            mapping[b.code] = b.name;
+          });
+          setBranchMap(mapping);
+        }
+      } catch (e) {
+        console.error("Failed to fetch branches in print view", e);
+      }
+    };
+    fetchBranches();
+  }, []);
+
+  const getStationLabel = () => {
+    if (branch) {
+      const branchCodes = branch.split(",");
+      const branchNames = branchCodes.map(code => {
+        const trimmed = code.trim();
+        const name = branchMap[trimmed] || trimmed;
+        return name
+          .replace("Dart Global Logistics", "DGL")
+          .replace("DGL SUPPLY CHAIN SOLUTIONS", "DGL SCS")
+          .replace(" (PVT) LTD", "")
+          .replace(" PVT LTD", "")
+          .replace(" LTD", "");
+      });
+      return branchNames.join(", ");
+    }
+    if (companyCode && country) {
+      return `${country} (${companyCode})`;
+    } else if (companyCode) {
+      return companyCode === "OTHER" ? "Corporate / Other" : companyCode;
+    } else if (country) {
+      return country;
+    }
+    return "Global";
   };
 
   const [data, setData] = useState<any[]>([]);
@@ -928,7 +974,7 @@ function PrintViewContent() {
                 </div>
                 <div className="flex flex-col items-end gap-0.5">
                   <span className="text-black font-bold text-[11px] flex items-center gap-1">
-                    📅 {getSqlDateRange() || `${startDate} to ${endDate}`}
+                    📅 {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
                   </span>
                   <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
                     {companyCode && (
@@ -1121,7 +1167,7 @@ function PrintViewContent() {
                 </div>
                 <div className="flex flex-col items-end gap-0.5">
                   <span className="text-black font-bold text-[11px] flex items-center gap-1">
-                    📅 {getSqlDateRange() || `${startDate} to ${endDate}`}
+                    📅 {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
                   </span>
                   <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
                     {companyCode && (
@@ -1238,7 +1284,7 @@ function PrintViewContent() {
                 </div>
                 <div className="flex flex-col items-end gap-0.5">
                   <span className="text-black font-bold text-[11px] flex items-center gap-1">
-                    📅 {getSqlDateRange() || `${startDate} to ${endDate}`}
+                    📅 {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
                   </span>
                   <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
                     {companyCode && (
@@ -1487,7 +1533,7 @@ function PrintViewContent() {
               </div>
               <div className="flex flex-col items-end gap-0.5">
                 <span className="text-black font-bold text-[11px] flex items-center gap-1">
-                  📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`}
+                  📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`} | Station: {getStationLabel()}
                 </span>
               </div>
             </div>
@@ -1781,7 +1827,7 @@ function PrintViewContent() {
             </div>
             <div className="flex flex-col items-end gap-0.5">
               <span className="text-black font-bold text-[11px] flex items-center gap-1">
-                📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`}
+                📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`} | Station: {getStationLabel()}
               </span>
             </div>
           </div>
@@ -2104,7 +2150,7 @@ function PrintViewContent() {
               </div>
               <div className="flex flex-col items-end gap-0.5">
                 <span className="text-black font-bold text-[11px] flex items-center gap-1">
-                  📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`}
+                  📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`} | Station: {getStationLabel()}
                 </span>
               </div>
             </div>

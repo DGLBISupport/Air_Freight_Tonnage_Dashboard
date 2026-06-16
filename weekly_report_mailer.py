@@ -162,7 +162,9 @@ ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
             "include_weekly_ledger": "true",
             "include_monthly_visual": "true",
             "include_monthly_ledger": "true",
-            "max_data_rows": 100
+            "max_data_rows": 100,
+            "country": country,
+            "company_code": station_code
         }
         if query_id:
             params["query_id"] = query_id

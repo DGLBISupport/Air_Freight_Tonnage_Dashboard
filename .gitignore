@@ -12,3 +12,7 @@ node_modules/
 # Logs and Outputs
 logs/
 outputs/
+
+# Runtime databases
+schedules.db
+*.db

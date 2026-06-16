@@ -8,7 +8,7 @@ import {
 import {
   Calendar, Globe, Plane, RefreshCw, Send, X, ArrowUpRight, ArrowDownRight, Layers, FileText, Printer, CheckCircle,
   Users, Check, ChevronDown, Plus, Settings, Eye, Info, LayoutDashboard, BarChart2, ShieldCheck,
-  Mail, Clock, UserCheck, Trash2, Bell, Database, Lock, ChevronRight
+  Mail, Clock, UserCheck, Trash2, Bell, Database, Lock, ChevronRight, Play
 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
@@ -20,7 +20,7 @@ import {
   SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 
-const API = "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 // Formatting helpers matching the clean image style
 // Formatting helpers matching the clean image style
@@ -333,6 +333,157 @@ export default function Dashboard() {
   const [adminTab, setAdminTab] = useState<"stations" | "global">("stations");
   const [stationCustomEmailInput, setStationCustomEmailInput] = useState<Record<string, string>>({});
 
+  // --- SCHEDULER STATES ---
+  const [schedules, setSchedules] = useState<any[]>([]);
+  const [schedulerLoading, setSchedulerLoading] = useState(false);
+  const [schedStation, setSchedStation] = useState("Global");
+  const [schedFrequency, setSchedFrequency] = useState<"weekly" | "monthly" | "daily">("weekly");
+  const [schedDayOfWeek, setSchedDayOfWeek] = useState<number>(0); // 0=Monday
+  const [schedDayOfMonth, setSchedDayOfMonth] = useState<number>(1);
+  const [schedTime, setSchedTime] = useState("08:00");
+  const [schedRecipients, setSchedRecipients] = useState("");
+  const [schedIsCreating, setSchedIsCreating] = useState(false);
+  const [schedStatusMessage, setSchedStatusMessage] = useState("");
+  const [schedStatusSuccess, setSchedStatusSuccess] = useState<boolean | null>(null);
+  const [schedActiveTab, setSchedActiveTab] = useState<"list" | "create">("list");
+  const [schedStartDate, setSchedStartDate] = useState("");
+  const [schedEndDate, setSchedEndDate] = useState("");
+
+  const fetchSchedules = useCallback(async () => {
+    setSchedulerLoading(true);
+    try {
+      const res = await fetch(`${API}/api/schedules`);
+      const d = await res.json();
+      if (d.status === "success") {
+        setSchedules(d.data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch schedules", e);
+    }
+    setSchedulerLoading(false);
+  }, []);
+
+  const handleCreateSchedule = async () => {
+    if (!schedRecipients.trim()) {
+      setSchedStatusMessage("Please enter at least one recipient email.");
+      setSchedStatusSuccess(false);
+      return;
+    }
+
+    // Map station name to filters
+    let filters: any = {
+      mode: "standard",
+      include_weekly_visual: true,
+      include_weekly_ledger: true,
+      include_monthly_visual: true,
+      include_monthly_ledger: true,
+      max_data_rows: 100,
+    };
+
+    if (schedStation !== "Global") {
+      const stationMap: Record<string, { code: string; country: string }> = {
+        "CMB": { code: "CMB", country: "Sri Lanka" },
+        "IND": { code: "IND", country: "India" },
+        "VNM": { code: "VNM", country: "Viet Nam" },
+        "DAC": { code: "DAC", country: "Bangladesh" },
+        "PKI": { code: "PKI", country: "Pakistan" },
+        "NYC": { code: "NYC", country: "United States" },
+      };
+      const info = stationMap[schedStation];
+      if (info) {
+        filters.country = info.country;
+        filters.company_code = info.code;
+      }
+    }
+
+    if (schedStartDate) filters.start_date = schedStartDate;
+    if (schedEndDate) filters.end_date = schedEndDate;
+
+    setSchedIsCreating(true);
+    setSchedStatusMessage("");
+    setSchedStatusSuccess(null);
+
+    try {
+      const res = await fetch(`${API}/api/schedules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipient_email: schedRecipients,
+          frequency: schedFrequency,
+          day_of_week: schedFrequency === "weekly" ? schedDayOfWeek : null,
+          day_of_month: schedFrequency === "monthly" ? schedDayOfMonth : null,
+          time_of_day: schedTime,
+          filters: filters,
+          is_active: true,
+        }),
+      });
+      const data = await res.json();
+      if (data.status === "success") {
+        setSchedStatusMessage("Schedule configured successfully!");
+        setSchedStatusSuccess(true);
+        setSchedRecipients("");
+        setSchedStartDate("");
+        setSchedEndDate("");
+        fetchSchedules();
+      } else {
+        setSchedStatusMessage(data.detail || "Failed to save schedule configuration.");
+        setSchedStatusSuccess(false);
+      }
+    } catch (e) {
+      setSchedStatusMessage("Error transmitting scheduling request.");
+      setSchedStatusSuccess(false);
+    }
+    setSchedIsCreating(false);
+  };
+
+  const handleToggleSchedule = async (scheduleId: string) => {
+    try {
+      const res = await fetch(`${API}/api/schedules/${scheduleId}/toggle`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data.status === "success") {
+        fetchSchedules();
+      } else {
+        alert(data.detail || "Could not toggle schedule status.");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Failed to toggle schedule.");
+    }
+  };
+
+  const handleRunScheduleNow = async (scheduleId: string) => {
+    try {
+      const res = await fetch(`${API}/api/schedules/${scheduleId}/run`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      alert(data.message || "Manual run initiated.");
+    } catch (e) {
+      console.error(e);
+      alert("Failed to run schedule manually.");
+    }
+  };
+
+  const handleDeleteSchedule = async (scheduleId: string) => {
+    if (!confirm("Are you sure you want to delete this schedule?")) return;
+    try {
+      const res = await fetch(`${API}/api/schedules/${scheduleId}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (data.status === "success") {
+        fetchSchedules();
+      } else {
+        alert(data.detail || "Could not delete schedule.");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Failed to delete schedule.");
+    }
+  };
+
   const fetchStationRecipients = useCallback(async () => {
     try {
       const res = await fetch(`${API}/api/station-recipients`);
@@ -382,13 +533,14 @@ export default function Dashboard() {
     }
   }, [orgUsers.length]);
 
-  // Fetch org users and station recipients when admin section is activated
+  // Fetch org users, station recipients, and schedules when admin section is activated
   useEffect(() => {
     if (activeSection === "admin") {
       fetchOrgUsers();
       fetchStationRecipients();
+      fetchSchedules();
     }
-  }, [activeSection, fetchOrgUsers, fetchStationRecipients]);
+  }, [activeSection, fetchOrgUsers, fetchStationRecipients, fetchSchedules]);
 
   const [standardRecords, setStandardRecords] = useState<any[]>([]);
   const [standardWeeklyData, setStandardWeeklyData] = useState<any[]>([]);
@@ -1318,6 +1470,59 @@ ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
   const totalTop10Tonnage = top10Airlines.reduce((sum, item) => sum + item.tonnage, 0);
   const top10AirlinesNames = top10Airlines.map(a => a.name);
 
+  // Process week-by-week stacked airline tonnage share (used in Monthly Reports tab)
+  const getWeeklyStackedAirlineData = () => {
+    const topAirlines = getAirlineWiseData().map(a => a.name);
+    const weekMap: { [key: string]: { week_label: string; sortKey: string; [key: string]: any } } = {};
+
+    data.forEach((r: any) => {
+      const etdVal = r.ETD ?? r.etd ?? r.etd_date;
+      // Also handle Month/Year columns from monthly SQL (no ETD)
+      let sortKey: string;
+      let weekLabel: string;
+
+      if (etdVal) {
+        const date = new Date(etdVal);
+        if (isNaN(date.getTime())) return;
+        const td = new Date(date.valueOf());
+        td.setHours(0, 0, 0, 0);
+        td.setDate(td.getDate() + 3 - (td.getDay() + 6) % 7);
+        const w1 = new Date(td.getFullYear(), 0, 4);
+        const wn = 1 + Math.round(((td.valueOf() - w1.valueOf()) / 86400000 - 3 + (w1.getDay() + 6) % 7) / 7);
+        const yr = date.getFullYear();
+        sortKey = `${yr}-${String(wn).padStart(2, '0')}`;
+        weekLabel = `W${wn} '${String(yr).slice(-2)}`;
+      } else {
+        // Fallback: if SQL returns Year+Month columns but no ETD, group by month as a fallback
+        const yr = r.Year ?? r.year;
+        const mo = r.Month ?? r.month;
+        if (!yr || !mo) return;
+        sortKey = `${yr}-${String(mo).padStart(2, '0')}`;
+        const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        weekLabel = `${monthNames[(mo as number) - 1]} '${String(yr).slice(-2)}`;
+      }
+
+      const carrier = r.Airline ?? r.AirlineName1 ?? r.carrier ?? 'Unknown Carrier';
+      const ton = Number(r.Total_Tonnage ?? r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.tonnage ?? 0);
+
+      if (!weekMap[sortKey]) {
+        weekMap[sortKey] = { week_label: weekLabel, sortKey };
+        topAirlines.forEach((airlineName) => { weekMap[sortKey][airlineName] = 0; });
+        weekMap[sortKey]['Others'] = 0;
+      }
+
+      if (topAirlines.includes(carrier)) {
+        weekMap[sortKey][carrier] = (weekMap[sortKey][carrier] || 0) + ton;
+      } else {
+        weekMap[sortKey]['Others'] = (weekMap[sortKey]['Others'] || 0) + ton;
+      }
+    });
+
+    return Object.values(weekMap).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+  };
+
+  const weeklyStackedAirlineData = getWeeklyStackedAirlineData();
+
   // Airline × Week stacked data — each row = one airline, each column = a week period
   const getAirlineWeeklyStackData = () => {
     const topAirlines = getAirlineWiseData().slice(0, 10).map(a => a.name);
@@ -1496,6 +1701,9 @@ ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
         include_monthly_ledger: "false",
         max_data_rows: "100",
       });
+      if (countryParam) params.append("country", countryParam);
+      if (companyCodeParam) params.append("company_code", companyCodeParam);
+      if (branchParam) params.append("branch", branchParam);
       if (cachedQueryId) {
         params.append("query_id", cachedQueryId);
       } else {
@@ -2690,60 +2898,269 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                 {/* ── RIGHT COL: Scheduling + Info ── */}
                 <div className="col-span-12 lg:col-span-5 space-y-6">
 
-                  {/* Scheduling Placeholder */}
-                  <div className="admin-card p-6 relative overflow-hidden">
-                    <div className="flex items-center justify-between mb-5 pb-4 border-b border-[#EDF2F7]">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center">
-                          <Clock className="w-4 h-4 text-violet-500" />
-                        </div>
-                        <div>
-                          <h3 className="text-sm font-bold text-[#1A202C]">Email Scheduling</h3>
-                          <p className="text-[10.5px] text-slate-400">Automate periodic report dispatch</p>
-                        </div>
-                      </div>
-                      <span className="text-[9px] font-black text-violet-700 bg-violet-100 px-2 py-1 rounded-full uppercase tracking-wider">Coming Soon</span>
-                    </div>
-
-                    {/* Greyed-out schedule options */}
-                    <div className="space-y-3 opacity-50 pointer-events-none">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Frequency</p>
-                      {["Daily", "Weekly", "Monthly"].map((freq) => (
-                        <div
-                          key={freq}
-                          className={`flex items-center justify-between p-3 rounded-xl border text-xs font-semibold ${schedulePlaceholder.toLowerCase() === freq.toLowerCase()
-                            ? "bg-violet-50 border-violet-200 text-violet-800"
-                            : "bg-slate-50 border-slate-200 text-slate-500"
-                            }`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <div className={`w-3.5 h-3.5 rounded-full border-2 ${schedulePlaceholder.toLowerCase() === freq.toLowerCase() ? "border-violet-500 bg-violet-500" : "border-slate-300"
-                              }`} />
-                            {freq}
+                  {/* Integrated Web Scheduler Card */}
+                  <div className="admin-card p-6 bg-white border border-slate-200 rounded-xl shadow-sm relative overflow-hidden flex flex-col justify-between">
+                    <div>
+                      {/* Card Header */}
+                      <div className="flex items-center justify-between mb-5 pb-4 border-b border-[#EDF2F7]">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center">
+                            <Clock className="w-4 h-4 text-violet-500" />
                           </div>
-                          <span className="text-[10px] text-slate-400">
-                            {freq === "Daily" ? "Every day at 8:00 AM" : freq === "Weekly" ? "Every Monday 8:00 AM" : "1st of month 8:00 AM"}
-                          </span>
+                          <div>
+                            <h3 className="text-sm font-bold text-[#1A202C]">Email Scheduling</h3>
+                            <p className="text-[10.5px] text-slate-400">Automate periodic report dispatch</p>
+                          </div>
                         </div>
-                      ))}
-                      <div className="mt-4 p-3 bg-slate-50 border border-dashed border-slate-300 rounded-xl">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Send Time (UTC+5:30)</p>
-                        <div className="h-8 bg-white border border-slate-200 rounded-lg coming-soon-shimmer" />
                       </div>
-                      <div className="p-3 bg-slate-50 border border-dashed border-slate-300 rounded-xl">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Default Recipients</p>
-                        <div className="h-8 bg-white border border-slate-200 rounded-lg coming-soon-shimmer" />
-                      </div>
-                    </div>
 
-                    {/* Overlay shimmer hint */}
-                    <div className="absolute bottom-4 left-0 right-0 flex justify-center">
-                      <p className="text-[10px] text-slate-400 font-semibold bg-white/80 px-3 py-1 rounded-full border border-slate-200 backdrop-blur-sm">
-                        🔒 Scheduling configuration coming in next release
-                      </p>
+                      {/* Scheduler Tab Selector */}
+                      <div className="flex border-b border-slate-100 mb-4 text-xs font-semibold">
+                        <button
+                          onClick={() => setSchedActiveTab("list")}
+                          className={`pb-2 px-3 border-b-2 transition-all ${schedActiveTab === "list" ? "border-violet-500 text-violet-600 font-bold" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+                        >
+                          Active Schedules ({schedules.length})
+                        </button>
+                        <button
+                          onClick={() => setSchedActiveTab("create")}
+                          className={`pb-2 px-3 border-b-2 transition-all ${schedActiveTab === "create" ? "border-violet-500 text-violet-600 font-bold" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+                        >
+                          Configure New
+                        </button>
+                      </div>
+
+                      {/* Tab 1: Schedules List */}
+                      {schedActiveTab === "list" && (
+                        <div className="space-y-3 pr-1">
+                          {schedulerLoading ? (
+                            <div className="flex flex-col gap-2">
+                              <Skeleton className="h-20 w-full bg-slate-50" />
+                              <Skeleton className="h-20 w-full bg-slate-50" />
+                            </div>
+                          ) : schedules.length === 0 ? (
+                            <div className="text-center py-8 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                              <p className="text-[11px] text-slate-400 font-medium italic">No schedules configured yet.</p>
+                              <button
+                                onClick={() => setSchedActiveTab("create")}
+                                className="mt-2 text-[10px] text-violet-600 font-bold hover:underline"
+                              >
+                                Create one now
+                              </button>
+                            </div>
+                          ) : (
+                            schedules.map((s) => {
+                              const filters = s.filters || {};
+                              const stationLabel = filters.company_code ? `${filters.country} (${filters.company_code})` : "Global (All)";
+                              
+                              let triggerDesc = "";
+                              if (s.frequency === "weekly") {
+                                const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+                                triggerDesc = `Weekly on ${days[s.day_of_week] || "Monday"} at ${s.time_of_day}`;
+                              } else if (s.frequency === "monthly") {
+                                triggerDesc = `Monthly on day ${s.day_of_month} at ${s.time_of_day}`;
+                              } else {
+                                triggerDesc = `Daily at ${s.time_of_day}`;
+                              }
+
+                              return (
+                                <div key={s.id} className="p-3 bg-slate-50 border border-slate-200 rounded-xl hover:bg-slate-100/50 transition-colors flex flex-col justify-between gap-2.5">
+                                  <div className="flex justify-between items-start gap-2">
+                                    <div>
+                                      <h4 className="text-xs font-bold text-slate-800">{stationLabel}</h4>
+                                      <p className="text-[10px] font-semibold text-slate-400 mt-0.5">{triggerDesc}</p>
+                                      {filters.start_date && filters.end_date && (
+                                        <div className="text-[9px] font-bold text-violet-600 mt-1 flex items-center gap-1">
+                                          📅 Range: {filters.start_date} to {filters.end_date}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase ${s.is_active ? "text-emerald-700 bg-emerald-100" : "text-slate-500 bg-slate-200"}`}>
+                                      {s.is_active ? "Active" : "Paused"}
+                                    </span>
+                                  </div>
+
+                                  <div className="text-[9px] text-slate-400 bg-white border border-slate-200/60 p-1.5 rounded-lg max-h-12 overflow-y-auto">
+                                    <span className="font-bold text-slate-500">Recipients:</span> {s.recipient_email}
+                                  </div>
+
+                                  <div className="flex justify-between items-center border-t border-slate-200/60 pt-2 mt-1">
+                                    <button
+                                      onClick={() => handleToggleSchedule(s.id)}
+                                      className={`text-[9.5px] font-bold px-2 py-1 rounded transition-colors ${s.is_active ? "text-amber-700 bg-amber-50 hover:bg-amber-100" : "text-emerald-700 bg-emerald-50 hover:bg-emerald-100"}`}
+                                    >
+                                      {s.is_active ? "Pause" : "Activate"}
+                                    </button>
+                                    
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        onClick={() => handleRunScheduleNow(s.id)}
+                                        className="p-1 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-colors"
+                                        title="Run Schedule Now"
+                                      >
+                                        <Play className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteSchedule(s.id)}
+                                        className="p-1 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 transition-colors"
+                                        title="Delete"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      )}
+
+                      {/* Tab 2: Create Schedule Form */}
+                      {schedActiveTab === "create" && (
+                        <div className="space-y-4 text-xs">
+                          {/* Station filter mapping */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Target Station</label>
+                            <select
+                              value={schedStation}
+                              onChange={(e) => setSchedStation(e.target.value)}
+                              className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
+                            >
+                              <option value="Global">Global (All Stations)</option>
+                              <option value="CMB">Sri Lanka (CMB)</option>
+                              <option value="IND">India (IND)</option>
+                              <option value="VNM">Viet Nam (VNM)</option>
+                              <option value="DAC">Bangladesh (DAC)</option>
+                              <option value="PKI">Pakistan (PKI)</option>
+                              <option value="NYC">United States (NYC)</option>
+                            </select>
+                          </div>
+
+                          {/* Frequency */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Frequency</label>
+                            <div className="flex gap-2">
+                              {["weekly", "monthly", "daily"].map((freq) => (
+                                <button
+                                  key={freq}
+                                  type="button"
+                                  onClick={() => setSchedFrequency(freq as any)}
+                                  className={`flex-1 py-1.5 rounded-lg border text-center font-bold capitalize transition-colors ${schedFrequency === freq ? "bg-violet-50 border-violet-200 text-violet-800" : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"}`}
+                                >
+                                  {freq}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Day selection based on frequency */}
+                          {schedFrequency === "weekly" && (
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Day of Week</label>
+                              <select
+                                value={schedDayOfWeek}
+                                onChange={(e) => setSchedDayOfWeek(parseInt(e.target.value))}
+                                className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
+                              >
+                                <option value={0}>Monday</option>
+                                <option value={1}>Tuesday</option>
+                                <option value={2}>Wednesday</option>
+                                <option value={3}>Thursday</option>
+                                <option value={4}>Friday</option>
+                                <option value={5}>Saturday</option>
+                                <option value={6}>Sunday</option>
+                              </select>
+                            </div>
+                          )}
+
+                          {schedFrequency === "monthly" && (
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Day of Month</label>
+                              <select
+                                value={schedDayOfMonth}
+                                onChange={(e) => setSchedDayOfMonth(parseInt(e.target.value))}
+                                className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
+                              >
+                                {Array.from({ length: 28 }, (_, i) => i + 1).map((day) => (
+                                  <option key={day} value={day}>Day {day}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+
+                          {/* Time */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Send Time (24h Local)</label>
+                            <Input
+                              type="time"
+                              value={schedTime}
+                              onChange={(e) => setSchedTime(e.target.value)}
+                              className="h-8 bg-slate-50 border-[#E2E8F0] rounded-lg text-slate-700 [color-scheme:light] font-semibold"
+                            />
+                          </div>
+
+                          {/* Custom date range (Optional) */}
+                          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Custom Date Range (Optional)</span>
+                              <span className="text-[8px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-black uppercase tracking-wider">Overrides Relative Period</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-[9px] font-bold text-slate-450 uppercase tracking-wider mb-1">Start Date</label>
+                                <Input
+                                  type="date"
+                                  value={schedStartDate}
+                                  onChange={(e) => setSchedStartDate(e.target.value)}
+                                  className="h-8 text-xs bg-white border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[9px] font-bold text-slate-450 uppercase tracking-wider mb-1">End Date</label>
+                                <Input
+                                  type="date"
+                                  value={schedEndDate}
+                                  onChange={(e) => setSchedEndDate(e.target.value)}
+                                  className="h-8 text-xs bg-white border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Recipients list */}
+                          <div>
+                            <div className="flex justify-between items-center mb-1">
+                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Recipients (comma-separated)</label>
+                            </div>
+                            <Input
+                              type="text"
+                              value={schedRecipients}
+                              onChange={(e) => setSchedRecipients(e.target.value)}
+                              placeholder="shashini.hq@dartglobal.com, user2@domain.com"
+                              className="h-8 bg-slate-50 border-[#E2E8F0] rounded-lg text-slate-700 text-xs"
+                            />
+                          </div>
+
+                          {/* Feedback status banner */}
+                          {schedStatusMessage && (
+                            <div className={`p-2 rounded-lg text-[10px] font-bold border ${schedStatusSuccess ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-rose-50 border-rose-200 text-rose-700"}`}>
+                              {schedStatusMessage}
+                            </div>
+                          )}
+
+                          {/* Submit */}
+                          <Button
+                            onClick={handleCreateSchedule}
+                            disabled={schedIsCreating}
+                            className="w-full h-9 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5"
+                          >
+                            {schedIsCreating ? "Saving Schedule..." : "Save Schedule"}
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   </div>
-
 
                 </div>
               </div>
@@ -2926,64 +3343,72 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                           <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest text-[#4299E1]">Airlines Share</p>
                           <h4 className="text-sm font-bold text-slate-800 mt-0.5">Top 10 Airlines Tonnage Share</h4>
                         </div>
-                        <span className="text-xs font-bold text-indigo-600 px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-100">
-                          Day-by-Day Stack
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
+                          activeSection === "monthly-reports"
+                            ? "text-emerald-700 bg-emerald-50 border-emerald-100"
+                            : "text-indigo-600 bg-indigo-50 border-indigo-100"
+                        }`}>
+                          {activeSection === "monthly-reports" ? "Week-by-Week Stack" : "Day-by-Day Stack"}
                         </span>
                       </div>
 
                       <div className="h-64 w-full mt-2">
-                        {loading ? (
-                          <Skeleton className="h-full w-full rounded bg-slate-150 animate-pulse" />
-                        ) : dailyStackedAirlineData.length === 0 ? (
-                          <div className="h-full flex items-center justify-center text-xs text-slate-400">
-                            No carrier data available
-                          </div>
-                        ) : (
-                          <ResponsiveContainer width="100%" height="100%">
-                            <BarChart
-                              data={dailyStackedAirlineData}
-                              margin={{ top: 5, right: 10, left: 10, bottom: dailyStackedAirlineData.length > 10 ? 40 : 20 }}
-                            >
-                              <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} horizontal={true} />
-                              <XAxis
-                                dataKey="date_label"
-                                type="category"
-                                tick={{ fontSize: 8, fill: "#4A5568", fontWeight: 600 }}
-                                axisLine={{ stroke: "#E2E8F0" }}
-                                tickLine={false}
-                                interval={dailyStackedAirlineData.length > 14 ? Math.floor(dailyStackedAirlineData.length / 14) : 0}
-                                angle={dailyStackedAirlineData.length > 8 ? -35 : 0}
-                                textAnchor={dailyStackedAirlineData.length > 8 ? "end" : "middle"}
-                              />
-                              <YAxis
-                                type="number"
-                                tick={{ fontSize: 8, fill: "#A0AEC0" }}
-                                axisLine={false}
-                                tickLine={false}
-                                tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
-                                width={36}
-                              />
-                              <Tooltip
-                                contentStyle={{ fontSize: "10px", borderRadius: "6px" }}
-                                formatter={(value: any, name: any) => [`${Number(value).toLocaleString()} kg`, name]}
-                              />
-                              {top10AirlinesNames.map((airlineName, idx) => (
-                                <Bar
-                                  key={airlineName}
-                                  dataKey={airlineName}
-                                  stackId="airlines"
-                                  fill={getAirlineColor(airlineName, idx)}
+                        {(() => {
+                          const chartData = activeSection === "monthly-reports" ? weeklyStackedAirlineData : dailyStackedAirlineData;
+                          const xKey = activeSection === "monthly-reports" ? "week_label" : "date_label";
+                          return loading ? (
+                            <Skeleton className="h-full w-full rounded bg-slate-150 animate-pulse" />
+                          ) : chartData.length === 0 ? (
+                            <div className="h-full flex items-center justify-center text-xs text-slate-400">
+                              No carrier data available
+                            </div>
+                          ) : (
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart
+                                data={chartData}
+                                margin={{ top: 5, right: 10, left: 10, bottom: chartData.length > 10 ? 40 : 20 }}
+                              >
+                                <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} horizontal={true} />
+                                <XAxis
+                                  dataKey={xKey}
+                                  type="category"
+                                  tick={{ fontSize: 8, fill: "#4A5568", fontWeight: 600 }}
+                                  axisLine={{ stroke: "#E2E8F0" }}
+                                  tickLine={false}
+                                  interval={chartData.length > 14 ? Math.floor(chartData.length / 14) : 0}
+                                  angle={chartData.length > 8 ? -35 : 0}
+                                  textAnchor={chartData.length > 8 ? "end" : "middle"}
                                 />
-                              ))}
-                              <Bar
-                                key="Others"
-                                dataKey="Others"
-                                stackId="airlines"
-                                fill="#CBD5E0"
-                              />
-                            </BarChart>
-                          </ResponsiveContainer>
-                        )}
+                                <YAxis
+                                  type="number"
+                                  tick={{ fontSize: 8, fill: "#A0AEC0" }}
+                                  axisLine={false}
+                                  tickLine={false}
+                                  tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+                                  width={36}
+                                />
+                                <Tooltip
+                                  contentStyle={{ fontSize: "10px", borderRadius: "6px" }}
+                                  formatter={(value: any, name: any) => [`${Number(value).toLocaleString()} kg`, name]}
+                                />
+                                {top10AirlinesNames.map((airlineName, idx) => (
+                                  <Bar
+                                    key={airlineName}
+                                    dataKey={airlineName}
+                                    stackId="airlines"
+                                    fill={getAirlineColor(airlineName, idx)}
+                                  />
+                                ))}
+                                <Bar
+                                  key="Others"
+                                  dataKey="Others"
+                                  stackId="airlines"
+                                  fill="#CBD5E0"
+                                />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          );
+                        })()}
                       </div>
 
                       {/* Legends Grid (2-column layout for 10 items) */}

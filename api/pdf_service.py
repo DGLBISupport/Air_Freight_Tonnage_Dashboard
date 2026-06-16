@@ -53,6 +53,10 @@ def generate_dashboard_pdf(
             params["query_id"] = query_id
         elif custom_sql:
             params["custom_sql"] = custom_sql
+        # Pass station identification parameters to custom-sql mode to resolve correct title/labels
+        if country: params["country"] = country
+        if company_code: params["company_code"] = company_code
+        if branch: params["branch"] = branch
     else:
         # Standard mode - add date range and filters
         if start_date: params["start_date"] = start_date
