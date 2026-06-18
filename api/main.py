@@ -721,6 +721,24 @@ def send_report(req: ReportRequest):
             status_code=400,
             detail="PDF generation and email dispatch are not supported on Vercel serverless functions."
         )
+    
+    # Validate database configuration
+    db_server = os.getenv("DB_SERVER", "").strip()
+    db_user = os.getenv("DB_USER", "").strip()
+    db_password = os.getenv("DB_PASSWORD", "").strip()
+    
+    if not db_server or not db_user or not db_password:
+        missing = []
+        if not db_server:
+            missing.append("DB_SERVER")
+        if not db_user:
+            missing.append("DB_USER")
+        if not db_password:
+            missing.append("DB_PASSWORD")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Database not configured. Missing environment variables: {', '.join(missing)}. Please set these in Cloud Run."
+        )
         
     os.makedirs("outputs", exist_ok=True)
     temp_pdf_path = f"outputs/report_{uuid.uuid4().hex}.pdf"

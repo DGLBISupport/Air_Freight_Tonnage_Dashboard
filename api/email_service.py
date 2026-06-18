@@ -28,6 +28,22 @@ def send_pdf_via_graph(
     sender = os.getenv("SENDER_EMAIL")
     
     try:
+        # Validate required environment variables
+        missing_vars = []
+        if not tenant_id:
+            missing_vars.append("MAIL_AZURE_TENANT_ID or AZURE_TENANT_ID")
+        if not client_id:
+            missing_vars.append("MAIL_AZURE_CLIENT_ID or AZURE_CLIENT_ID")
+        if not client_secret:
+            missing_vars.append("MAIL_AZURE_CLIENT_SECRET or AZURE_CLIENT_SECRET")
+        if not sender:
+            missing_vars.append("SENDER_EMAIL")
+        
+        if missing_vars:
+            err = f"Missing environment variables: {', '.join(missing_vars)}. Please set these in Cloud Run environment variables."
+            log_email_transaction(recipient_email, "CONFIG_ERROR", err)
+            print(f"[ERROR] {err}")
+            raise Exception(err)
         # Authenticate with Azure
         app = ConfidentialClientApplication(client_id, authority=f"https://login.microsoftonline.com/{tenant_id}", client_credential=client_secret)
         result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
