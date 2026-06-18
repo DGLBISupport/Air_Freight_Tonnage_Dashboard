@@ -504,6 +504,110 @@ def fetch_org_users():
 
 
 
+# --- ENDPOINT 5.7: Diagnostics ---
+@app.get("/api/diagnose")
+def run_diagnostics():
+    """Runs a series of tests to verify Azure AD credentials, network connectivity, and database access."""
+    results = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "environment_variables": {},
+        "azure_auth_test": {},
+        "database_test": {},
+        "recent_logs": []
+    }
+    
+    # 1. Check environment variables
+    env_keys = [
+        "MAIL_AZURE_TENANT_ID", "MAIL_AZURE_CLIENT_ID", "MAIL_AZURE_CLIENT_SECRET", "SENDER_EMAIL",
+        "FETCH_AZURE_TENANT_ID", "FETCH_AZURE_CLIENT_ID", "FETCH_AZURE_CLIENT_SECRET",
+        "AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET",
+        "ONPREM_API_URL", "DB_SERVER", "DB_NAME", "DB_USER"
+    ]
+    for key in env_keys:
+        val = os.getenv(key)
+        if val:
+            # Mask the secret for security
+            if "SECRET" in key or "PASSWORD" in key:
+                results["environment_variables"][key] = f"Present (len={len(val)}, starts with {val[:3]}...)"
+            else:
+                results["environment_variables"][key] = f"Present ({val})"
+        else:
+            results["environment_variables"][key] = "Missing"
+            
+    # 2. Test Microsoft Entra (Azure AD) Client Credentials Flow for sending emails
+    tenant_id = os.getenv("MAIL_AZURE_TENANT_ID") or os.getenv("AZURE_TENANT_ID")
+    client_id = os.getenv("MAIL_AZURE_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
+    client_secret = os.getenv("MAIL_AZURE_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET")
+    
+    if not all([tenant_id, client_id, client_secret]):
+        results["azure_auth_test"]["status"] = "Skipped"
+        results["azure_auth_test"]["error"] = "Missing Azure credentials."
+    else:
+        try:
+            from msal import ConfidentialClientApplication
+            
+            app_msal = ConfidentialClientApplication(
+                client_id,
+                authority=f"https://login.microsoftonline.com/{tenant_id}",
+                client_credential=client_secret
+            )
+            token_res = app_msal.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
+            
+            if "access_token" in token_res:
+                results["azure_auth_test"]["status"] = "Success"
+                results["azure_auth_test"]["token_type"] = token_res.get("token_type")
+                results["azure_auth_test"]["details"] = "Acquired Entra ID access token successfully."
+            else:
+                results["azure_auth_test"]["status"] = "Failed"
+                results["azure_auth_test"]["error"] = token_res.get("error")
+                results["azure_auth_test"]["error_description"] = token_res.get("error_description")
+        except Exception as ex:
+            results["azure_auth_test"]["status"] = "Failed"
+            results["azure_auth_test"]["error"] = str(ex)
+            
+    # 3. Test Database Connectivity
+    onprem_url = os.getenv("ONPREM_API_URL")
+    if onprem_url:
+        try:
+            import requests as req_lib
+            resp = req_lib.post(onprem_url, json={"sql_query": "SELECT 1 AS test"}, timeout=5)
+            results["database_test"]["onprem_api"] = {
+                "status": "Success" if resp.status_code == 200 else f"Failed (HTTP {resp.status_code})",
+                "response_body": resp.text[:200]
+            }
+        except Exception as ex:
+            results["database_test"]["onprem_api"] = {
+                "status": "Failed",
+                "error": str(ex)
+            }
+    else:
+        results["database_test"]["onprem_api"] = "Not configured"
+        
+    try:
+        from api.database import get_engine
+        from sqlalchemy import text
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        results["database_test"]["direct_connection"] = "Success"
+    except Exception as ex:
+        results["database_test"]["direct_connection"] = f"Failed: {str(ex)}"
+        
+    # 4. Fetch the email history logs
+    log_file = "logs/email_history.log"
+    if os.path.exists(log_file):
+        try:
+            with open(log_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            results["recent_logs"] = [line.strip() for line in lines[-30:]]
+        except Exception as ex:
+            results["recent_logs"] = [f"Error reading log file: {str(ex)}"]
+    else:
+        results["recent_logs"] = ["Log file logs/email_history.log does not exist yet inside container."]
+        
+    return results
+
+
 # --- ENDPOINT 6: Trigger PDF Email ---
 @app.post("/api/send-report")
 def send_report(req: ReportRequest, background_tasks: BackgroundTasks):
