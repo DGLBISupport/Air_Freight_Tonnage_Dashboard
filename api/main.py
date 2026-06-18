@@ -34,8 +34,7 @@ from api.database import (
 )
 from api.pdf_service import generate_dashboard_pdf
 from api.email_service import send_pdf_via_graph
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
+from api.cloud_scheduler_service import sync_schedule_to_cloud, delete_cloud_scheduler_job
 from api.scheduler_db import (
     init_scheduler_db,
     save_schedule,
@@ -46,9 +45,6 @@ from api.scheduler_db import (
 )
 import json
 import datetime
-
-# Create background scheduler
-scheduler = AsyncIOScheduler()
 
 app = FastAPI(title="Tonnage Reporting API")
 
@@ -602,11 +598,11 @@ def get_report_dates_by_frequency(frequency: str):
 
 
 def execute_scheduled_report_job(schedule_id: str):
-    """Fired by APScheduler to generate and email a scheduled report."""
-    print(f"APScheduler: Starting report execution for schedule {schedule_id}")
+    """Generates and emails a scheduled report. Triggered by Google Cloud Scheduler via HTTP."""
+    print(f"Scheduler: Starting report execution for schedule {schedule_id}")
     config = get_schedule(schedule_id)
     if not config or not config.get("is_active"):
-        print(f"APScheduler: Schedule {schedule_id} is inactive or does not exist. Aborting job.")
+        print(f"Scheduler: Schedule {schedule_id} is inactive or does not exist. Aborting.")
         return
         
     recipient_email = config["recipient_email"]
@@ -750,11 +746,11 @@ ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
             body=body,
             attachment_name=attachment_name
         )
-        print(f"APScheduler: Successfully sent report for schedule {schedule_id}")
+        print(f"Scheduler: Successfully sent report for schedule {schedule_id}")
     except Exception as e:
         from api.email_service import log_email_transaction
         log_email_transaction(recipient_email, "SCHEDULED_JOB_ERROR", str(e))
-        print(f"APScheduler: Job execution failed for schedule {schedule_id}: {str(e)}")
+        print(f"Scheduler: Job execution failed for schedule {schedule_id}: {str(e)}")
     finally:
         if os.path.exists(temp_pdf_path):
             try:
@@ -763,69 +759,20 @@ ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
                 pass
 
 
-def register_schedule_in_apscheduler(config: dict):
-    """Schedules or updates a cron job in APScheduler according to its DB config."""
-    job_id = config["id"]
-    
-    # Remove existing job if it is registered
-    if scheduler.get_job(job_id):
-        scheduler.remove_job(job_id)
-        
-    if not config["is_active"]:
-        return
-        
-    frequency = config["frequency"]
-    time_str = config["time_of_day"]
-    hour, minute = map(int, time_str.split(":"))
-    
-    trigger = None
-    if frequency == "weekly":
-        trigger = CronTrigger(day_of_week=config["day_of_week"], hour=hour, minute=minute)
-    elif frequency == "monthly":
-        trigger = CronTrigger(day=config["day_of_month"], hour=hour, minute=minute)
-    elif frequency == "daily":
-        trigger = CronTrigger(hour=hour, minute=minute)
-        
-    if trigger:
-        scheduler.add_job(
-            execute_scheduled_report_job,
-            trigger=trigger,
-            args=[job_id],
-            id=job_id,
-            max_instances=1,
-            replace_existing=True
-        )
-        print(f"APScheduler: Job {job_id} scheduled for {frequency} run at {time_str}")
-
-
-def load_active_jobs_into_scheduler():
-    """Initializes schedules from local SQLite and loads them as background tasks."""
-    schedules = get_all_schedules()
-    for s in schedules:
-        if s.get("is_active"):
-            try:
-                register_schedule_in_apscheduler(s)
-            except Exception as e:
-                print(f"APScheduler: Failed to load schedule {s.get('id')}: {e}")
+def _verify_scheduler_token(request_token: Optional[str]) -> bool:
+    """Verifies the X-Scheduler-Token header sent by Cloud Scheduler. Returns True if valid or if no secret is configured."""
+    secret = os.environ.get("SCHEDULER_SECRET_TOKEN", "")
+    if not secret:
+        return True  # No token configured — allow all calls
+    return request_token == secret
 
 
 @app.on_event("startup")
-def startup_scheduler():
+def startup_event():
+    """Initializes the local SQLite schedule database on startup."""
     print("FastAPI Startup: Initializing local SQLite database...")
     init_scheduler_db()
-    if not os.environ.get("VERCEL"):
-        print("FastAPI Startup: Starting background scheduler...")
-        load_active_jobs_into_scheduler()
-        scheduler.start()
-    else:
-        print("FastAPI Startup: Running on Vercel, background scheduler disabled.")
-
-
-@app.on_event("shutdown")
-def shutdown_scheduler():
-    if not os.environ.get("VERCEL"):
-        print("FastAPI Shutdown: Stopping background scheduler...")
-        scheduler.shutdown()
+    print("FastAPI Startup: Ready. Scheduling is handled by Google Cloud Scheduler.")
 
 
 
@@ -841,19 +788,19 @@ def api_list_schedules():
 
 @app.post("/api/schedules")
 def api_create_schedule(req: ScheduleCreateRequest):
-    """Registers a new schedule in SQLite and loads it into the running APScheduler."""
+    """Registers a new schedule in SQLite and creates a Google Cloud Scheduler job."""
     if req.frequency == "weekly" and req.day_of_week is None:
         raise HTTPException(status_code=400, detail="day_of_week is required for weekly schedules")
     if req.frequency == "monthly" and req.day_of_month is None:
         raise HTTPException(status_code=400, detail="day_of_month is required for monthly schedules")
-        
+
     try:
         hour, minute = map(int, req.time_of_day.split(":"))
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
             raise ValueError()
     except Exception:
         raise HTTPException(status_code=400, detail="time_of_day must be in 'HH:MM' 24-hour format")
-        
+
     try:
         schedule_id = str(uuid.uuid4())
         save_schedule(
@@ -864,13 +811,16 @@ def api_create_schedule(req: ScheduleCreateRequest):
             day_of_month=req.day_of_month,
             time_of_day=req.time_of_day,
             filters_dict=req.filters,
-            is_active=1 if req.is_active else 0
+            is_active=1 if req.is_active else 0,
         )
-        
+
         config = get_schedule(schedule_id)
         if config:
-            register_schedule_in_apscheduler(config)
-            
+            try:
+                sync_schedule_to_cloud(config)
+            except Exception as e:
+                print(f"Cloud Scheduler: Warning - could not sync schedule {schedule_id}: {e}")
+
         return {"status": "success", "message": "Schedule created successfully", "id": schedule_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -878,19 +828,22 @@ def api_create_schedule(req: ScheduleCreateRequest):
 
 @app.post("/api/schedules/{schedule_id}/toggle")
 def api_toggle_schedule(schedule_id: str):
-    """Enables or disables a report schedule, adding/removing it from the active scheduler."""
+    """Enables or disables a report schedule in SQLite and syncs the state to Google Cloud Scheduler."""
     config = get_schedule(schedule_id)
     if not config:
         raise HTTPException(status_code=404, detail="Schedule not found")
-        
+
     try:
         new_status = 0 if config["is_active"] else 1
         update_schedule_status(schedule_id, new_status)
-        
+
         updated_config = get_schedule(schedule_id)
         if updated_config:
-            register_schedule_in_apscheduler(updated_config)
-            
+            try:
+                sync_schedule_to_cloud(updated_config)
+            except Exception as e:
+                print(f"Cloud Scheduler: Warning - could not sync toggle for {schedule_id}: {e}")
+
         status_label = "activated" if new_status else "deactivated"
         return {"status": "success", "message": f"Schedule successfully {status_label}"}
     except Exception as e:
@@ -898,18 +851,30 @@ def api_toggle_schedule(schedule_id: str):
 
 
 @app.post("/api/schedules/{schedule_id}/run")
-def api_run_schedule_manually(schedule_id: str, background_tasks: BackgroundTasks):
-    """Immediately triggers the execution of a schedule, running it as a background task."""
+def api_run_schedule_manually(
+    schedule_id: str,
+    background_tasks: BackgroundTasks,
+    x_scheduler_token: Optional[str] = None,
+):
+    """
+    Triggers immediate execution of a schedule.
+    Called by:
+      - The UI 'Run Now' button (no token required)
+      - Google Cloud Scheduler at the configured cron time (sends X-Scheduler-Token header)
+    """
+    # If a token is present in the request (i.e., called by Cloud Scheduler), verify it
+    if x_scheduler_token is not None and not _verify_scheduler_token(x_scheduler_token):
+        raise HTTPException(status_code=403, detail="Invalid scheduler token.")
+
     config = get_schedule(schedule_id)
     if not config:
         raise HTTPException(status_code=404, detail="Schedule not found")
-        
-    if os.environ.get("VERCEL"):
-        raise HTTPException(
-            status_code=400,
-            detail="Scheduled report execution is not supported on Vercel because Playwright Chromium is unavailable in serverless environments. Please deploy on Render or a VPS to use email capabilities."
-        )
-        
+
+    # When triggered by Cloud Scheduler, still check the schedule is active
+    if x_scheduler_token is not None and not config.get("is_active"):
+        print(f"Cloud Scheduler: Schedule {schedule_id} is inactive. Skipping.")
+        return {"status": "skipped", "message": "Schedule is currently inactive."}
+
     try:
         background_tasks.add_task(execute_scheduled_report_job, schedule_id)
         return {"status": "success", "message": "Report generation and email dispatch started."}
@@ -920,11 +885,13 @@ def api_run_schedule_manually(schedule_id: str, background_tasks: BackgroundTask
 
 @app.delete("/api/schedules/{schedule_id}")
 def api_delete_schedule(schedule_id: str):
-    """Deletes a schedule from both SQLite and APScheduler."""
+    """Deletes a schedule from SQLite and removes its Google Cloud Scheduler job."""
     try:
         delete_schedule(schedule_id)
-        if scheduler.get_job(schedule_id):
-            scheduler.remove_job(schedule_id)
+        try:
+            delete_cloud_scheduler_job(schedule_id)
+        except Exception as e:
+            print(f"Cloud Scheduler: Warning - could not delete job for {schedule_id}: {e}")
         return {"status": "success", "message": "Schedule deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
