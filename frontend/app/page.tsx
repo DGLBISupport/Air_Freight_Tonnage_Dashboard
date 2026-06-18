@@ -580,18 +580,18 @@ SELECT
     vt.AirlineName1 AS Airline,
     vt.ConsolTransportMode AS Transport_Mode,
     vt.ETD,
-    vt.ConLoadPortCountryName AS Origin_Country,
-    COALESCE(MAX(vs.OriginCity), 'N/A') AS Origin_City,
-    COALESCE(MAX(vs.DestCity), 'N/A') AS Destination_City,
-    COALESCE(MAX(vs.DestCountry), 'N/A') AS Destination_Country,
+    COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
+    COALESCE(vt.RealLoadPortCity, 'N/A') AS Origin_City,
+    COALESCE(vt.RealDisChargePortCountryName, 'N/A') AS Destination_City,
+    COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_Country,
     COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
     COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
-    ROUND(vt.Air_ChargebleWeight, 2) AS Tonnage_Chargeable,
-    ROUND(vt.Air_ActualWeight, 2) AS Tonnage_Actual,
-    ROUND(vt.Revenue_USD, 2) AS Revenue_USD,
-    ROUND(vt.Cost_USD, 2) AS Cost_USD,
-    ROUND(vt.Profit_USD, 2) AS Profit_USD,
-    ROUND((vt.Profit_USD / NULLIF(vt.Revenue_USD, 0)) * 100, 2) AS GP_Margin_Percent
+    ROUND(SUM(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
+    ROUND(SUM(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
+    ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
+    ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
+    ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
+    ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent
 FROM dbo.ChatData_ViewShipConsolTransport vt
 LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc
     ON vsc.Link_ConsolNumber = vt.ConsoleNumber
@@ -601,11 +601,14 @@ WHERE vt.ConLoadPortCountryName = 'Viet Nam'
     AND vt.ETD >= '2026-06-01'
     AND vt.ETD <= '2026-06-07'
     AND vt.TransportMode = 'AIR'
+    AND vs.Company = 'VNM'
 GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
-         vt.ConsolTransportMode, vt.ETD, vt.ConLoadPortCountryName,
-         vt.Air_ChargebleWeight, vt.Air_ActualWeight,
-         vt.Revenue_USD, vt.Cost_USD, vt.Profit_USD
-ORDER BY vt.ETD DESC, vt.Revenue_USD DESC`);
+         vt.ConsolTransportMode, vt.ETD, 
+         COALESCE(vt.RealLoadPortCountryName, 'N/A'),
+         COALESCE(vt.RealLoadPortCity, 'N/A'),
+         COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
+         COALESCE(vt.RealDisChargePortCity, 'N/A')
+ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
 
   const [weeklySqlRecords, setWeeklySqlRecords] = useState<any[]>([]);
   const [weeklySqlWeeklyData, setWeeklySqlWeeklyData] = useState<any[]>([]);
@@ -625,7 +628,7 @@ WITH ConsolBase AS (
         YEAR(vt.ETD) AS Year,
         MONTH(vt.ETD) AS Month,
         vt.AirlineName1 AS Airline,
-        vt.ConLoadPortCountryName AS Origin_Country,
+        COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
         vt.Air_ChargebleWeight,
         vt.Revenue_USD,
         vt.Cost_USD,
@@ -638,6 +641,7 @@ WITH ConsolBase AS (
         AND vt.ETD >= '2026-06-01'
         AND vt.ETD <= '2026-06-07'
         AND vt.TransportMode = 'AIR'
+        AND vs.Company = 'VNM'
 )
 SELECT
     Year,
@@ -1214,18 +1218,18 @@ SELECT
     vt.AirlineName1 AS Airline,
     vt.ConsolTransportMode AS Transport_Mode,
     vt.ETD,
-    vt.ConLoadPortCountryName AS Origin_Country,
-    COALESCE(MAX(vs.OriginCity), 'N/A') AS Origin_City,
-    COALESCE(MAX(vs.DestCity), 'N/A') AS Destination_City,
-    COALESCE(MAX(vs.DestCountry), 'N/A') AS Destination_Country,
+    COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
+    COALESCE(vt.RealLoadPortCity, 'N/A') AS Origin_City,
+    COALESCE(vt.RealDisChargePortCountryName, 'N/A') AS Destination_City,
+    COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_Country,
     COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
     COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
-    ROUND(vt.Air_ChargebleWeight, 2) AS Tonnage_Chargeable,
-    ROUND(vt.Air_ActualWeight, 2) AS Tonnage_Actual,
-    ROUND(vt.Revenue_USD, 2) AS Revenue_USD,
-    ROUND(vt.Cost_USD, 2) AS Cost_USD,
-    ROUND(vt.Profit_USD, 2) AS Profit_USD,
-    ROUND((vt.Profit_USD / NULLIF(vt.Revenue_USD, 0)) * 100, 2) AS GP_Margin_Percent
+    ROUND(SUM(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
+    ROUND(SUM(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
+    ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
+    ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
+    ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
+    ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent
 FROM dbo.ChatData_ViewShipConsolTransport vt
 LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc ON vsc.Link_ConsolNumber = vt.ConsoleNumber
 LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs ON vs.ShipmentNumber = vsc.Link_ShipmentNum
@@ -1233,8 +1237,17 @@ WHERE vt.ETD >= '${startDate}'
     AND vt.ETD <= '${endDate}'
     AND vt.TransportMode = 'AIR'
     AND vs.Company NOT IN (${knownCompanies})
-GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1, vt.ConsolTransportMode, vt.ETD, vt.ConLoadPortCountryName, vt.Air_ChargebleWeight, vt.Air_ActualWeight, vt.Revenue_USD, vt.Cost_USD, vt.Profit_USD
-ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
+GROUP BY
+    vt.ConsoleNumber,
+    vt.MasterBillNum,
+    vt.AirlineName1,
+    vt.ConsolTransportMode,
+    vt.ETD,
+    COALESCE(vt.RealLoadPortCountryName, 'N/A'),
+    COALESCE(vt.RealLoadPortCity, 'N/A'),
+    COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
+    COALESCE(vt.RealDisChargePortCity, 'N/A')
+ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         `.trim();
       } else {
         formattedSql = `
@@ -1244,18 +1257,18 @@ SELECT
     vt.AirlineName1 AS Airline,
     vt.ConsolTransportMode AS Transport_Mode,
     vt.ETD,
-    vt.ConLoadPortCountryName AS Origin_Country,
-    COALESCE(MAX(vs.OriginCity), 'N/A') AS Origin_City,
-    COALESCE(MAX(vs.DestCity), 'N/A') AS Destination_City,
-    COALESCE(MAX(vs.DestCountry), 'N/A') AS Destination_Country,
+    COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
+    COALESCE(vt.RealLoadPortCity, 'N/A') AS Origin_City,
+    COALESCE(vt.RealDisChargePortCountryName, 'N/A') AS Destination_City,
+    COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_Country,
     COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
     COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
-    ROUND(vt.Air_ChargebleWeight, 2) AS Tonnage_Chargeable,
-    ROUND(vt.Air_ActualWeight, 2) AS Tonnage_Actual,
-    ROUND(vt.Revenue_USD, 2) AS Revenue_USD,
-    ROUND(vt.Cost_USD, 2) AS Cost_USD,
-    ROUND(vt.Profit_USD, 2) AS Profit_USD,
-    ROUND((vt.Profit_USD / NULLIF(vt.Revenue_USD, 0)) * 100, 2) AS GP_Margin_Percent
+    ROUND(SUM(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
+    ROUND(SUM(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
+    ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
+    ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
+    ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
+    ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent
 FROM dbo.ChatData_ViewShipConsolTransport vt
 LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc ON vsc.Link_ConsolNumber = vt.ConsoleNumber
 LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs ON vs.ShipmentNumber = vsc.Link_ShipmentNum
@@ -1264,8 +1277,17 @@ WHERE vt.ConLoadPortCountryName = '${country}'
     AND vt.ETD <= '${endDate}'
     AND vt.TransportMode = 'AIR'
     AND vs.Company = '${stationCode}'
-GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1, vt.ConsolTransportMode, vt.ETD, vt.ConLoadPortCountryName, vt.Air_ChargebleWeight, vt.Air_ActualWeight, vt.Revenue_USD, vt.Cost_USD, vt.Profit_USD
-ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
+GROUP BY
+    vt.ConsoleNumber,
+    vt.MasterBillNum,
+    vt.AirlineName1,
+    vt.ConsolTransportMode,
+    vt.ETD,
+    COALESCE(vt.RealLoadPortCountryName, 'N/A'),
+    COALESCE(vt.RealLoadPortCity, 'N/A'),
+    COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
+    COALESCE(vt.RealDisChargePortCity, 'N/A')
+ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         `.trim();
       }
 
@@ -1479,7 +1501,7 @@ ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
   // Process week-by-week stacked airline tonnage share (used in Monthly Reports tab)
   const getWeeklyStackedAirlineData = () => {
     const topAirlines = getAirlineWiseData().map(a => a.name);
-    const weekMap: { [key: string]: { week_label: string; sortKey: string; [key: string]: any } } = {};
+    const weekMap: { [key: string]: { week_label: string; sortKey: string;[key: string]: any } } = {};
 
     data.forEach((r: any) => {
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
@@ -1504,7 +1526,7 @@ ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
         const mo = r.Month ?? r.month;
         if (!yr || !mo) return;
         sortKey = `${yr}-${String(mo).padStart(2, '0')}`;
-        const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
         weekLabel = `${monthNames[(mo as number) - 1]} '${String(yr).slice(-2)}`;
       }
 
@@ -2062,18 +2084,18 @@ SELECT
     vt.AirlineName1 AS Airline,
     vt.ConsolTransportMode AS Transport_Mode,
     vt.ETD,
-    vt.ConLoadPortCountryName AS Origin_Country,
-    COALESCE(MAX(vs.OriginCity), 'N/A') AS Origin_City,
-    COALESCE(MAX(vs.DestCity), 'N/A') AS Destination_City,
-    COALESCE(MAX(vs.DestCountry), 'N/A') AS Destination_Country,
+    COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
+    COALESCE(vt.RealLoadPortCity, 'N/A') AS Origin_City,
+    COALESCE(vt.RealDisChargePortCountryName, 'N/A') AS Destination_City,
+    COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_Country,
     COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
     COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
-    ROUND(vt.Air_ChargebleWeight, 2) AS Tonnage_Chargeable,
-    ROUND(vt.Air_ActualWeight, 2) AS Tonnage_Actual,
-    ROUND(vt.Revenue_USD, 2) AS Revenue_USD,
-    ROUND(vt.Cost_USD, 2) AS Cost_USD,
-    ROUND(vt.Profit_USD, 2) AS Profit_USD,
-    ROUND((vt.Profit_USD / NULLIF(vt.Revenue_USD, 0)) * 100, 2) AS GP_Margin_Percent
+    ROUND(SUM(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
+    ROUND(SUM(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
+    ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
+    ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
+    ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
+    ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent
 FROM dbo.ChatData_ViewShipConsolTransport vt
 LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc
     ON vsc.Link_ConsolNumber = vt.ConsoleNumber
@@ -2083,11 +2105,14 @@ WHERE vt.ConLoadPortCountryName = 'Viet Nam'
     AND vt.ETD >= '2026-06-01'
     AND vt.ETD <= '2026-06-07'
     AND vt.TransportMode = 'AIR'
+    AND vs.Company = 'VNM'
 GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
-         vt.ConsolTransportMode, vt.ETD, vt.ConLoadPortCountryName,
-         vt.Air_ChargebleWeight, vt.Air_ActualWeight,
-         vt.Revenue_USD, vt.Cost_USD, vt.Profit_USD
-ORDER BY vt.ETD DESC, vt.Revenue_USD DESC`);
+         vt.ConsolTransportMode, vt.ETD, 
+         COALESCE(vt.RealLoadPortCountryName, 'N/A'),
+         COALESCE(vt.RealLoadPortCity, 'N/A'),
+         COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
+         COALESCE(vt.RealDisChargePortCity, 'N/A')
+ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               } else {
                                 setCustomSqlText(`-- Write your own Monthly SQL query here!
 -- Pre-populated default Vietnam - Cargo Monthly Performance Rollup
@@ -2096,7 +2121,7 @@ WITH ConsolBase AS (
         YEAR(vt.ETD) AS Year,
         MONTH(vt.ETD) AS Month,
         vt.AirlineName1 AS Airline,
-        vt.ConLoadPortCountryName AS Origin_Country,
+        COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
         vt.Air_ChargebleWeight,
         vt.Revenue_USD,
         vt.Cost_USD,
@@ -2202,7 +2227,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                   </div>
                   <p className="text-sm text-slate-400">Manage report recipients, email dispatch, and system scheduling.</p>
                 </div>
-                
+
                 {/* Date range selector for report dispatches */}
                 <div className="flex items-center gap-3 bg-white p-3 rounded-xl border border-slate-200 shadow-sm shrink-0">
                   <div className="flex flex-col gap-1">
@@ -2958,7 +2983,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                             schedules.map((s) => {
                               const filters = s.filters || {};
                               const stationLabel = filters.company_code ? `${filters.country} (${filters.company_code})` : "Global (All)";
-                              
+
                               let triggerDesc = "";
                               if (s.frequency === "weekly") {
                                 const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -2997,7 +3022,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                                     >
                                       {s.is_active ? "Pause" : "Activate"}
                                     </button>
-                                    
+
                                     <div className="flex items-center gap-2">
                                       <button
                                         onClick={() => handleRunScheduleNow(s.id)}
@@ -3349,11 +3374,10 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                           <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest text-[#4299E1]">Airlines Share</p>
                           <h4 className="text-sm font-bold text-slate-800 mt-0.5">Top 10 Airlines Tonnage Share</h4>
                         </div>
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
-                          activeSection === "monthly-reports"
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${activeSection === "monthly-reports"
                             ? "text-emerald-700 bg-emerald-50 border-emerald-100"
                             : "text-indigo-600 bg-indigo-50 border-indigo-100"
-                        }`}>
+                          }`}>
                           {activeSection === "monthly-reports" ? "Week-by-Week Stack" : "Day-by-Day Stack"}
                         </span>
                       </div>

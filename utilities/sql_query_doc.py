@@ -7,39 +7,45 @@ def generate_sql_doc(output_path):
     -- Period: June 1, 2025 to May 21, 2026
     -- Linked through ChatData_ViewShipConsolLink
     -- INCLUDES consolidations without linked shipments in ChatData_ViewRevandVolume_ShipmentDate
-    
+
     SELECT
         vt.ConsoleNumber AS Console_Number,
         vt.MasterBillNum AS Master_Airway_Bill,
         vt.AirlineName1 AS Airline,
         vt.ConsolTransportMode AS Transport_Mode,
         vt.ETD,
-        vt.ConLoadPortCountryName AS Origin_Country,
-        COALESCE(MAX(vs.OriginCity), 'N/A') AS Origin_City,
-        COALESCE(MAX(vs.DestCity), 'N/A') AS Destination_City,
-        COALESCE(MAX(vs.DestCountry), 'N/A') AS Destination_Country,
+        COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
+        COALESCE(vt.RealLoadPortCity, 'N/A') AS Origin_City,
+        COALESCE(vt.RealDisChargePortCountryName, 'N/A') AS Destination_City,
+        COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_Country,
         COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
         COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
-        ROUND(vt.Air_ChargebleWeight, 2) AS Tonnage_Chargeable,
-        ROUND(vt.Air_ActualWeight, 2) AS Tonnage_Actual,
-        ROUND(vt.Revenue_USD, 2) AS Revenue_USD,
-        ROUND(vt.Cost_USD, 2) AS Cost_USD,
-        ROUND(vt.Profit_USD, 2) AS Profit_USD,
-        ROUND((vt.Profit_USD / NULLIF(vt.Revenue_USD, 0)) * 100, 2) AS GP_Margin_Percent,
-        CASE 
-            WHEN COUNT(DISTINCT vs.ShipmentNumber) = 0 THEN 'No Linked Shipments'
-            ELSE 'Linked'
-        END AS Shipment_Link_Status
+        ROUND(SUM(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
+        ROUND(SUM(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
+        ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
+        ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
+        ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
+        ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent
     FROM dbo.ChatData_ViewShipConsolTransport vt
-    LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc ON vsc.Link_ConsolNumber = vt.ConsoleNumber
-    LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs ON vs.ShipmentNumber = vsc.Link_ShipmentNum
-    WHERE vt.ConLoadPortCountryName = 'Viet Nam'
-        AND vt.ETD >= '2025-06-01'
+    LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc
+        ON vsc.Link_ConsolNumber = vt.ConsoleNumber
+    LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs
+        ON vs.ShipmentNumber = vsc.Link_ShipmentNum
+    WHERE vt.ETD >= '2025-06-01'
         AND vt.ETD <= '2026-05-21'
         AND vt.AirlineName1 LIKE '%Turkish%'
         AND vt.TransportMode = 'AIR'
-    GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1, vt.ConsolTransportMode, vt.ETD, vt.ConLoadPortCountryName, vt.Air_ChargebleWeight, vt.Air_ActualWeight, vt.Revenue_USD, vt.Cost_USD, vt.Profit_USD
-    ORDER BY vt.ETD DESC, vt.Revenue_USD DESC;
+    GROUP BY
+        vt.ConsoleNumber,
+        vt.MasterBillNum,
+        vt.AirlineName1,
+        vt.ConsolTransportMode,
+        vt.ETD,
+        COALESCE(vt.RealLoadPortCountryName, 'N/A'),
+        COALESCE(vt.RealLoadPortCity, 'N/A'),
+        COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
+        COALESCE(vt.RealDisChargePortCity, 'N/A')
+    ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     """
 
     html_content = f"""
