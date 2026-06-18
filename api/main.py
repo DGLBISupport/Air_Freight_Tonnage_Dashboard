@@ -610,22 +610,100 @@ def run_diagnostics():
 
 # --- ENDPOINT 6: Trigger PDF Email ---
 @app.post("/api/send-report")
-def send_report(req: ReportRequest, background_tasks: BackgroundTasks):
-    """Accepts filters and an email address, then triggers Playwright and MS Graph API."""
+def send_report(req: ReportRequest):
+    """Accepts filters and an email address, generates the PDF, and sends it synchronously."""
     if not req.recipient_email:
         raise HTTPException(status_code=400, detail="Recipient email is required.")
     
     if os.environ.get("VERCEL"):
         raise HTTPException(
             status_code=400,
-            detail="PDF generation and email dispatch are not supported on Vercel serverless functions (Playwright Chromium binaries cannot be run). Please host your backend on Render, Railway, or a VPS to use email capabilities."
+            detail="PDF generation and email dispatch are not supported on Vercel serverless functions."
         )
         
-    background_tasks.add_task(process_pdf_and_email, req)
-    return {
-        "status": "processing",
-        "message": f"Report generation started. An email will be dispatched to {req.recipient_email} shortly.",
-    }
+    os.makedirs("outputs", exist_ok=True)
+    temp_pdf_path = f"outputs/report_{uuid.uuid4().hex}.pdf"
+    
+    query_id = None
+    if req.mode == "custom-sql" and req.custom_sql:
+        query_id = str(uuid.uuid4())
+        query_cache[query_id] = req.custom_sql
+        
+    try:
+        generate_dashboard_pdf(
+            start_date=req.start_date,
+            end_date=req.end_date,
+            country=req.country,
+            airline=req.airline,
+            output_path=temp_pdf_path,
+            company_code=req.company_code,
+            origin_city=req.origin_city,
+            destination_country=req.destination_country,
+            destination_city=req.destination_city,
+            branch=req.branch,
+            include_weekly_visual=req.include_weekly_visual,
+            include_weekly_ledger=req.include_weekly_ledger,
+            include_monthly_visual=req.include_monthly_visual,
+            include_monthly_ledger=req.include_monthly_ledger,
+            max_data_rows=req.max_data_rows,
+            mode=req.mode,
+            custom_sql=req.custom_sql,
+            query_id=query_id,
+        )
+        
+        station_label = "Global"
+        STATION_NAMES = {
+            "CMB": "Colombo (Sri Lanka)",
+            "IND": "India",
+            "VNM": "Viet Nam",
+            "DAC": "Bangladesh",
+            "PKI": "Pakistan",
+            "NYC": "United States",
+            "OTHER": "Corporate / Other"
+        }
+        if req.company_code:
+            codes = [c.strip() for c in req.company_code.split(",") if c.strip()]
+            resolved_names = [STATION_NAMES.get(c, c) for c in codes]
+            station_label = ", ".join(resolved_names)
+        elif req.country:
+            station_label = req.country
+
+        date_range_label = ""
+        if req.start_date and req.end_date:
+            date_range_label = f" ({req.start_date} to {req.end_date})"
+
+        subject = f"Weekly Air Freight Tonnage Dashboard - {station_label}{date_range_label}"
+        body = (
+            f"Dear Recipient,\n\n"
+            f"Please find attached the Weekly Air Freight Tonnage and Revenue Performance Dashboard for {station_label} "
+            f"covering the period from {req.start_date or 'N/A'} to {req.end_date or 'N/A'}.\n\n"
+            f"Best Regards,\n"
+            f"BI Support Team"
+        )
+        attachment_name = f"Weekly_Tonnage_Report_{req.company_code or 'Global'}.pdf"
+
+        send_pdf_via_graph(
+            pdf_path=temp_pdf_path,
+            recipient_email=req.recipient_email,
+            subject=subject,
+            body=body,
+            attachment_name=attachment_name
+        )
+        return {
+            "status": "success",
+            "message": f"Report generated and email successfully sent to {req.recipient_email}."
+        }
+    except Exception as e:
+        from api.email_service import log_email_transaction
+        log_email_transaction(req.recipient_email, "HTTP_ERROR", str(e))
+        print(f"Sync Email Dispatch Failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate or send report: {str(e)}")
+    finally:
+        if os.path.exists(temp_pdf_path):
+            try:
+                os.remove(temp_pdf_path)
+            except Exception:
+                pass
 
 
 
@@ -842,18 +920,22 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             query_id=query_id,
         )
         
-        # Build email subject and description labels
         station_label = "Global"
-        country_val = filters.get("country")
-        company_val = filters.get("company_code")
-        if country_val and company_val:
-            station_label = f"{country_val} ({company_val})"
+        STATION_NAMES = {
+            "CMB": "Colombo (Sri Lanka)",
+            "IND": "India",
+            "VNM": "Viet Nam",
+            "DAC": "Bangladesh",
+            "PKI": "Pakistan",
+            "NYC": "United States",
+            "OTHER": "Corporate / Other"
+        }
+        if company_val:
+            codes = [c.strip() for c in company_val.split(",") if c.strip()]
+            resolved_names = [STATION_NAMES.get(c, c) for c in codes]
+            station_label = ", ".join(resolved_names)
         elif country_val:
             station_label = country_val
-        elif company_val:
-            station_label = company_val
-            if company_val == "OTHER":
-                station_label = "Corporate / Other"
                 
         subject = f"Scheduled Air Freight Tonnage Dashboard - {station_label} ({start_date} to {end_date})"
         body = (
@@ -979,7 +1061,6 @@ def api_toggle_schedule(schedule_id: str):
 @app.post("/api/schedules/{schedule_id}/run")
 def api_run_schedule_manually(
     schedule_id: str,
-    background_tasks: BackgroundTasks,
     x_scheduler_token: Optional[str] = None,
 ):
     """
@@ -1002,8 +1083,9 @@ def api_run_schedule_manually(
         return {"status": "skipped", "message": "Schedule is currently inactive."}
 
     try:
-        background_tasks.add_task(execute_scheduled_report_job, schedule_id)
-        return {"status": "success", "message": "Report generation and email dispatch started."}
+        # Run synchronously to prevent CPU throttling on Cloud Run
+        execute_scheduled_report_job(schedule_id)
+        return {"status": "success", "message": "Report generated and email successfully sent."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
