@@ -36,12 +36,21 @@ def generate_dashboard_pdf(
     Directs a headless browser to the frontend print view and captures a PDF.
     Supports both standard mode (with filters) and custom-sql mode (with SQL query).
     """
-    # Auto-detect if port 3001 is active instead of 3000
-    detected_port = 3000
-    if is_port_open(3001) and not is_port_open(3000):
-        detected_port = 3001
-        
-    base_url = os.getenv("FRONTEND_BASE_URL", f"http://localhost:{detected_port}")
+    # On Cloud Run, Google sets the K_SERVICE env var automatically.
+    # FastAPI serves the static frontend on $PORT (default 8080) — no separate Next.js server.
+    # On local dev, the Next.js dev server runs on port 3000 or 3001.
+    if os.environ.get("K_SERVICE"):
+        # Running on Cloud Run — FastAPI serves both API and frontend
+        cloud_run_port = int(os.environ.get("PORT", 8080))
+        default_base_url = f"http://localhost:{cloud_run_port}"
+    else:
+        # Local development — detect which port Next.js is on
+        detected_port = 3000
+        if is_port_open(3001) and not is_port_open(3000):
+            detected_port = 3001
+        default_base_url = f"http://localhost:{detected_port}"
+
+    base_url = os.getenv("FRONTEND_BASE_URL", default_base_url)
     
     # Construct the print-optimized frontend URL with filter parameters
     params = {}
