@@ -35,6 +35,13 @@ RECIPIENTS_CMB=shashini.hq@dartglobal.com
 RECIPIENTS_IND=other-email@dartglobal.com
 ```
 
+**For Cloud Scheduler Timezone (Default: Asia/Colombo):**
+```
+GCP_SCHEDULER_TIMEZONE=Asia/Colombo
+# Valid values: Asia/Colombo, Asia/Kolkata, Asia/Bangkok, Asia/Ho_Chi_Minh, etc.
+# This determines the timezone for all scheduled jobs created via the frontend
+```
+
 ### 🔧 3. How to Set Environment Variables in Cloud Run
 
 #### **Option A: Using Cloud Console (Easiest)**

@@ -86,6 +86,10 @@ def _get_location() -> str:
     return os.environ.get("GCP_LOCATION", "europe-west1")
 
 
+def _get_timezone() -> str:
+    return os.environ.get("GCP_SCHEDULER_TIMEZONE", "Asia/Colombo")
+
+
 def _get_service_url() -> str:
     url = os.environ.get("CLOUD_RUN_SERVICE_URL", "").rstrip("/")
     if not url:
@@ -149,7 +153,7 @@ def sync_schedule_to_cloud(config: dict) -> None:
         job = scheduler_v1.Job(
             name=job_name,
             schedule=cron,
-            time_zone="UTC",
+            time_zone=_get_timezone(),
             http_target=scheduler_v1.HttpTarget(
                 uri=f"{service_url}/api/schedules/{schedule_id}/run",
                 http_method=scheduler_v1.HttpMethod.POST,
