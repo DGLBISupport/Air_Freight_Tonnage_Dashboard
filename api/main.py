@@ -593,7 +593,30 @@ def run_diagnostics():
     except Exception as ex:
         results["database_test"]["direct_connection"] = f"Failed: {str(ex)}"
         
-    # 4. Fetch the email history logs
+    # 4. Check if localhost port is reachable (needed for Playwright PDF generation)
+    import socket
+    cloud_run_port = int(os.environ.get("PORT", 8080))
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(2.0)
+            result_code = s.connect_ex(('127.0.0.1', cloud_run_port))
+            if result_code == 0:
+                results["playwright_localhost_check"] = {
+                    "status": "Port Open",
+                    "port": cloud_run_port,
+                    "message": f"127.0.0.1:{cloud_run_port} is reachable — Playwright can connect to the frontend."
+                }
+            else:
+                results["playwright_localhost_check"] = {
+                    "status": "Port Closed",
+                    "port": cloud_run_port,
+                    "message": f"127.0.0.1:{cloud_run_port} is NOT reachable — Playwright will fail to load the print-view page.",
+                    "error_code": result_code
+                }
+    except Exception as ex:
+        results["playwright_localhost_check"] = {"status": "Error", "error": str(ex)}
+
+    # 5. Fetch the email history logs
     log_file = "logs/email_history.log"
     if os.path.exists(log_file):
         try:
@@ -606,6 +629,84 @@ def run_diagnostics():
         results["recent_logs"] = ["Log file logs/email_history.log does not exist yet inside container."]
         
     return results
+
+
+# --- ENDPOINT 5.8: Direct Email Test (no PDF, no Playwright) ---
+@app.get("/api/test-email")
+def test_email_direct(recipient: str = "shashini.hq@dartglobal.com"):
+    """
+    Sends a plain-text test email via MS Graph without PDF generation.
+    Use this to confirm Graph API email sending works from Cloud Run.
+    Usage: GET /api/test-email?recipient=someone@example.com
+    """
+    tenant_id = os.getenv("MAIL_AZURE_TENANT_ID") or os.getenv("AZURE_TENANT_ID")
+    client_id = os.getenv("MAIL_AZURE_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
+    client_secret = os.getenv("MAIL_AZURE_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET")
+    sender = os.getenv("SENDER_EMAIL")
+
+    if not all([tenant_id, client_id, client_secret, sender]):
+        return {"status": "error", "message": "Missing Azure/email credentials in environment."}
+
+    try:
+        import requests as req_lib
+        from msal import ConfidentialClientApplication
+
+        # Step 1: Get access token
+        msal_app = ConfidentialClientApplication(
+            client_id,
+            authority=f"https://login.microsoftonline.com/{tenant_id}",
+            client_credential=client_secret
+        )
+        token_result = msal_app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
+
+        if "access_token" not in token_result:
+            return {
+                "status": "auth_failed",
+                "error": token_result.get("error"),
+                "error_description": token_result.get("error_description")
+            }
+
+        # Step 2: Send a simple plain-text email (no attachment)
+        email_payload = {
+            "message": {
+                "subject": "[Cloud Run Test] Email API Connectivity Check",
+                "body": {
+                    "contentType": "Text",
+                    "content": (
+                        "This is an automated test email sent directly from the Cloud Run container "
+                        "using the Microsoft Graph API.\n\n"
+                        "If you received this, email sending from Cloud Run is working correctly.\n\n"
+                        "-- Tonnage Report App Diagnostics"
+                    )
+                },
+                "toRecipients": [{"emailAddress": {"address": recipient}}]
+            },
+            "saveToSentItems": "false"
+        }
+
+        headers = {
+            "Authorization": f"Bearer {token_result['access_token']}",
+            "Content-Type": "application/json"
+        }
+
+        graph_url = f"https://graph.microsoft.com/v1.0/users/{sender}/sendMail"
+        response = req_lib.post(graph_url, headers=headers, json=email_payload, timeout=30)
+
+        if response.status_code == 202:
+            return {
+                "status": "success",
+                "message": f"Test email dispatched to {recipient} via MS Graph (HTTP 202). Check your inbox.",
+                "sender": sender
+            }
+        else:
+            return {
+                "status": "send_failed",
+                "http_status": response.status_code,
+                "response": response.text[:500]
+            }
+
+    except Exception as ex:
+        return {"status": "exception", "error": str(ex)}
 
 
 # --- ENDPOINT 6: Trigger PDF Email ---
