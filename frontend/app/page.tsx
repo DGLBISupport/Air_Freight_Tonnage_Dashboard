@@ -4181,7 +4181,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
 
                   <div className="overflow-x-auto">
                     {(() => {
-                      // Aggregate raw rows by Airline and Route
+                      // Aggregate raw rows by Airline and Route (using origin city → dest city)
                       const aggMap: {
                         [key: string]: {
                           airline: string;
@@ -4191,8 +4191,8 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                           shipments: number;
                           routes: {
                             [routeKey: string]: {
-                              originCountry: string;
-                              destCountry: string;
+                              originCity: string;
+                              destCity: string;
                               tonnage: number;
                               revenue: number;
                               cost: number;
@@ -4217,14 +4217,14 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                         aggMap[airline].cost += cost;
                         aggMap[airline].shipments += shipments;
 
-                        const originCountry = r.Origin_Country ?? r.ConLoadPortCountryName ?? r.origin_country ?? "—";
-                        const destCountry = r.Destination_Country ?? r.DestCountry ?? r.dest_country ?? "—";
-                        const routeKey = `${originCountry} → ${destCountry}`;
+                        const originCity = r.Origin_City ?? r.OriginCity ?? r.origin_city ?? "—";
+                        const destCity = r.Destination_City ?? r.DestCity ?? r.dest_city ?? "—";
+                        const routeKey = `${originCity} → ${destCity}`;
 
                         if (!aggMap[airline].routes[routeKey]) {
                           aggMap[airline].routes[routeKey] = {
-                            originCountry,
-                            destCountry,
+                            originCity,
+                            destCity,
                             tonnage: 0,
                             revenue: 0,
                             cost: 0,
@@ -4249,7 +4249,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                         shipments: others.reduce((s, r) => s + r.shipments, 0),
                         routes: others.reduce((acc: any, o) => {
                           Object.values(o.routes || {}).forEach((rt: any) => {
-                            const routeKey = `${rt.originCountry} → ${rt.destCountry}`;
+                            const routeKey = `${rt.originCity} → ${rt.destCity}`;
                             if (!acc[routeKey]) {
                               acc[routeKey] = { ...rt };
                             } else {
@@ -4352,7 +4352,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                                         <tr key={`${i}-route-${rIdx}`} className="bg-[#EBF8FF]/50 text-slate-950 text-[11px] border-l-4 border-blue-300 hover:bg-[#EBF8FF]/70 transition-colors">
                                           <td className="px-3 py-1 text-center text-[8px] text-blue-400 font-bold"></td>
                                           <td className="px-3 py-2 pl-8">
-                                            <span className="font-semibold text-slate-950">{route.originCountry} → {route.destCountry}</span>
+                                            <span className="font-semibold text-slate-950">{route.originCity} → {route.destCity}</span>
                                           </td>
                                           <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatNumber(route.tonnage)} kg</td>
                                           <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatNumber(route.shipments)}</td>
