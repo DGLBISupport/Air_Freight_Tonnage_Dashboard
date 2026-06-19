@@ -129,7 +129,8 @@ function MultiSelect({
   onChange,
   placeholder,
   isObject = false,
-  emoji = "🔍"
+  emoji = "🔍",
+  widthClass = "min-w-[150px]"
 }: {
   label: string;
   options: any[];
@@ -138,6 +139,7 @@ function MultiSelect({
   placeholder: string;
   isObject?: boolean;
   emoji?: string;
+  widthClass?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -180,7 +182,7 @@ function MultiSelect({
   };
 
   return (
-    <div className={`relative flex flex-col gap-1 w-full min-w-[130px] multiselect-${label.replace(/\s+/g, "")}`}>
+    <div className={`relative flex flex-col gap-1 w-full ${widthClass} multiselect-${label.replace(/\s+/g, "")}`}>
       <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">{label}</span>
       <button
         type="button"
@@ -244,7 +246,7 @@ function MultiSelect({
 
 export default function Dashboard() {
   // Sidebar active section
-  const [activeSection, setActiveSection] = useState<"dashboard" | "weekly-reports" | "monthly-reports" | "admin">("dashboard");
+  const [activeSection, setActiveSection] = useState<"dashboard" | "weekly-reports" | "monthly-reports" | "admin" | "email-scheduling">("dashboard");
 
   // --- AUTH GATE STATES ---
   const [supabase, setSupabase] = useState<any>(null);
@@ -253,43 +255,60 @@ export default function Dashboard() {
   const [isAdminVerified, setIsAdminVerified] = useState(false);
 
   useEffect(() => {
-    // Fetch public config from FastAPI at runtime
+    // Helper to boot the Supabase client with given credentials
+    const bootSupabase = (url: string, key: string) => {
+      const client = createClient(url, key);
+      setSupabase(client);
+
+      client.auth.getSession().then(({ data: { session } }) => {
+        setSession(session);
+        if (session) {
+          checkAdminWhitelist(client, session.user.email);
+        } else {
+          setAuthLoading(false);
+        }
+      });
+
+      const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
+        setSession(session);
+        if (session) {
+          checkAdminWhitelist(client, session.user.email);
+        } else {
+          setIsAdminVerified(false);
+          setAuthLoading(false);
+        }
+      });
+
+      return () => subscription.unsubscribe();
+    };
+
+    // Try to fetch config from FastAPI backend first (production path)
     fetch(`${API}/api/config`)
       .then((res) => res.json())
       .then(({ supabaseUrl, supabaseAnonKey }) => {
         if (supabaseUrl && supabaseAnonKey) {
-          const client = createClient(supabaseUrl, supabaseAnonKey);
-          setSupabase(client);
-
-          // Check initial session
-          client.auth.getSession().then(({ data: { session } }) => {
-            setSession(session);
-            if (session) {
-              checkAdminWhitelist(client, session.user.email);
-            } else {
-              setAuthLoading(false);
-            }
-          });
-
-          // Listen for auth state changes
-          const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
-            setSession(session);
-            if (session) {
-              checkAdminWhitelist(client, session.user.email);
-            } else {
-              setIsAdminVerified(false);
-              setAuthLoading(false);
-            }
-          });
-
-          return () => subscription.unsubscribe();
+          bootSupabase(supabaseUrl, supabaseAnonKey);
         } else {
-          setAuthLoading(false);
+          // Backend returned empty — fall back to build-time env vars (local dev)
+          const envUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+          const envKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+          if (envUrl && envKey) {
+            bootSupabase(envUrl, envKey);
+          } else {
+            setAuthLoading(false);
+          }
         }
       })
       .catch((err) => {
-        console.error("Failed to fetch Supabase config:", err);
-        setAuthLoading(false);
+        console.warn("Could not reach /api/config, falling back to env vars:", err);
+        // Backend unreachable — use env vars directly (local dev fallback)
+        const envUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+        const envKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+        if (envUrl && envKey) {
+          bootSupabase(envUrl, envKey);
+        } else {
+          setAuthLoading(false);
+        }
       });
   }, []);
 
@@ -687,9 +706,9 @@ export default function Dashboard() {
     }
   }, [orgUsers.length]);
 
-  // Fetch org users, station recipients, and schedules when admin section is activated
+  // Fetch org users, station recipients, and schedules when admin/email-scheduling section is activated
   useEffect(() => {
-    if (activeSection === "admin" && supabase) {
+    if ((activeSection === "admin" || activeSection === "email-scheduling") && supabase) {
       fetchOrgUsers();
       fetchStationRecipients();
       fetchSchedules();
@@ -2065,10 +2084,11 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
               {activeSection === "weekly-reports" && <><BarChart2 className="w-3 h-3 text-amber-600" /> Weekly Reports</>}
               {activeSection === "monthly-reports" && <><Calendar className="w-3 h-3 text-emerald-600" /> Monthly Reports</>}
               {activeSection === "admin" && <><ShieldCheck className="w-3 h-3 text-[#3182CE]" /> Admin Panel</>}
+              {activeSection === "email-scheduling" && <><Clock className="w-3 h-3 text-violet-500" /> Email Scheduling</>}
             </span>
 
             {/* Quick Admin shortcut (shown on non-admin sections) */}
-            {activeSection !== "admin" && (
+            {activeSection !== "admin" && activeSection !== "email-scheduling" && (
               <Button
                 onClick={() => setActiveSection("admin")}
                 className="h-8 px-3 bg-white hover:bg-slate-50 border border-[#CBD5E0] text-slate-700 text-xs font-semibold rounded-md flex items-center gap-1.5 transition-all shadow-sm"
@@ -2079,7 +2099,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             )}
 
             {/* PDF Live Preview */}
-            {activeSection !== "admin" && (
+            {activeSection !== "admin" && activeSection !== "email-scheduling" && (
               <Button
                 onClick={openPdfPreview}
                 className="h-8 px-3.5 bg-white hover:bg-slate-50 border border-[#CBD5E0] text-slate-700 text-xs font-bold rounded-md flex items-center gap-1.5 transition-all shadow-sm"
@@ -2154,6 +2174,14 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             <span>Admin Panel</span>
           </button>
 
+          <button
+            onClick={() => setActiveSection("email-scheduling")}
+            className={`sidebar-nav-item ${activeSection === "email-scheduling" ? "active" : ""}`}
+          >
+            <Clock className="nav-icon" />
+            <span>Email Scheduling</span>
+          </button>
+
           <div style={{ marginTop: "auto" }} className="px-4 pt-4 pb-2 border-t border-[#EDF2F7]">
             <p className="text-[9px] text-slate-300 font-semibold">DGL Tonnage Analysis</p>
             <p className="text-[9px] text-slate-300">&copy; 2026 Dart Global Logistics</p>
@@ -2164,7 +2192,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         <div className="flex-1 min-w-0 pb-12">
 
           {/* ── FILTER UTILITIES STRIP ── */}
-          {activeSection !== "admin" && (
+          {activeSection !== "admin" && activeSection !== "email-scheduling" && (
             <div className="max-w-[1380px] mx-auto px-6 mt-6">
               <div className="bg-white rounded-xl p-5 border border-[#E2E8F0] shadow-sm space-y-4">
 
@@ -2192,7 +2220,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           type="date"
                           value={startDate}
                           onChange={(e) => setStartDate(e.target.value)}
-                          className="h-8 w-34 text-xs bg-white border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
+                          className="h-8 w-40 text-xs bg-white border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
                         />
                       </div>
 
@@ -2203,7 +2231,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           type="date"
                           value={endDate}
                           onChange={(e) => setEndDate(e.target.value)}
-                          className="h-8 w-34 text-xs bg-white border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
+                          className="h-8 w-40 text-xs bg-white border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
                         />
                       </div>
 
@@ -2253,6 +2281,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           onChange={setSelectedCountries}
                           placeholder="All Countries"
                           emoji="🌍"
+                          widthClass="min-w-[190px]"
                         />
 
                         <MultiSelect
@@ -2262,6 +2291,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           onChange={setSelectedOriginCities}
                           placeholder="All Cities"
                           emoji="🏙️"
+                          widthClass="min-w-[190px]"
                         />
                       </div>
 
@@ -2276,6 +2306,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           onChange={setSelectedDestCountries}
                           placeholder="All Countries"
                           emoji="🌍"
+                          widthClass="min-w-[190px]"
                         />
 
                         <MultiSelect
@@ -2285,6 +2316,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           onChange={setSelectedDestCities}
                           placeholder="All Cities"
                           emoji="🏙️"
+                          widthClass="min-w-[190px]"
                         />
                       </div>
                     </div>
@@ -2451,7 +2483,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
           )}
 
           {/* ── SELECTED RECIPIENTS STRIP (Dashboard only) ── */}
-          {activeSection !== "admin" && selectedEmails.length > 0 && (
+          {activeSection !== "admin" && activeSection !== "email-scheduling" && selectedEmails.length > 0 && (
             <div className="max-w-[1380px] mx-auto px-6 mt-3 animate-in fade-in-0 duration-200">
               <div className="flex flex-wrap items-center gap-2 p-2 bg-[#EBF8FF]/50 border border-[#BEE3F8]/60 rounded-lg shadow-sm">
                 <span className="text-[10px] font-bold text-[#2B6CB0] uppercase tracking-wider px-1">Selected Recipients:</span>
@@ -2471,7 +2503,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
             </div>
           )}
           {/* Inline Feedback Alerts */}
-          {activeSection !== "admin" && emailStatus && (
+          {activeSection !== "admin" && activeSection !== "email-scheduling" && emailStatus && (
             <div className="max-w-[1380px] mx-auto px-6 mt-4">
               <div className={`p-3 rounded-lg border text-xs flex items-center justify-between ${emailSuccess === true ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-blue-50 border-blue-200 text-blue-700"}`}>
                 <span>{emailStatus}</span>
@@ -2491,7 +2523,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                     <ShieldCheck className="w-5 h-5 text-[#3182CE]" />
                     <h2 className="text-xl font-extrabold text-[#1A202C] tracking-tight">Admin Panel</h2>
                   </div>
-                  <p className="text-sm text-slate-400">Manage report recipients, email dispatch, and system scheduling.</p>
+                  <p className="text-sm text-slate-400">Manage report recipients and email dispatch settings.</p>
                 </div>
 
                 {/* Date range selector for report dispatches */}
@@ -2502,7 +2534,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                       type="date"
                       value={startDate}
                       onChange={(e) => setStartDate(e.target.value)}
-                      className="h-8 w-32 text-xs bg-slate-50 border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
+                      className="h-8 w-40 text-xs bg-slate-50 border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
                     />
                   </div>
                   <div className="flex flex-col gap-1">
@@ -2511,7 +2543,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                       type="date"
                       value={endDate}
                       onChange={(e) => setEndDate(e.target.value)}
-                      className="h-8 w-32 text-xs bg-slate-50 border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
+                      className="h-8 w-40 text-xs bg-slate-50 border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
                     />
                   </div>
                 </div>
@@ -2520,7 +2552,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
               <div className="grid grid-cols-12 gap-6">
 
                 {/* ── LEFT COL: Recipients Management ── */}
-                <div className="col-span-12 lg:col-span-7 space-y-6">
+                <div className="col-span-12 space-y-6">
 
                   {/* Admin Sub-Tabs */}
                   <div className="flex border-b border-slate-200 mb-4">
@@ -3191,281 +3223,287 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                   )}
 
                 </div>
+              </div>
+            </div>
+          )}
 
-                {/* ── RIGHT COL: Scheduling + Info ── */}
-                <div className="col-span-12 lg:col-span-5 space-y-6">
+          {/* ── EMAIL SCHEDULING SECTION ── */}
+          {activeSection === "email-scheduling" && (
+            <div className="max-w-[1380px] mx-auto px-6 py-8 space-y-8 animate-in fade-in-0 duration-200">
 
-                  {/* Integrated Web Scheduler Card */}
-                  <div className="admin-card p-6 bg-white border border-slate-200 rounded-xl shadow-sm relative overflow-hidden flex flex-col justify-between">
+              {/* Email Scheduling Header */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4 mb-6">
+                <div>
+                  <div className="flex items-center gap-2.5 mb-1">
+                    <Clock className="w-5 h-5 text-violet-600" />
+                    <h2 className="text-xl font-extrabold text-[#1A202C] tracking-tight">Email Scheduling</h2>
+                  </div>
+                  <p className="text-sm text-slate-400">Automate and schedule periodic tonnage report dispatches.</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-12 gap-6">
+                {/* ── LEFT COL: Configure New Schedule Form ── */}
+                <div className="col-span-12 lg:col-span-5">
+                  <div className="admin-card p-6 bg-white border border-slate-200 rounded-xl shadow-sm relative overflow-hidden">
+                    <div className="flex items-center gap-2.5 mb-5 pb-4 border-b border-[#EDF2F7]">
+                      <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center">
+                        <Plus className="w-4 h-4 text-violet-500" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-[#1A202C]">Configure New Schedule</h3>
+                        <p className="text-[10.5px] text-slate-400">Add a new automated dispatch schedule</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 text-xs">
+                      {/* Station filter mapping */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Target Station</label>
+                        <select
+                          value={schedStation}
+                          onChange={(e) => setSchedStation(e.target.value)}
+                          className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
+                        >
+                          <option value="Global">Global (All Stations)</option>
+                          <option value="CMB">Sri Lanka (CMB)</option>
+                          <option value="IND">India (IND)</option>
+                          <option value="VNM">Viet Nam (VNM)</option>
+                          <option value="DAC">Bangladesh (DAC)</option>
+                          <option value="PKI">Pakistan (PKI)</option>
+                          <option value="NYC">United States (NYC)</option>
+                        </select>
+                      </div>
+
+                      {/* Frequency */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Frequency</label>
+                        <div className="flex gap-2">
+                          {["weekly", "monthly", "daily"].map((freq) => (
+                            <button
+                              key={freq}
+                              type="button"
+                              onClick={() => setSchedFrequency(freq as any)}
+                              className={`flex-1 py-1.5 rounded-lg border text-center font-bold capitalize transition-colors ${schedFrequency === freq ? "bg-violet-50 border-violet-200 text-violet-800" : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"}`}
+                            >
+                              {freq}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Day selection based on frequency */}
+                      {schedFrequency === "weekly" && (
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Day of Week</label>
+                          <select
+                            value={schedDayOfWeek}
+                            onChange={(e) => setSchedDayOfWeek(parseInt(e.target.value))}
+                            className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
+                          >
+                            <option value={0}>Monday</option>
+                            <option value={1}>Tuesday</option>
+                            <option value={2}>Wednesday</option>
+                            <option value={3}>Thursday</option>
+                            <option value={4}>Friday</option>
+                            <option value={5}>Saturday</option>
+                            <option value={6}>Sunday</option>
+                          </select>
+                        </div>
+                      )}
+
+                      {schedFrequency === "monthly" && (
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Day of Month</label>
+                          <select
+                            value={schedDayOfMonth}
+                            onChange={(e) => setSchedDayOfMonth(parseInt(e.target.value))}
+                            className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
+                          >
+                            {Array.from({ length: 28 }, (_, i) => i + 1).map((day) => (
+                              <option key={day} value={day}>Day {day}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {/* Time */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Send Time (24h Local)</label>
+                        <Input
+                          type="time"
+                          value={schedTime}
+                          onChange={(e) => setSchedTime(e.target.value)}
+                          className="h-8 bg-slate-50 border-[#E2E8F0] rounded-lg text-slate-700 [color-scheme:light] font-semibold"
+                        />
+                      </div>
+
+                      {/* Custom date range (Optional) */}
+                      <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Custom Date Range (Optional)</span>
+                          <span className="text-[8px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-black uppercase tracking-wider">Overrides Relative Period</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[9px] font-bold text-slate-450 uppercase tracking-wider mb-1">Start Date</label>
+                            <Input
+                              type="date"
+                              value={schedStartDate}
+                              onChange={(e) => setSchedStartDate(e.target.value)}
+                              className="h-8 text-xs bg-white border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[9px] font-bold text-slate-455 uppercase tracking-wider mb-1">End Date</label>
+                            <Input
+                              type="date"
+                              value={schedEndDate}
+                              onChange={(e) => setSchedEndDate(e.target.value)}
+                              className="h-8 text-xs bg-white border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Recipients list */}
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Recipients (comma-separated)</label>
+                        </div>
+                        <Input
+                          type="text"
+                          value={schedRecipients}
+                          onChange={(e) => setSchedRecipients(e.target.value)}
+                          placeholder="shashini.hq@dartglobal.com, user2@domain.com"
+                          className="h-8 bg-slate-50 border-[#E2E8F0] rounded-lg text-slate-700 text-xs"
+                        />
+                      </div>
+
+                      {/* Feedback status banner */}
+                      {schedStatusMessage && (
+                        <div className={`p-2 rounded-lg text-[10px] font-bold border ${schedStatusSuccess ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-rose-50 border-rose-200 text-rose-700"}`}>
+                          {schedStatusMessage}
+                        </div>
+                      )}
+
+                      {/* Submit */}
+                      <Button
+                        onClick={handleCreateSchedule}
+                        disabled={schedIsCreating}
+                        className="w-full h-9 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow"
+                      >
+                        {schedIsCreating ? "Saving Schedule..." : "Save Schedule"}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── RIGHT COL: Active Schedules List ── */}
+                <div className="col-span-12 lg:col-span-7">
+                  <div className="admin-card p-6 bg-white border border-slate-200 rounded-xl shadow-sm relative overflow-hidden flex flex-col justify-between min-h-[400px]">
                     <div>
-                      {/* Card Header */}
                       <div className="flex items-center justify-between mb-5 pb-4 border-b border-[#EDF2F7]">
                         <div className="flex items-center gap-2.5">
                           <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center">
                             <Clock className="w-4 h-4 text-violet-500" />
                           </div>
                           <div>
-                            <h3 className="text-sm font-bold text-[#1A202C]">Email Scheduling</h3>
-                            <p className="text-[10.5px] text-slate-400">Automate periodic report dispatch</p>
+                            <h3 className="text-sm font-bold text-[#1A202C]">Active Schedules</h3>
+                            <p className="text-[10.5px] text-slate-400">Currently configured periodic mailers</p>
                           </div>
                         </div>
+                        <Badge variant="outline" className="border-violet-200 text-violet-750 bg-violet-50 text-[10px] font-bold">
+                          {schedules.length} configured
+                        </Badge>
                       </div>
 
-                      {/* Scheduler Tab Selector */}
-                      <div className="flex border-b border-slate-100 mb-4 text-xs font-semibold">
-                        <button
-                          onClick={() => setSchedActiveTab("list")}
-                          className={`pb-2 px-3 border-b-2 transition-all ${schedActiveTab === "list" ? "border-violet-500 text-violet-600 font-bold" : "border-transparent text-slate-400 hover:text-slate-600"}`}
-                        >
-                          Active Schedules ({schedules.length})
-                        </button>
-                        <button
-                          onClick={() => setSchedActiveTab("create")}
-                          className={`pb-2 px-3 border-b-2 transition-all ${schedActiveTab === "create" ? "border-violet-500 text-violet-600 font-bold" : "border-transparent text-slate-400 hover:text-slate-600"}`}
-                        >
-                          Configure New
-                        </button>
-                      </div>
+                      <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+                        {schedulerLoading ? (
+                          <div className="flex flex-col gap-2">
+                            <Skeleton className="h-20 w-full bg-slate-50" />
+                            <Skeleton className="h-20 w-full bg-slate-50" />
+                          </div>
+                        ) : schedules.length === 0 ? (
+                          <div className="text-center py-12 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                            <p className="text-xs text-slate-400 font-medium italic">No schedules configured yet.</p>
+                            <p className="text-[10.5px] text-slate-400 mt-1">Configure one using the form on the left.</p>
+                          </div>
+                        ) : (
+                          schedules.map((s) => {
+                            const filters = s.filters || {};
+                            const stationLabel = filters.company_code ? `${filters.country} (${filters.company_code})` : "Global (All)";
 
-                      {/* Tab 1: Schedules List */}
-                      {schedActiveTab === "list" && (
-                        <div className="space-y-3 pr-1">
-                          {schedulerLoading ? (
-                            <div className="flex flex-col gap-2">
-                              <Skeleton className="h-20 w-full bg-slate-50" />
-                              <Skeleton className="h-20 w-full bg-slate-50" />
-                            </div>
-                          ) : schedules.length === 0 ? (
-                            <div className="text-center py-8 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                              <p className="text-[11px] text-slate-400 font-medium italic">No schedules configured yet.</p>
-                              <button
-                                onClick={() => setSchedActiveTab("create")}
-                                className="mt-2 text-[10px] text-violet-600 font-bold hover:underline"
-                              >
-                                Create one now
-                              </button>
-                            </div>
-                          ) : (
-                            schedules.map((s) => {
-                              const filters = s.filters || {};
-                              const stationLabel = filters.company_code ? `${filters.country} (${filters.company_code})` : "Global (All)";
+                            let triggerDesc = "";
+                            if (s.frequency === "weekly") {
+                              const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+                              triggerDesc = `Weekly on ${days[s.day_of_week] || "Monday"} at ${s.time_of_day}`;
+                            } else if (s.frequency === "monthly") {
+                              triggerDesc = `Monthly on day ${s.day_of_month} at ${s.time_of_day}`;
+                            } else {
+                              triggerDesc = `Daily at ${s.time_of_day}`;
+                            }
 
-                              let triggerDesc = "";
-                              if (s.frequency === "weekly") {
-                                const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-                                triggerDesc = `Weekly on ${days[s.day_of_week] || "Monday"} at ${s.time_of_day}`;
-                              } else if (s.frequency === "monthly") {
-                                triggerDesc = `Monthly on day ${s.day_of_month} at ${s.time_of_day}`;
-                              } else {
-                                triggerDesc = `Daily at ${s.time_of_day}`;
-                              }
-
-                              return (
-                                <div key={s.id} className="p-3 bg-slate-50 border border-slate-200 rounded-xl hover:bg-slate-100/50 transition-colors flex flex-col justify-between gap-2.5">
-                                  <div className="flex justify-between items-start gap-2">
-                                    <div>
-                                      <h4 className="text-xs font-bold text-slate-800">{stationLabel}</h4>
-                                      <p className="text-[10px] font-semibold text-slate-400 mt-0.5">{triggerDesc}</p>
-                                      {filters.start_date && filters.end_date && (
-                                        <div className="text-[9px] font-bold text-violet-600 mt-1 flex items-center gap-1">
-                                          📅 Range: {filters.start_date} to {filters.end_date}
-                                        </div>
-                                      )}
-                                    </div>
-                                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase ${s.is_active ? "text-emerald-700 bg-emerald-100" : "text-slate-500 bg-slate-200"}`}>
-                                      {s.is_active ? "Active" : "Paused"}
-                                    </span>
+                            return (
+                              <div key={s.id} className="p-4 bg-slate-50 border border-slate-200 rounded-xl hover:bg-slate-100/50 transition-colors flex flex-col justify-between gap-3">
+                                <div className="flex justify-between items-start gap-2">
+                                  <div>
+                                    <h4 className="text-xs font-bold text-slate-800">{stationLabel}</h4>
+                                    <p className="text-[10px] font-semibold text-slate-400 mt-0.5">{triggerDesc}</p>
+                                    {filters.start_date && filters.end_date && (
+                                      <div className="text-[9px] font-bold text-violet-600 mt-1 flex items-center gap-1">
+                                        📅 Range: {filters.start_date} to {filters.end_date}
+                                      </div>
+                                    )}
                                   </div>
+                                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase ${s.is_active ? "text-emerald-700 bg-emerald-100" : "text-slate-500 bg-slate-200"}`}>
+                                    {s.is_active ? "Active" : "Paused"}
+                                  </span>
+                                </div>
 
-                                  <div className="text-[9px] text-slate-400 bg-white border border-slate-200/60 p-1.5 rounded-lg max-h-12 overflow-y-auto">
-                                    <span className="font-bold text-slate-500">Recipients:</span> {s.recipient_email}
-                                  </div>
+                                <div className="text-[9.5px] text-slate-450 bg-white border border-slate-200/60 p-2 rounded-lg max-h-16 overflow-y-auto">
+                                  <span className="font-bold text-slate-500">Recipients:</span> {s.recipient_email}
+                                </div>
 
-                                  <div className="flex justify-between items-center border-t border-slate-200/60 pt-2 mt-1">
+                                <div className="flex justify-between items-center border-t border-slate-200/60 pt-2 mt-1">
+                                  <button
+                                    onClick={() => handleToggleSchedule(s.id)}
+                                    className={`text-[9.5px] font-bold px-2 py-1 rounded transition-colors ${s.is_active ? "text-amber-700 bg-amber-50 hover:bg-amber-100" : "text-emerald-700 bg-emerald-50 hover:bg-emerald-100"}`}
+                                  >
+                                    {s.is_active ? "Pause" : "Activate"}
+                                  </button>
+
+                                  <div className="flex items-center gap-2">
                                     <button
-                                      onClick={() => handleToggleSchedule(s.id)}
-                                      className={`text-[9.5px] font-bold px-2 py-1 rounded transition-colors ${s.is_active ? "text-amber-700 bg-amber-50 hover:bg-amber-100" : "text-emerald-700 bg-emerald-50 hover:bg-emerald-100"}`}
+                                      onClick={() => handleRunScheduleNow(s.id)}
+                                      className="p-1 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-colors"
+                                      title="Run Schedule Now"
                                     >
-                                      {s.is_active ? "Pause" : "Activate"}
+                                      <Play className="w-3.5 h-3.5" />
                                     </button>
-
-                                    <div className="flex items-center gap-2">
-                                      <button
-                                        onClick={() => handleRunScheduleNow(s.id)}
-                                        className="p-1 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-colors"
-                                        title="Run Schedule Now"
-                                      >
-                                        <Play className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        onClick={() => handleDeleteSchedule(s.id)}
-                                        className="p-1 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 transition-colors"
-                                        title="Delete"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </div>
+                                    <button
+                                      onClick={() => handleDeleteSchedule(s.id)}
+                                      className="p-1 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 transition-colors"
+                                      title="Delete"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
                                   </div>
                                 </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      )}
-
-                      {/* Tab 2: Create Schedule Form */}
-                      {schedActiveTab === "create" && (
-                        <div className="space-y-4 text-xs">
-                          {/* Station filter mapping */}
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Target Station</label>
-                            <select
-                              value={schedStation}
-                              onChange={(e) => setSchedStation(e.target.value)}
-                              className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
-                            >
-                              <option value="Global">Global (All Stations)</option>
-                              <option value="CMB">Sri Lanka (CMB)</option>
-                              <option value="IND">India (IND)</option>
-                              <option value="VNM">Viet Nam (VNM)</option>
-                              <option value="DAC">Bangladesh (DAC)</option>
-                              <option value="PKI">Pakistan (PKI)</option>
-                              <option value="NYC">United States (NYC)</option>
-                            </select>
-                          </div>
-
-                          {/* Frequency */}
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Frequency</label>
-                            <div className="flex gap-2">
-                              {["weekly", "monthly", "daily"].map((freq) => (
-                                <button
-                                  key={freq}
-                                  type="button"
-                                  onClick={() => setSchedFrequency(freq as any)}
-                                  className={`flex-1 py-1.5 rounded-lg border text-center font-bold capitalize transition-colors ${schedFrequency === freq ? "bg-violet-50 border-violet-200 text-violet-800" : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"}`}
-                                >
-                                  {freq}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-
-                          {/* Day selection based on frequency */}
-                          {schedFrequency === "weekly" && (
-                            <div>
-                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Day of Week</label>
-                              <select
-                                value={schedDayOfWeek}
-                                onChange={(e) => setSchedDayOfWeek(parseInt(e.target.value))}
-                                className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
-                              >
-                                <option value={0}>Monday</option>
-                                <option value={1}>Tuesday</option>
-                                <option value={2}>Wednesday</option>
-                                <option value={3}>Thursday</option>
-                                <option value={4}>Friday</option>
-                                <option value={5}>Saturday</option>
-                                <option value={6}>Sunday</option>
-                              </select>
-                            </div>
-                          )}
-
-                          {schedFrequency === "monthly" && (
-                            <div>
-                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Day of Month</label>
-                              <select
-                                value={schedDayOfMonth}
-                                onChange={(e) => setSchedDayOfMonth(parseInt(e.target.value))}
-                                className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
-                              >
-                                {Array.from({ length: 28 }, (_, i) => i + 1).map((day) => (
-                                  <option key={day} value={day}>Day {day}</option>
-                                ))}
-                              </select>
-                            </div>
-                          )}
-
-                          {/* Time */}
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Send Time (24h Local)</label>
-                            <Input
-                              type="time"
-                              value={schedTime}
-                              onChange={(e) => setSchedTime(e.target.value)}
-                              className="h-8 bg-slate-50 border-[#E2E8F0] rounded-lg text-slate-700 [color-scheme:light] font-semibold"
-                            />
-                          </div>
-
-                          {/* Custom date range (Optional) */}
-                          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 space-y-3">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Custom Date Range (Optional)</span>
-                              <span className="text-[8px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-black uppercase tracking-wider">Overrides Relative Period</span>
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="block text-[9px] font-bold text-slate-450 uppercase tracking-wider mb-1">Start Date</label>
-                                <Input
-                                  type="date"
-                                  value={schedStartDate}
-                                  onChange={(e) => setSchedStartDate(e.target.value)}
-                                  className="h-8 text-xs bg-white border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
-                                />
                               </div>
-                              <div>
-                                <label className="block text-[9px] font-bold text-slate-450 uppercase tracking-wider mb-1">End Date</label>
-                                <Input
-                                  type="date"
-                                  value={schedEndDate}
-                                  onChange={(e) => setSchedEndDate(e.target.value)}
-                                  className="h-8 text-xs bg-white border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
-                                />
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Recipients list */}
-                          <div>
-                            <div className="flex justify-between items-center mb-1">
-                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Recipients (comma-separated)</label>
-                            </div>
-                            <Input
-                              type="text"
-                              value={schedRecipients}
-                              onChange={(e) => setSchedRecipients(e.target.value)}
-                              placeholder="shashini.hq@dartglobal.com, user2@domain.com"
-                              className="h-8 bg-slate-50 border-[#E2E8F0] rounded-lg text-slate-700 text-xs"
-                            />
-                          </div>
-
-                          {/* Feedback status banner */}
-                          {schedStatusMessage && (
-                            <div className={`p-2 rounded-lg text-[10px] font-bold border ${schedStatusSuccess ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-rose-50 border-rose-200 text-rose-700"}`}>
-                              {schedStatusMessage}
-                            </div>
-                          )}
-
-                          {/* Submit */}
-                          <Button
-                            onClick={handleCreateSchedule}
-                            disabled={schedIsCreating}
-                            className="w-full h-9 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5"
-                          >
-                            {schedIsCreating ? "Saving Schedule..." : "Save Schedule"}
-                          </Button>
-                        </div>
-                      )}
+                            );
+                          })
+                        )}
+                      </div>
                     </div>
                   </div>
-
                 </div>
               </div>
             </div>
           )}
 
           {/* ── FOUR FINANCIAL KPI CARDS ROW (Dashboard + Weekly Reports only) ── */}
-          {activeSection !== "admin" && (
+          {activeSection !== "admin" && activeSection !== "email-scheduling" && (
             <div className="max-w-[1380px] mx-auto px-6 mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
 
               {/* Card 1: Revenue */}
@@ -3539,7 +3577,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
           )}
 
           {/* ── MAIN DASHBOARD CANVAS (DIVIDED SEPARATELY FOR WEEKLY & MONTHLY) ── */}
-          {activeSection !== "admin" && (
+          {activeSection !== "admin" && activeSection !== "email-scheduling" && (
             <div className="max-w-[1380px] mx-auto px-6 mt-6 space-y-12">
 
               {/* ── CHAPTER 1: WEEKLY OPERATIONAL PERFORMANCE ── */}
