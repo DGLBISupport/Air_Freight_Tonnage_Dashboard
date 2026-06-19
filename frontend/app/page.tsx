@@ -708,12 +708,12 @@ export default function Dashboard() {
 
   // Fetch org users, station recipients, and schedules when admin/email-scheduling section is activated
   useEffect(() => {
-    if ((activeSection === "admin" || activeSection === "email-scheduling") && supabase) {
+    if ((activeSection === "admin" || activeSection === "email-scheduling") && supabase && session) {
       fetchOrgUsers();
       fetchStationRecipients();
       fetchSchedules();
     }
-  }, [activeSection, fetchOrgUsers, fetchStationRecipients, fetchSchedules, supabase]);
+  }, [activeSection, fetchOrgUsers, fetchStationRecipients, fetchSchedules, supabase, session]);
 
   const [standardRecords, setStandardRecords] = useState<any[]>([]);
   const [standardWeeklyData, setStandardWeeklyData] = useState<any[]>([]);
