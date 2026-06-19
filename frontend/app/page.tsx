@@ -19,6 +19,7 @@ import {
   Select, SelectContent, SelectGroup, SelectItem,
   SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { supabase } from "@/lib/supabaseClient";
 
 // In production: frontend & backend share the same Cloud Run host → use relative URLs.
 // In local dev: Next.js runs on :3000, backend on :8000 → use absolute localhost URL.
@@ -245,6 +246,120 @@ export default function Dashboard() {
   // Sidebar active section
   const [activeSection, setActiveSection] = useState<"dashboard" | "weekly-reports" | "monthly-reports" | "admin">("dashboard");
 
+  // --- AUTH GATE STATES ---
+  const [session, setSession] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [isAdminVerified, setIsAdminVerified] = useState(false);
+
+  useEffect(() => {
+    if (!supabase) {
+      setAuthLoading(false);
+      return;
+    }
+    // Check initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) {
+        checkAdminWhitelist(session.user.email);
+      } else {
+        setAuthLoading(false);
+      }
+    });
+
+    // Listen for auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) {
+        checkAdminWhitelist(session.user.email);
+      } else {
+        setIsAdminVerified(false);
+        setAuthLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const checkAdminWhitelist = async (email: string) => {
+    if (!supabase) return;
+    setAuthLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("allowed_admins")
+        .select("email")
+        .eq("email", email)
+        .maybeSingle();
+
+      if (error) {
+        console.error("Error checking whitelist:", error);
+        setIsAdminVerified(false);
+      } else if (data) {
+        setIsAdminVerified(true);
+      } else {
+        setIsAdminVerified(false);
+      }
+    } catch (err) {
+      console.error("Whitelist check failed:", err);
+      setIsAdminVerified(false);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const [emailInput, setEmailInput] = useState("");
+  const [passwordInput, setPasswordInput] = useState("");
+  const [loginError, setLoginError] = useState("");
+
+  const handleEmailPasswordLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supabase) {
+      alert("Supabase client is not initialized. Please configure your NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in frontend/.env.local first.");
+      return;
+    }
+    setLoginError("");
+    setAuthLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: emailInput,
+        password: passwordInput,
+      });
+      if (error) {
+        setLoginError(error.message);
+        setAuthLoading(false);
+      } else {
+        // The onAuthStateChange listener will automatically detect the session,
+        // verify the email in allowed_admins, and set authLoading to false.
+      }
+    } catch (err: any) {
+      setLoginError(err.message || "An unexpected error occurred.");
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setSession(null);
+    setIsAdminVerified(false);
+    setEmailInput("");
+    setPasswordInput("");
+    setLoginError("");
+  };
+
+  const getAuthHeaders = async () => {
+    if (!supabase) {
+      return {
+        "Content-Type": "application/json",
+        "Authorization": "",
+      };
+    }
+    const { data: { session } } = await supabase.auth.getSession();
+    return {
+      "Content-Type": "application/json",
+      "Authorization": session ? `Bearer ${session.access_token}` : "",
+    };
+  };
+
   // Derived dashboardMode from active section
   const dashboardMode = (activeSection === "weekly-reports" || activeSection === "monthly-reports") ? "custom-sql" : "standard";
 
@@ -360,7 +475,12 @@ export default function Dashboard() {
   const fetchSchedules = useCallback(async () => {
     setSchedulerLoading(true);
     try {
-      const res = await fetch(`${API}/api/schedules`);
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`${API}/api/schedules`, {
+        headers: {
+          "Authorization": authHeaders.Authorization
+        }
+      });
       const d = await res.json();
       if (d.status === "success") {
         setSchedules(d.data);
@@ -412,9 +532,10 @@ export default function Dashboard() {
     setSchedStatusSuccess(null);
 
     try {
+      const authHeaders = await getAuthHeaders();
       const res = await fetch(`${API}/api/schedules`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders,
         body: JSON.stringify({
           recipient_email: schedRecipients,
           frequency: schedFrequency,
@@ -446,8 +567,12 @@ export default function Dashboard() {
 
   const handleToggleSchedule = async (scheduleId: string) => {
     try {
+      const authHeaders = await getAuthHeaders();
       const res = await fetch(`${API}/api/schedules/${scheduleId}/toggle`, {
         method: "POST",
+        headers: {
+          "Authorization": authHeaders.Authorization
+        }
       });
       const data = await res.json();
       if (data.status === "success") {
@@ -463,8 +588,12 @@ export default function Dashboard() {
 
   const handleRunScheduleNow = async (scheduleId: string) => {
     try {
+      const authHeaders = await getAuthHeaders();
       const res = await fetch(`${API}/api/schedules/${scheduleId}/run`, {
         method: "POST",
+        headers: {
+          "Authorization": authHeaders.Authorization
+        }
       });
       const data = await res.json();
       alert(data.message || "Manual run initiated.");
@@ -477,8 +606,12 @@ export default function Dashboard() {
   const handleDeleteSchedule = async (scheduleId: string) => {
     if (!confirm("Are you sure you want to delete this schedule?")) return;
     try {
+      const authHeaders = await getAuthHeaders();
       const res = await fetch(`${API}/api/schedules/${scheduleId}`, {
         method: "DELETE",
+        headers: {
+          "Authorization": authHeaders.Authorization
+        }
       });
       const data = await res.json();
       if (data.status === "success") {
@@ -1778,6 +1911,98 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
   const [adminAddStatus, setAdminAddStatus] = useState("");
   const [schedulePlaceholder, setSchedulePlaceholder] = useState("weekly");
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
+        <div className="flex flex-col items-center gap-3">
+          <RefreshCw className="w-10 h-10 text-[#3182CE] animate-spin" />
+          <p className="text-sm font-medium text-slate-500">Checking credentials...</p>
+        </div>
+      </div>
+    );
+  }
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-[#F8F9FA] flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white border border-[#E2E8F0] shadow-xl rounded-2xl p-8 flex flex-col items-center space-y-6 animate-in fade-in-0 duration-200">
+          <div className="flex flex-col items-center text-center space-y-2">
+            <div className="bg-[#EBF8FF] p-4 rounded-full border border-[#BEE3F8] mb-2">
+              <ShieldCheck className="w-12 h-12 text-[#3182CE]" />
+            </div>
+            <h2 className="text-2xl font-black text-slate-800 tracking-tight">DGL Tonnage Dashboard</h2>
+            <p className="text-xs text-slate-400 font-medium">Administrator Sign In Required</p>
+          </div>
+          
+          <form onSubmit={handleEmailPasswordLogin} className="w-full space-y-4">
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Email Address</label>
+              <Input
+                type="email"
+                placeholder="admin@dartglobal.com"
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                required
+                className="h-10 text-xs bg-slate-50 border-[#E2E8F0] rounded-xl text-slate-700 focus:bg-white"
+              />
+            </div>
+            
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Password</label>
+              <Input
+                type="password"
+                placeholder="••••••••"
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                required
+                className="h-10 text-xs bg-slate-50 border-[#E2E8F0] rounded-xl text-slate-700 focus:bg-white"
+              />
+            </div>
+
+            {loginError && (
+              <p className="text-[11px] text-red-500 font-semibold bg-red-50 p-2.5 rounded-lg border border-red-100">
+                ⚠️ {loginError}
+              </p>
+            )}
+
+            <Button
+              type="submit"
+              className="w-full h-11 bg-[#3182CE] hover:bg-[#2B6CB0] text-white rounded-xl transition-all shadow-md font-bold text-sm"
+            >
+              Sign In
+            </Button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAdminVerified) {
+    return (
+      <div className="min-h-screen bg-[#F8F9FA] flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white border border-[#FED7D7] shadow-xl rounded-2xl p-8 flex flex-col items-center text-center space-y-6">
+          <div className="bg-[#FFF5F5] p-4 rounded-full border border-[#FEB2B2]">
+            <X className="w-12 h-12 text-[#E53E3E]" />
+          </div>
+          <div>
+            <h2 className="text-xl font-black text-slate-800 tracking-tight">Access Denied</h2>
+            <p className="text-sm text-slate-400 mt-2 font-medium">
+              The email <span className="text-slate-700 font-semibold">{session.user.email}</span> is not registered in the administrator database.
+            </p>
+          </div>
+          
+          <div className="w-full border-t border-slate-100 my-2" />
+
+          <Button
+            onClick={handleLogout}
+            className="w-full h-11 bg-[#E53E3E] hover:bg-[#C53030] text-white rounded-xl transition-all shadow-md font-bold text-sm"
+          >
+            Sign Out & Try Another Account
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#F8F9FA]">
 
@@ -1795,6 +2020,32 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
           {/* Header right: active section badge + quick actions */}
           <div className="flex items-center gap-3">
+            {/* Active session email & logout */}
+            {session && (
+              <div className="hidden lg:flex items-center gap-2 border-r border-[#E2E8F0] pr-3 mr-1 text-[11px] text-slate-500 font-semibold">
+                <span>{session.user.email}</span>
+                <button
+                  onClick={handleLogout}
+                  className="text-red-500 hover:text-red-700 transition-colors font-bold uppercase tracking-wider text-[9px] bg-red-50 px-2 py-0.5 rounded border border-red-200"
+                >
+                  Sign Out
+                </button>
+              </div>
+            )}
+            
+            {session && (
+              <div className="lg:hidden flex items-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleLogout}
+                  className="h-8 text-[10px] text-red-500 hover:text-red-600 hover:bg-red-50 font-bold border-red-200"
+                >
+                  Logout
+                </Button>
+              </div>
+            )}
+
             {/* Active section indicator */}
             <span className="hidden md:flex items-center gap-1.5 text-[11px] text-slate-500 font-medium px-2.5 py-1 rounded-full bg-[#EDF2F7] border border-[#E2E8F0]">
               {activeSection === "dashboard" && <><LayoutDashboard className="w-3 h-3" /> Dashboard</>}

@@ -6,7 +6,8 @@ if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 import uuid
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+import requests
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -57,6 +58,73 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+
+def get_current_admin(authorization: Optional[str] = Header(None)) -> dict:
+    """
+    Verifies the JWT token sent in the Authorization header.
+    Calls Supabase auth API to verify the token and retrieve the user's email,
+    then verifies if the user's email exists in the allowed_admins table.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("Bypassing Auth: SUPABASE_URL or SUPABASE_KEY is not set.")
+        return {"email": "local_admin@test.com", "name": "Local Admin"}
+        
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid Authorization header. Please log in."
+        )
+        
+    token = authorization.split(" ")[1]
+    auth_headers = {
+        "Authorization": f"Bearer {token}",
+        "apikey": SUPABASE_KEY
+    }
+    
+    try:
+        user_resp = requests.get(f"{SUPABASE_URL}/auth/v1/user", headers=auth_headers, timeout=5)
+        if user_resp.status_code != 200:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid session or expired token. Please log in again."
+            )
+        
+        user_data = user_resp.json()
+        email = user_data.get("email")
+        if not email:
+            raise HTTPException(status_code=401, detail="Email not found in session user data.")
+            
+        # Check if email is in public.allowed_admins
+        db_headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json"
+        }
+        admin_resp = requests.get(
+            f"{SUPABASE_URL}/rest/v1/allowed_admins?email=eq.{email}&select=*",
+            headers=db_headers,
+            timeout=5
+        )
+        
+        if admin_resp.status_code != 200 or len(admin_resp.json()) == 0:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied: {email} is not registered as an authorized administrator."
+            )
+            
+        admin_info = admin_resp.json()[0]
+        return {
+            "id": user_data.get("id"),
+            "email": email,
+            "name": admin_info.get("name") or email
+        }
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Authentication check failed: {str(e)}")
 
 # --- SERVE NEXT.JS STATIC EXPORT ---
 # The Dockerfile builds the frontend into /app/frontend_build
@@ -1096,15 +1164,13 @@ def _verify_scheduler_token(request_token: Optional[str]) -> bool:
 
 @app.on_event("startup")
 def startup_event():
-    """Initializes the local SQLite schedule database on startup."""
-    print("FastAPI Startup: Initializing local SQLite database...")
-    init_scheduler_db()
-    print("FastAPI Startup: Ready. Scheduling is handled by Google Cloud Scheduler.")
+    """Initializes the backend on startup."""
+    print("FastAPI Startup: Ready. Scheduling database is managed by Supabase.")
 
 
 
 @app.get("/api/schedules")
-def api_list_schedules():
+def api_list_schedules(current_user: dict = Depends(get_current_admin)):
     """Returns a list of all defined report schedules."""
     try:
         schedules = get_all_schedules()
@@ -1114,8 +1180,8 @@ def api_list_schedules():
 
 
 @app.post("/api/schedules")
-def api_create_schedule(req: ScheduleCreateRequest):
-    """Registers a new schedule in SQLite and creates a Google Cloud Scheduler job."""
+def api_create_schedule(req: ScheduleCreateRequest, current_user: dict = Depends(get_current_admin)):
+    """Registers a new schedule in Supabase and creates a Google Cloud Scheduler job."""
     if req.frequency == "weekly" and req.day_of_week is None:
         raise HTTPException(status_code=400, detail="day_of_week is required for weekly schedules")
     if req.frequency == "monthly" and req.day_of_month is None:
@@ -1139,6 +1205,7 @@ def api_create_schedule(req: ScheduleCreateRequest):
             time_of_day=req.time_of_day,
             filters_dict=req.filters,
             is_active=1 if req.is_active else 0,
+            created_by=current_user.get("id")
         )
 
         config = get_schedule(schedule_id)
@@ -1154,8 +1221,8 @@ def api_create_schedule(req: ScheduleCreateRequest):
 
 
 @app.post("/api/schedules/{schedule_id}/toggle")
-def api_toggle_schedule(schedule_id: str):
-    """Enables or disables a report schedule in SQLite and syncs the state to Google Cloud Scheduler."""
+def api_toggle_schedule(schedule_id: str, current_user: dict = Depends(get_current_admin)):
+    """Enables or disables a report schedule in Supabase and syncs the state to Google Cloud Scheduler."""
     config = get_schedule(schedule_id)
     if not config:
         raise HTTPException(status_code=404, detail="Schedule not found")
@@ -1181,23 +1248,32 @@ def api_toggle_schedule(schedule_id: str):
 def api_run_schedule_manually(
     schedule_id: str,
     x_scheduler_token: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
 ):
     """
     Triggers immediate execution of a schedule.
     Called by:
-      - The UI 'Run Now' button (no token required)
+      - The UI 'Run Now' button (sends Authorization header)
       - Google Cloud Scheduler at the configured cron time (sends X-Scheduler-Token header)
     """
+    is_scheduler = False
     # If a token is present in the request (i.e., called by Cloud Scheduler), verify it
-    if x_scheduler_token is not None and not _verify_scheduler_token(x_scheduler_token):
-        raise HTTPException(status_code=403, detail="Invalid scheduler token.")
+    if x_scheduler_token is not None:
+        if _verify_scheduler_token(x_scheduler_token):
+            is_scheduler = True
+        else:
+            raise HTTPException(status_code=403, detail="Invalid scheduler token.")
+
+    # If NOT triggered by Cloud Scheduler, verify user identity using get_current_admin
+    if not is_scheduler:
+        get_current_admin(authorization)
 
     config = get_schedule(schedule_id)
     if not config:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
     # When triggered by Cloud Scheduler, still check the schedule is active
-    if x_scheduler_token is not None and not config.get("is_active"):
+    if is_scheduler and not config.get("is_active"):
         print(f"Cloud Scheduler: Schedule {schedule_id} is inactive. Skipping.")
         return {"status": "skipped", "message": "Schedule is currently inactive."}
 
@@ -1211,8 +1287,8 @@ def api_run_schedule_manually(
 
 
 @app.delete("/api/schedules/{schedule_id}")
-def api_delete_schedule(schedule_id: str):
-    """Deletes a schedule from SQLite and removes its Google Cloud Scheduler job."""
+def api_delete_schedule(schedule_id: str, current_user: dict = Depends(get_current_admin)):
+    """Deletes a schedule from Supabase and removes its Google Cloud Scheduler job."""
     try:
         delete_schedule(schedule_id)
         try:

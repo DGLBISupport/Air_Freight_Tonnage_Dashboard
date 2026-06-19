@@ -1,35 +1,25 @@
 # api/scheduler_db.py
-import sqlite3
-import json
+import os
+import requests
 from typing import List, Dict, Optional
 
-import os
-if os.environ.get("VERCEL") or os.environ.get("NOW_REGION"):
-    DB_PATH = "/tmp/schedules.db"
-else:
-    DB_PATH = "schedules.db"
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("Warning: SUPABASE_URL or SUPABASE_KEY environment variables are not set.")
+
+def get_headers() -> dict:
+    """Returns the authentication headers for Supabase API requests."""
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
 
 def init_scheduler_db():
-    """Initializes the SQLite database table for report schedules."""
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS report_schedules (
-                id TEXT PRIMARY KEY,
-                recipient_email TEXT NOT NULL,
-                frequency TEXT NOT NULL,      -- 'daily', 'weekly', 'monthly'
-                day_of_week INTEGER,          -- 0-6 (0=Monday) for weekly
-                day_of_month INTEGER,         -- 1-28 for monthly
-                time_of_day TEXT NOT NULL,     -- "HH:MM" (e.g., "08:00")
-                filters TEXT NOT NULL,         -- JSON string of report filters
-                is_active INTEGER DEFAULT 1
-            )
-        """)
-
-def get_connection():
-    """Creates a connection with Row factory enabled for dictionary access."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """No-op. Supabase Postgres table is initialized in the cloud."""
+    pass
 
 def save_schedule(
     schedule_id: str,
@@ -39,55 +29,98 @@ def save_schedule(
     day_of_month: Optional[int],
     time_of_day: str,
     filters_dict: dict,
-    is_active: int = 1
+    is_active: int = 1,
+    created_by: Optional[str] = None
 ):
-    """Saves or updates a schedule config in the database."""
-    filters_json = json.dumps(filters_dict)
-    with get_connection() as conn:
-        conn.execute("""
-            INSERT INTO report_schedules (id, recipient_email, frequency, day_of_week, day_of_month, time_of_day, filters, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                recipient_email=excluded.recipient_email,
-                frequency=excluded.frequency,
-                day_of_week=excluded.day_of_week,
-                day_of_month=excluded.day_of_month,
-                time_of_day=excluded.time_of_day,
-                filters=excluded.filters,
-                is_active=excluded.is_active
-        """, (schedule_id, recipient_email, frequency, day_of_week, day_of_month, time_of_day, filters_json, is_active))
+    """Saves or updates a schedule config in the Supabase database."""
+    headers = get_headers()
+    payload = {
+        "id": schedule_id,
+        "recipient_email": recipient_email,
+        "frequency": frequency,
+        "day_of_week": day_of_week,
+        "day_of_month": day_of_month,
+        "time_of_day": time_of_day,
+        "filters": filters_dict,
+        "is_active": True if is_active else False
+    }
+    
+    if created_by:
+        payload["created_by"] = created_by
+
+    # Check if the schedule already exists
+    url = f"{SUPABASE_URL}/rest/v1/report_schedules?id=eq.{schedule_id}"
+    try:
+        check_resp = requests.get(url, headers=headers, timeout=10)
+        if check_resp.status_code == 200 and len(check_resp.json()) > 0:
+            # Update existing schedule
+            patch_resp = requests.patch(url, headers=headers, json=payload, timeout=10)
+            patch_resp.raise_for_status()
+        else:
+            # Create new schedule
+            post_url = f"{SUPABASE_URL}/rest/v1/report_schedules"
+            post_resp = requests.post(post_url, headers=headers, json=payload, timeout=10)
+            post_resp.raise_for_status()
+    except Exception as e:
+        print(f"Supabase DB Error in save_schedule: {e}")
+        raise e
 
 def get_all_schedules() -> List[Dict]:
-    """Retrieves all schedules in the database and parses the filter configurations."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM report_schedules")
-        rows = cursor.fetchall()
-        result = []
-        for row in rows:
-            d = dict(row)
-            d["filters"] = json.loads(d["filters"])
-            result.append(d)
-        return result
+    """Retrieves all schedules in the Supabase database."""
+    headers = get_headers()
+    url = f"{SUPABASE_URL}/rest/v1/report_schedules?select=*"
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        schedules = resp.json()
+        
+        # Ensure is_active is compatible (converting boolean to 1/0 for backward compatibility if needed)
+        for s in schedules:
+            s["is_active"] = 1 if s.get("is_active") else 0
+            
+        return schedules
+    except Exception as e:
+        print(f"Supabase DB Error in get_all_schedules: {e}")
+        return []
 
 def get_schedule(schedule_id: str) -> Optional[Dict]:
     """Retrieves a single schedule configuration by ID."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM report_schedules WHERE id = ?", (schedule_id,))
-        row = cursor.fetchone()
-        if row:
-            d = dict(row)
-            d["filters"] = json.loads(d["filters"])
-            return d
+    headers = get_headers()
+    url = f"{SUPABASE_URL}/rest/v1/report_schedules?id=eq.{schedule_id}&select=*"
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data and len(data) > 0:
+            s = data[0]
+            s["is_active"] = 1 if s.get("is_active") else 0
+            return s
+        return None
+    except Exception as e:
+        print(f"Supabase DB Error in get_schedule {schedule_id}: {e}")
         return None
 
 def delete_schedule(schedule_id: str):
     """Permanently deletes a schedule configuration."""
-    with get_connection() as conn:
-        conn.execute("DELETE FROM report_schedules WHERE id = ?", (schedule_id,))
+    headers = get_headers()
+    url = f"{SUPABASE_URL}/rest/v1/report_schedules?id=eq.{schedule_id}"
+    try:
+        resp = requests.delete(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"Supabase DB Error in delete_schedule {schedule_id}: {e}")
+        raise e
 
 def update_schedule_status(schedule_id: str, is_active: int):
     """Toggles the active state of a schedule configuration."""
-    with get_connection() as conn:
-        conn.execute("UPDATE report_schedules SET is_active = ? WHERE id = ?", (is_active, schedule_id))
+    headers = get_headers()
+    url = f"{SUPABASE_URL}/rest/v1/report_schedules?id=eq.{schedule_id}"
+    payload = {
+        "is_active": True if is_active else False
+    }
+    try:
+        resp = requests.patch(url, headers=headers, json=payload, timeout=10)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"Supabase DB Error in update_schedule_status {schedule_id}: {e}")
+        raise e
