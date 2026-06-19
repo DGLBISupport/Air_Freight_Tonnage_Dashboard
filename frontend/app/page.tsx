@@ -504,24 +504,39 @@ export default function Dashboard() {
   const [schedStartDate, setSchedStartDate] = useState("");
   const [schedEndDate, setSchedEndDate] = useState("");
 
-  const fetchSchedules = useCallback(async () => {
+  const fetchSchedules = useCallback(async (supabaseClient?: any) => {
+    const client = supabaseClient || supabase;
     setSchedulerLoading(true);
     try {
-      const authHeaders = await getAuthHeaders();
+      let authHeader = "";
+      if (client) {
+        const { data: { session } } = await client.auth.getSession();
+        if (session?.access_token) {
+          authHeader = `Bearer ${session.access_token}`;
+        }
+      }
       const res = await fetch(`${API}/api/schedules`, {
         headers: {
-          "Authorization": authHeaders.Authorization
+          "Content-Type": "application/json",
+          ...(authHeader ? { "Authorization": authHeader } : {}),
         }
       });
+      if (!res.ok) {
+        console.error("fetchSchedules HTTP error:", res.status, await res.text());
+        return;
+      }
       const d = await res.json();
       if (d.status === "success") {
-        setSchedules(d.data);
+        setSchedules(d.data || []);
+      } else {
+        console.error("fetchSchedules API error:", d.detail || d);
       }
     } catch (e) {
       console.error("Failed to fetch schedules", e);
+    } finally {
+      setSchedulerLoading(false);
     }
-    setSchedulerLoading(false);
-  }, []);
+  }, [supabase]);
 
   const handleCreateSchedule = async () => {
     if (!schedRecipients.trim()) {
@@ -585,7 +600,8 @@ export default function Dashboard() {
         setSchedRecipients("");
         setSchedStartDate("");
         setSchedEndDate("");
-        fetchSchedules();
+        // Pass the live supabase client so fetchSchedules always has a fresh token
+        fetchSchedules(supabase);
       } else {
         setSchedStatusMessage(data.detail || "Failed to save schedule configuration.");
         setSchedStatusSuccess(false);
@@ -608,7 +624,7 @@ export default function Dashboard() {
       });
       const data = await res.json();
       if (data.status === "success") {
-        fetchSchedules();
+        fetchSchedules(supabase);
       } else {
         alert(data.detail || "Could not toggle schedule status.");
       }
@@ -647,7 +663,7 @@ export default function Dashboard() {
       });
       const data = await res.json();
       if (data.status === "success") {
-        fetchSchedules();
+        fetchSchedules(supabase);
       } else {
         alert(data.detail || "Could not delete schedule.");
       }
@@ -708,12 +724,12 @@ export default function Dashboard() {
 
   // Fetch org users, station recipients, and schedules when admin/email-scheduling section is activated
   useEffect(() => {
-    if ((activeSection === "admin" || activeSection === "email-scheduling") && supabase && session) {
+    if ((activeSection === "admin" || activeSection === "email-scheduling") && supabase) {
       fetchOrgUsers();
       fetchStationRecipients();
-      fetchSchedules();
+      fetchSchedules(supabase);
     }
-  }, [activeSection, fetchOrgUsers, fetchStationRecipients, fetchSchedules, supabase, session]);
+  }, [activeSection, supabase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [standardRecords, setStandardRecords] = useState<any[]>([]);
   const [standardWeeklyData, setStandardWeeklyData] = useState<any[]>([]);

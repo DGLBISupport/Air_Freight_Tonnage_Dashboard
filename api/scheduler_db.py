@@ -55,15 +55,22 @@ def save_schedule(
         if check_resp.status_code == 200 and len(check_resp.json()) > 0:
             # Update existing schedule
             patch_resp = requests.patch(url, headers=headers, json=payload, timeout=10)
+            if not patch_resp.ok:
+                print(f"Supabase PATCH failed ({patch_resp.status_code}): {patch_resp.text}")
             patch_resp.raise_for_status()
         else:
-            # Create new schedule
+            # Create new schedule — ask Supabase to return the inserted row
+            post_headers = {**headers, "Prefer": "return=representation"}
             post_url = f"{SUPABASE_URL}/rest/v1/report_schedules"
-            post_resp = requests.post(post_url, headers=headers, json=payload, timeout=10)
+            post_resp = requests.post(post_url, headers=post_headers, json=payload, timeout=10)
+            if not post_resp.ok:
+                print(f"Supabase POST failed ({post_resp.status_code}): {post_resp.text}")
             post_resp.raise_for_status()
+            print(f"Supabase: Schedule {schedule_id} created successfully.")
     except Exception as e:
         print(f"Supabase DB Error in save_schedule: {e}")
         raise e
+
 
 def get_all_schedules() -> List[Dict]:
     """Retrieves all schedules in the Supabase database."""
