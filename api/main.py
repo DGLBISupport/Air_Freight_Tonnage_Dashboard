@@ -426,6 +426,16 @@ def process_pdf_and_email(req: ReportRequest):
             os.remove(temp_pdf_path)
 
 
+# --- ENDPOINT 5.4.5: Public configuration (Supabase config) ---
+@app.get("/api/config")
+def get_config():
+    """Returns public configuration variables (like Supabase URL and Key) to the frontend at runtime."""
+    return {
+        "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
+        "supabaseAnonKey": os.environ.get("SUPABASE_KEY", "")
+    }
+
+
 # --- ENDPOINT 5.5: Recipients list dropdown (static .env config) ---
 @app.get("/api/recipients")
 def fetch_recipients():

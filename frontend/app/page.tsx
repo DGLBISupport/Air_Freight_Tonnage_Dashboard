@@ -19,7 +19,7 @@ import {
   Select, SelectContent, SelectGroup, SelectItem,
   SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { supabase } from "@/lib/supabaseClient";
+import { createClient } from "@supabase/supabase-js";
 
 // In production: frontend & backend share the same Cloud Run host → use relative URLs.
 // In local dev: Next.js runs on :3000, backend on :8000 → use absolute localhost URL.
@@ -247,44 +247,57 @@ export default function Dashboard() {
   const [activeSection, setActiveSection] = useState<"dashboard" | "weekly-reports" | "monthly-reports" | "admin">("dashboard");
 
   // --- AUTH GATE STATES ---
+  const [supabase, setSupabase] = useState<any>(null);
   const [session, setSession] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [isAdminVerified, setIsAdminVerified] = useState(false);
 
   useEffect(() => {
-    if (!supabase) {
-      setAuthLoading(false);
-      return;
-    }
-    // Check initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) {
-        checkAdminWhitelist(session.user.email);
-      } else {
-        setAuthLoading(false);
-      }
-    });
+    // Fetch public config from FastAPI at runtime
+    fetch(`${API}/api/config`)
+      .then((res) => res.json())
+      .then(({ supabaseUrl, supabaseAnonKey }) => {
+        if (supabaseUrl && supabaseAnonKey) {
+          const client = createClient(supabaseUrl, supabaseAnonKey);
+          setSupabase(client);
 
-    // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) {
-        checkAdminWhitelist(session.user.email);
-      } else {
-        setIsAdminVerified(false);
-        setAuthLoading(false);
-      }
-    });
+          // Check initial session
+          client.auth.getSession().then(({ data: { session } }) => {
+            setSession(session);
+            if (session) {
+              checkAdminWhitelist(client, session.user.email);
+            } else {
+              setAuthLoading(false);
+            }
+          });
 
-    return () => subscription.unsubscribe();
+          // Listen for auth state changes
+          const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
+            setSession(session);
+            if (session) {
+              checkAdminWhitelist(client, session.user.email);
+            } else {
+              setIsAdminVerified(false);
+              setAuthLoading(false);
+            }
+          });
+
+          return () => subscription.unsubscribe();
+        } else {
+          setAuthLoading(false);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to fetch Supabase config:", err);
+        setAuthLoading(false);
+      });
   }, []);
 
-  const checkAdminWhitelist = async (email: string) => {
-    if (!supabase) return;
+  const checkAdminWhitelist = async (client: any, email: string) => {
+    if (!client) return;
     setAuthLoading(true);
     try {
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from("allowed_admins")
         .select("email")
         .eq("email", email)
@@ -676,12 +689,12 @@ export default function Dashboard() {
 
   // Fetch org users, station recipients, and schedules when admin section is activated
   useEffect(() => {
-    if (activeSection === "admin") {
+    if (activeSection === "admin" && supabase) {
       fetchOrgUsers();
       fetchStationRecipients();
       fetchSchedules();
     }
-  }, [activeSection, fetchOrgUsers, fetchStationRecipients, fetchSchedules]);
+  }, [activeSection, fetchOrgUsers, fetchStationRecipients, fetchSchedules, supabase]);
 
   const [standardRecords, setStandardRecords] = useState<any[]>([]);
   const [standardWeeklyData, setStandardWeeklyData] = useState<any[]>([]);
