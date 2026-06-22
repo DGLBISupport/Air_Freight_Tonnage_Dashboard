@@ -769,8 +769,8 @@ SELECT
     COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_Country,
     COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
     COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
-    ROUND(SUM(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
-    ROUND(SUM(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
+    ROUND(MAX(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
+    ROUND(MAX(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
     ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
     ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
     ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
@@ -806,40 +806,41 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
   const [isMonthlySqlConsoleOpen, setIsMonthlySqlConsoleOpen] = useState(false);
   const [monthlySqlText, setMonthlySqlText] = useState(`-- Write your own Monthly SQL query here!
 -- Pre-populated default Vietnam - Cargo Monthly Performance Rollup
-WITH ConsolBase AS (
-    SELECT
-        YEAR(vt.ETD) AS Year,
-        MONTH(vt.ETD) AS Month,
-        vt.AirlineName1 AS Airline,
-        COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
-        vt.Air_ChargebleWeight,
-        vt.Revenue_USD,
-        vt.Cost_USD,
-        vt.Profit_USD,
-        (SELECT COUNT(DISTINCT Link_ShipmentNum) 
-         FROM dbo.ChatData_ViewShipConsolLink 
-         WHERE Link_ConsolNumber = vt.ConsoleNumber) AS ShipmentCount
-    FROM dbo.ChatData_ViewShipConsolTransport vt
-    WHERE vt.ConLoadPortCountryName = 'Viet Nam'
-        AND vt.ETD >= '2026-06-01'
-        AND vt.ETD <= '2026-06-07'
-        AND vt.TransportMode = 'AIR'
-        AND vs.Company = 'VNM'
-)
 SELECT
-    Year,
-    Month,
-    Airline,
-    Origin_Country,
-    SUM(ShipmentCount) AS Total_Shipments,
-    ROUND(SUM(Air_ChargebleWeight), 2) AS Total_Tonnage,
-    ROUND(SUM(Revenue_USD), 2) AS Total_Revenue,
-    ROUND(SUM(Cost_USD), 2) AS Total_Cost,
-    ROUND(SUM(Profit_USD), 2) AS Total_Profit,
-    ROUND((SUM(Profit_USD) / NULLIF(SUM(Revenue_USD), 0)) * 100, 2) AS GP_Margin_Percent
-FROM ConsolBase
-GROUP BY Year, Month, Airline, Origin_Country
-ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
+    vt.ConsoleNumber AS Console_Number,
+    vt.MasterBillNum AS Master_Airway_Bill,
+    vt.AirlineName1 AS Airline,
+    vt.ConsolTransportMode AS Transport_Mode,
+    vt.ETD,
+    COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
+    COALESCE(vt.RealLoadPortCity, 'N/A') AS Origin_City,
+    COALESCE(vt.RealDisChargePortCountryName, 'N/A') AS Destination_City,
+    COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_Country,
+    COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
+    COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
+    ROUND(MAX(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
+    ROUND(MAX(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
+    ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
+    ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
+    ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
+    ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent
+FROM dbo.ChatData_ViewShipConsolTransport vt
+LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc
+    ON vsc.Link_ConsolNumber = vt.ConsoleNumber
+LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs
+    ON vs.ShipmentNumber = vsc.Link_ShipmentNum
+WHERE vt.ConLoadPortCountryName = 'Viet Nam'
+    AND vt.ETD >= '2026-05-01'
+    AND vt.ETD <= '2026-06-01'
+    AND vt.TransportMode = 'AIR'
+    AND vs.Company = 'VNM'
+GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
+         vt.ConsolTransportMode, vt.ETD, 
+         COALESCE(vt.RealLoadPortCountryName, 'N/A'),
+         COALESCE(vt.RealLoadPortCity, 'N/A'),
+         COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
+         COALESCE(vt.RealDisChargePortCity, 'N/A')
+ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
 
   const [monthlySqlRecords, setMonthlySqlRecords] = useState<any[]>([]);
   const [monthlySqlWeeklyData, setMonthlySqlWeeklyData] = useState<any[]>([]);
@@ -1338,6 +1339,7 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
         include_monthly_ledger: dashboardMode === "custom-sql" ? false : pdfSections.monthlyLedger,
         // Limit data rows to 100 to reduce email attachment size
         max_data_rows: 100,
+        report_type: activeSection === "weekly-reports" || activeSection === "dashboard" ? "weekly" : "monthly",
       };
 
       // Add mode-specific fields
@@ -1684,17 +1686,18 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
   // Process week-by-week stacked airline tonnage share (used in Monthly Reports tab)
   const getWeeklyStackedAirlineData = () => {
     const topAirlines = getAirlineWiseData().map(a => a.name);
-    const weekMap: { [key: string]: { week_label: string; sortKey: string;[key: string]: any } } = {};
+    const weekMap: { [key: string]: { week_label: string; sortKey: string; month: number;[key: string]: any } } = {};
 
     data.forEach((r: any) => {
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
-      // Also handle Month/Year columns from monthly SQL (no ETD)
       let sortKey: string;
       let weekLabel: string;
+      let recordMonth: number = 1;
 
       if (etdVal) {
         const date = new Date(etdVal);
         if (isNaN(date.getTime())) return;
+        recordMonth = date.getMonth() + 1;
         const td = new Date(date.valueOf());
         td.setHours(0, 0, 0, 0);
         td.setDate(td.getDate() + 3 - (td.getDay() + 6) % 7);
@@ -1704,10 +1707,10 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         sortKey = `${yr}-${String(wn).padStart(2, '0')}`;
         weekLabel = `W${wn} '${String(yr).slice(-2)}`;
       } else {
-        // Fallback: if SQL returns Year+Month columns but no ETD, group by month as a fallback
         const yr = r.Year ?? r.year;
         const mo = r.Month ?? r.month;
         if (!yr || !mo) return;
+        recordMonth = Number(mo);
         sortKey = `${yr}-${String(mo).padStart(2, '0')}`;
         const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
         weekLabel = `${monthNames[(mo as number) - 1]} '${String(yr).slice(-2)}`;
@@ -1717,7 +1720,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
       const ton = Number(r.Total_Tonnage ?? r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.tonnage ?? 0);
 
       if (!weekMap[sortKey]) {
-        weekMap[sortKey] = { week_label: weekLabel, sortKey };
+        weekMap[sortKey] = { week_label: weekLabel, sortKey, month: recordMonth };
         topAirlines.forEach((airlineName) => { weekMap[sortKey][airlineName] = 0; });
         weekMap[sortKey]['Others'] = 0;
       }
@@ -1733,6 +1736,69 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
   };
 
   const weeklyStackedAirlineData = getWeeklyStackedAirlineData();
+
+  const CustomXAxisTick = (props: any) => {
+    const { x, y, payload } = props;
+    const value = payload.value;
+    
+    if (activeSection === "monthly-reports") {
+      const index = weeklyStackedAirlineData.findIndex(item => item.week_label === value);
+      if (index !== -1) {
+        const getOrdinal = (n: number) => {
+          const s = ["th", "st", "nd", "rd"];
+          const v = n % 100;
+          return n + (s[(v - 20) % 10] || s[v] || s[0]);
+        };
+        const monthNum = weeklyStackedAirlineData[index].month || 1;
+        const monthStr = String(monthNum).padStart(2, '0');
+        const subLabel = `${getOrdinal(index + 1)} week/${monthStr}`;
+        return (
+          <g transform={`translate(${x},${y})`}>
+            <text
+              x={0}
+              y={0}
+              dy={10}
+              fill="#4A5568"
+              fontSize={8.5}
+              fontWeight="bold"
+              textAnchor="middle"
+            >
+              {value}
+            </text>
+            <text
+              x={0}
+              y={11}
+              dy={10}
+              fill="#718096"
+              fontSize={7.5}
+              fontWeight="normal"
+              textAnchor="middle"
+            >
+              {subLabel}
+            </text>
+          </g>
+        );
+      }
+    }
+
+    const isRotated = dailyStackedAirlineData.length > 8;
+    return (
+      <g transform={`translate(${x},${y})`}>
+        <text
+          x={0}
+          y={0}
+          dy={10}
+          fill="#4A5568"
+          fontSize={8.5}
+          fontWeight="bold"
+          textAnchor={isRotated ? "end" : "middle"}
+          transform={isRotated ? "rotate(-35)" : undefined}
+        >
+          {value}
+        </text>
+      </g>
+    );
+  };
 
   // Airline × Week stacked data — each row = one airline, each column = a week period
   const getAirlineWeeklyStackData = () => {
@@ -1911,6 +1977,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         include_monthly_visual: pdfSections.monthlyVisual.toString(),
         include_monthly_ledger: "false",
         max_data_rows: "100",
+        report_type: activeSection === "weekly-reports" ? "weekly" : "monthly",
       });
       if (countryParam) params.append("country", countryParam);
       if (companyCodeParam) params.append("company_code", companyCodeParam);
@@ -1936,6 +2003,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     params.append("include_monthly_visual", pdfSections.monthlyVisual.toString());
     params.append("include_monthly_ledger", pdfSections.monthlyLedger.toString());
     params.append("max_data_rows", "100");
+    params.append("report_type", activeSection === "dashboard" ? "weekly" : "monthly");
     return `/print-view?${params.toString()}`;
   };
 
@@ -2404,8 +2472,8 @@ SELECT
     COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_Country,
     COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
     COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
-    ROUND(SUM(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
-    ROUND(SUM(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
+    ROUND(MAX(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
+    ROUND(MAX(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
     ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
     ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
     ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
@@ -2430,39 +2498,41 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               } else {
                                 setCustomSqlText(`-- Write your own Monthly SQL query here!
 -- Pre-populated default Vietnam - Cargo Monthly Performance Rollup
-WITH ConsolBase AS (
-    SELECT
-        YEAR(vt.ETD) AS Year,
-        MONTH(vt.ETD) AS Month,
-        vt.AirlineName1 AS Airline,
-        COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
-        vt.Air_ChargebleWeight,
-        vt.Revenue_USD,
-        vt.Cost_USD,
-        vt.Profit_USD,
-        (SELECT COUNT(DISTINCT Link_ShipmentNum) 
-         FROM dbo.ChatData_ViewShipConsolLink 
-         WHERE Link_ConsolNumber = vt.ConsoleNumber) AS ShipmentCount
-    FROM dbo.ChatData_ViewShipConsolTransport vt
-    WHERE vt.ConLoadPortCountryName = 'Viet Nam'
-        AND vt.ETD >= '2025-06-01'
-        AND vt.ETD <= '2026-05-21'
-        AND vt.TransportMode = 'AIR'
-)
 SELECT
-    Year,
-    Month,
-    Airline,
-    Origin_Country,
-    SUM(ShipmentCount) AS Total_Shipments,
-    ROUND(SUM(Air_ChargebleWeight), 2) AS Total_Tonnage,
-    ROUND(SUM(Revenue_USD), 2) AS Total_Revenue,
-    ROUND(SUM(Cost_USD), 2) AS Total_Cost,
-    ROUND(SUM(Profit_USD), 2) AS Total_Profit,
-    ROUND((SUM(Profit_USD) / NULLIF(SUM(Revenue_USD), 0)) * 100, 2) AS GP_Margin_Percent
-FROM ConsolBase
-GROUP BY Year, Month, Airline, Origin_Country
-ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
+    vt.ConsoleNumber AS Console_Number,
+    vt.MasterBillNum AS Master_Airway_Bill,
+    vt.AirlineName1 AS Airline,
+    vt.ConsolTransportMode AS Transport_Mode,
+    vt.ETD,
+    COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
+    COALESCE(vt.RealLoadPortCity, 'N/A') AS Origin_City,
+    COALESCE(vt.RealDisChargePortCountryName, 'N/A') AS Destination_City,
+    COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_Country,
+    COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
+    COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
+    ROUND(MAX(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
+    ROUND(MAX(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
+    ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
+    ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
+    ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
+    ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent
+FROM dbo.ChatData_ViewShipConsolTransport vt
+LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc
+    ON vsc.Link_ConsolNumber = vt.ConsoleNumber
+LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs
+    ON vs.ShipmentNumber = vsc.Link_ShipmentNum
+WHERE vt.ConLoadPortCountryName = 'Viet Nam'
+    AND vt.ETD >= '2025-06-01'
+    AND vt.ETD <= '2026-05-21'
+    AND vt.TransportMode = 'AIR'
+    AND vs.Company = 'VNM'
+GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
+         vt.ConsolTransportMode, vt.ETD, 
+         COALESCE(vt.RealLoadPortCountryName, 'N/A'),
+         COALESCE(vt.RealLoadPortCity, 'N/A'),
+         COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
+         COALESCE(vt.RealDisChargePortCity, 'N/A')
+ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               }
                             }}
                             className="h-8 px-3 border-[#CBD5E0] text-slate-650 hover:bg-slate-50 text-xs font-medium rounded-md"
@@ -3716,18 +3786,17 @@ ORDER BY Year DESC, Month DESC, Total_Revenue DESC`);
                             <ResponsiveContainer width="100%" height="100%">
                               <BarChart
                                 data={chartData}
-                                margin={{ top: 5, right: 10, left: 10, bottom: chartData.length > 10 ? 40 : 20 }}
+                                margin={{ top: 5, right: 10, left: 10, bottom: activeSection === "monthly-reports" ? 35 : (chartData.length > 10 ? 40 : 20) }}
                               >
                                 <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} horizontal={true} />
                                 <XAxis
                                   dataKey={xKey}
                                   type="category"
-                                  tick={{ fontSize: 8, fill: "#4A5568", fontWeight: 600 }}
+                                  height={activeSection === "monthly-reports" ? 35 : undefined}
+                                  tick={<CustomXAxisTick />}
                                   axisLine={{ stroke: "#E2E8F0" }}
                                   tickLine={false}
                                   interval={chartData.length > 14 ? Math.floor(chartData.length / 14) : 0}
-                                  angle={chartData.length > 8 ? -35 : 0}
-                                  textAnchor={chartData.length > 8 ? "end" : "middle"}
                                 />
                                 <YAxis
                                   type="number"

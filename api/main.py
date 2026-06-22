@@ -172,6 +172,7 @@ class ReportRequest(BaseModel):
     include_monthly_visual: bool = True
     include_monthly_ledger: bool = True
     max_data_rows: int = 100  # Limit table rows to reduce PDF size
+    report_type: Optional[str] = "weekly"
 
 
 class CustomQueryRequest(BaseModel):
@@ -384,6 +385,7 @@ def process_pdf_and_email(req: ReportRequest):
             mode=req.mode,
             custom_sql=req.custom_sql,
             query_id=query_id,
+            report_type=req.report_type or "weekly",
         )
         # Format a meaningful subject and body based on request filters
         station_label = "Global"
@@ -846,6 +848,7 @@ def send_report(req: ReportRequest):
             mode=req.mode,
             custom_sql=req.custom_sql,
             query_id=query_id,
+            report_type=req.report_type or "weekly",
         )
         
         station_label = "Global"
@@ -1115,6 +1118,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             mode=mode,
             custom_sql=custom_sql,
             query_id=query_id,
+            report_type="monthly" if frequency == "monthly" else "weekly",
         )
         
         station_label = "Global"

@@ -31,6 +31,7 @@ def generate_dashboard_pdf(
     mode: str = "standard",
     custom_sql: str = None,
     query_id: str = None,
+    report_type: str = "weekly",
 ):
     """
     Directs a headless browser to the frontend print view and captures a PDF.
@@ -84,6 +85,7 @@ def generate_dashboard_pdf(
     params["include_monthly_visual"] = str(include_monthly_visual).lower()
     params["include_monthly_ledger"] = str(include_monthly_ledger).lower()
     params["max_data_rows"] = max_data_rows
+    params["report_type"] = report_type
     
     query_string = urllib.parse.urlencode(params)
     target_url = f"{base_url}/print-view?{query_string}"

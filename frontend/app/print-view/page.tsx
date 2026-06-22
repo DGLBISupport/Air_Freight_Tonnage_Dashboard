@@ -15,8 +15,8 @@ const API = process.env.NEXT_PUBLIC_API_URL ||
   (typeof window !== "undefined" && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1"
     ? ""   // Empty string = relative URL (same host as the page)
     : (typeof window !== "undefined" && (window.location.port === "3000" || window.location.port === "3001")
-        ? "http://localhost:8000"
-        : ""));
+      ? "http://localhost:8000"
+      : ""));
 
 
 const formatCurrency = (val: number | null | undefined) => {
@@ -198,6 +198,7 @@ function PrintViewContent() {
   const branch = searchParams?.get("branch") || "";
   const maxDataRows = parseInt(searchParams?.get("max_data_rows") || "100");
   const mode = searchParams?.get("mode") || "standard";
+  const reportType = searchParams?.get("report_type") || "weekly";
 
   const getSqlDateRange = () => {
     if (sqlQuery) {
@@ -723,7 +724,66 @@ function PrintViewContent() {
       .sort((a, b) => a.sortKey.localeCompare(b.sortKey));
   };
 
+  const getWeeklyStackedAirlineData = () => {
+    const topAirlines = getAirlineWiseData().map(a => a.name);
+    const weekMap: { [key: string]: { week_label: string; sortKey: string; month: number;[key: string]: any } } = {};
+
+    data.forEach((r: any) => {
+      const etdVal = r.ETD ?? r.etd ?? r.etd_date;
+      let sortKey: string;
+      let weekLabel: string;
+      let recordMonth: number = 1;
+
+      if (etdVal) {
+        const date = new Date(etdVal);
+        if (isNaN(date.getTime())) return;
+        recordMonth = date.getMonth() + 1;
+        const td = new Date(date.valueOf());
+        td.setHours(0, 0, 0, 0);
+        td.setDate(td.getDate() + 3 - (td.getDay() + 6) % 7);
+        const w1 = new Date(td.getFullYear(), 0, 4);
+        const wn = 1 + Math.round(((td.valueOf() - w1.valueOf()) / 86400000 - 3 + (w1.getDay() + 6) % 7) / 7);
+        const yr = date.getFullYear();
+        sortKey = `${yr}-${String(wn).padStart(2, '0')}`;
+        weekLabel = `W${wn} '${String(yr).slice(-2)}`;
+      } else {
+        const yr = r.Year ?? r.year;
+        const mo = r.Month ?? r.month;
+        if (!yr || !mo) return;
+        recordMonth = Number(mo);
+        sortKey = `${yr}-${String(mo).padStart(2, '0')}`;
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        weekLabel = `${monthNames[(mo as number) - 1]} '${String(yr).slice(-2)}`;
+      }
+
+      const carrier = r.Airline ?? r.AirlineName1 ?? r.carrier ?? 'Unknown Carrier';
+      const ton = Number(r.Total_Tonnage ?? r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.tonnage ?? 0);
+
+      if (!weekMap[sortKey]) {
+        weekMap[sortKey] = { week_label: weekLabel, sortKey, month: recordMonth };
+        topAirlines.forEach((airlineName) => { weekMap[sortKey][airlineName] = 0; });
+        weekMap[sortKey]['Others'] = 0;
+      }
+
+      if (topAirlines.includes(carrier)) {
+        weekMap[sortKey][carrier] = (weekMap[sortKey][carrier] || 0) + ton;
+      } else {
+        weekMap[sortKey]['Others'] = (weekMap[sortKey]['Others'] || 0) + ton;
+      }
+    });
+
+    Object.keys(weekMap).forEach((sortKey) => {
+      const weekData = weekMap[sortKey];
+      const total = topAirlines.reduce((sum, name) => sum + (weekData[name] || 0), 0) + (weekData["Others"] || 0);
+      weekData.total_tonnage = total;
+      weekData.total_tonnage_label = 0;
+    });
+
+    return Object.values(weekMap).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+  };
+
   const dailyStackedAirlineData = getDailyStackedAirlineData();
+  const weeklyStackedAirlineData = getWeeklyStackedAirlineData();
   const top10Airlines = getAirlineWiseData();
   const totalTop10Tonnage = top10Airlines.reduce((sum, item) => sum + item.tonnage, 0);
   const top10AirlinesNames = top10Airlines.map(a => a.name);
@@ -742,7 +802,7 @@ function PrintViewContent() {
 
   const CustomLabel = (props: any) => {
     const { x, y, width, index } = props;
-    const row = dailyStackedAirlineData[index];
+    const row = reportType === "monthly" ? weeklyStackedAirlineData[index] : dailyStackedAirlineData[index];
     if (!row || !row.total_tonnage || row.total_tonnage === 0) return null;
     return (
       <text
@@ -755,6 +815,67 @@ function PrintViewContent() {
       >
         {formatNumber(row.total_tonnage)}
       </text>
+    );
+  };
+
+  const CustomXAxisTick = (props: any) => {
+    const { x, y, payload } = props;
+    const value = payload.value;
+    
+    if (reportType === "monthly") {
+      const index = weeklyStackedAirlineData.findIndex(item => item.week_label === value);
+      if (index !== -1) {
+        const getOrdinal = (n: number) => {
+          const s = ["th", "st", "nd", "rd"];
+          const v = n % 100;
+          return n + (s[(v - 20) % 10] || s[v] || s[0]);
+        };
+        const monthNum = weeklyStackedAirlineData[index].month || 1;
+        const monthStr = String(monthNum).padStart(2, '0');
+        const subLabel = `${getOrdinal(index + 1)} week/${monthStr}`;
+        return (
+          <g transform={`translate(${x},${y})`}>
+            <text
+              x={0}
+              y={0}
+              dy={12}
+              fill="#4A5568"
+              fontSize={13.5}
+              fontWeight={650}
+              textAnchor="middle"
+            >
+              {value}
+            </text>
+            <text
+              x={0}
+              y={18}
+              dy={12}
+              fill="#718096"
+              fontSize={11.5}
+              fontWeight={500}
+              textAnchor="middle"
+            >
+              {subLabel}
+            </text>
+          </g>
+        );
+      }
+    }
+
+    return (
+      <g transform={`translate(${x},${y})`}>
+        <text
+          x={0}
+          y={0}
+          dy={12}
+          fill="#4A5568"
+          fontSize={13.5}
+          fontWeight={650}
+          textAnchor="middle"
+        >
+          {value}
+        </text>
+      </g>
     );
   };
 
@@ -982,14 +1103,10 @@ function PrintViewContent() {
                 </div>
                 <div className="flex flex-col items-end gap-0.5">
                   <span className="text-black font-bold text-[17px] flex items-center gap-1">
-                    📅 {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
+                    {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
                   </span>
                   <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
-                    {companyCode && (
-                      <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                        🏢 Entity: {companyCode}
-                      </span>
-                    )}
+
                     {branch && (
                       <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
                         🏢 Branch: {branch}
@@ -1034,22 +1151,25 @@ function PrintViewContent() {
                 <div className="col-span-8 border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-full">
                   <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-1 shrink-0">
                     <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Top 10 Airlines Tonnage Share</span>
-                    <span className="text-[13.5px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border">Day-by-Day Stack</span>
+                    <span className="text-[13.5px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border">
+                      {reportType === "monthly" ? "Week-by-Week Stack" : "Day-by-Day Stack"}
+                    </span>
                   </div>
                   <div className="h-[250px] w-full mt-1">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart
-                        data={dailyStackedAirlineData}
-                        margin={{ top: 5, right: 10, left: 4, bottom: dailyStackedAirlineData.length > 10 ? 15 : 5 }}
+                        data={reportType === "monthly" ? weeklyStackedAirlineData : dailyStackedAirlineData}
+                        margin={{ top: 5, right: 10, left: 4, bottom: reportType === "monthly" ? 25 : ((reportType === "monthly" ? weeklyStackedAirlineData : dailyStackedAirlineData).length > 10 ? 15 : 5) }}
                       >
                         <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} horizontal={true} />
                         <XAxis
-                          dataKey="date_label"
+                          dataKey={reportType === "monthly" ? "week_label" : "date_label"}
                           type="category"
-                          tick={{ fontSize: 13.5, fill: "#4A5568", fontWeight: 650 }}
+                          height={45}
+                          tick={<CustomXAxisTick />}
                           axisLine={{ stroke: "#E2E8F0" }}
                           tickLine={false}
-                          interval={dailyStackedAirlineData.length > 14 ? Math.floor(dailyStackedAirlineData.length / 14) : 0}
+                          interval={(reportType === "monthly" ? weeklyStackedAirlineData : dailyStackedAirlineData).length > 14 ? Math.floor((reportType === "monthly" ? weeklyStackedAirlineData : dailyStackedAirlineData).length / 14) : 0}
                         />
                         <YAxis
                           type="number"
@@ -1178,11 +1298,7 @@ function PrintViewContent() {
                     📅 {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
                   </span>
                   <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
-                    {companyCode && (
-                      <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                        🏢 Entity: {companyCode}
-                      </span>
-                    )}
+
                     {branch && (
                       <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
                         🏢 Branch: {branch}
@@ -1295,11 +1411,7 @@ function PrintViewContent() {
                     📅 {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
                   </span>
                   <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
-                    {companyCode && (
-                      <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                        🏢 Entity: {companyCode}
-                      </span>
-                    )}
+
                     {branch && (
                       <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
                         🏢 Branch: {branch}
@@ -1401,11 +1513,7 @@ function PrintViewContent() {
                   📅 {startDate} to {endDate}
                 </span>
                 <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
-                  {companyCode && (
-                    <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
-                      🏢 Entity: {companyCode}
-                    </span>
-                  )}
+
                   {branch && (
                     <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
                       🏢 Branch: {branch}
@@ -1587,7 +1695,7 @@ function PrintViewContent() {
                   <tbody className="divide-y divide-[#F1F5F9]">
                     {mode === "custom-sql" ? (
                       (() => {
-                              // Aggregate raw rows by Airline and Route (using origin city → dest city)
+                        // Aggregate raw rows by Airline and Route (using origin city → dest city)
                         const aggMap: {
                           [key: string]: {
                             airline: string;
@@ -1845,7 +1953,7 @@ function PrintViewContent() {
             <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex-1 mt-4">
               <div className="flex items-center justify-between mb-2 pb-1 border-b border-[#F1F5F9]">
                 <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Trade Route Performance Summary — Top 10</span>
-                <span className="text-[14px] text-slate-400 font-bold">Top 10 Routes + Others</span>
+                <span className="text-[14px] text-slate-400 font-bold">Top 10 Routes</span>
               </div>
               <div>
                 <table className="w-full text-left text-[16px] border-collapse">
@@ -1962,7 +2070,7 @@ function PrintViewContent() {
                             const isOthers = row.originCountry.startsWith("Others");
                             const color = getCountryColor(row.originCountry);
                             const bgClass = isOthers ? "bg-slate-50/30 italic" : getDestBgColorClass(row.destCountry);
-                            
+
                             // Extract solid hex color from bgClass (e.g. "bg-[#EBF8FF]/50" -> "#EBF8FF")
                             const bgMatch = bgClass.match(/bg-\[([^\]]+)\]/);
                             const solidBgColor = bgMatch ? bgMatch[1].split('/')[0] : (bgClass.includes("bg-slate") ? "#F1F5F9" : "#CBD5E0");
