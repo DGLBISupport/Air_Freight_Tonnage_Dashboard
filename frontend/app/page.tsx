@@ -1614,7 +1614,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
       // Helper to compute the combined station string for a given email
       const getNewStationValue = (email: string, targetStation: string, removing: boolean) => {
         const stations: string[] = [];
-        
+
         STATIONS.forEach(s => {
           const isTarget = s.code === targetStation;
           const isSelected = (stationSelectedEmails[s.code] || []).includes(email);
@@ -1628,7 +1628,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             }
           }
         });
-        
+
         const isTargetOther = targetStation === "OTHER";
         const isSelectedOther = (stationSelectedEmails["OTHER"] || []).includes(email);
         if (isTargetOther) {
@@ -1640,14 +1640,14 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             stations.push("OTHER");
           }
         }
-        
+
         return stations.length > 0 ? stations.join(", ") : "Global";
       };
 
       for (const email of emailsToRemove) {
         const newStationValue = getNewStationValue(email, stationCode, true);
         const displayName = orgUsers.find(u => u.email === email)?.displayName || email.split("@")[0];
-        
+
         const { error } = await supabase
           .from("users")
           .update({ station: newStationValue, display_name: displayName })
@@ -2299,7 +2299,6 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         <div className="max-w-[1400px] mx-auto px-6 h-16 flex items-center justify-between gap-6">
           <div className="flex items-center gap-2.5">
             <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain shrink-0" />
-            <span className="live-dot-light" />
             <h1 className="text-lg font-bold text-[#1A202C] tracking-tight">DGL Tonnage Analysis</h1>
             <span className="text-[11px] text-slate-400 font-medium px-2 py-0.5 rounded-full bg-[#EDF2F7] border border-[#E2E8F0]">
               Tonnage Dashboard
@@ -2466,9 +2465,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                     {activeSection === "dashboard" ? (
                       <><Layers className="w-4 h-4 text-[#3182CE]" /><span className="text-xs font-bold text-slate-700">Standard Filters</span></>
                     ) : activeSection === "weekly-reports" ? (
-                      <><Database className="w-4 h-4 text-amber-600" /><span className="text-xs font-bold text-slate-700">Premium SQL Sandbox (Weekly)</span></>
+                      <><Database className="w-4 h-4 text-amber-600" /><span className="text-xs font-bold text-slate-700">Insert SQL for Weekly Reports</span></>
                     ) : (
-                      <><Database className="w-4 h-4 text-emerald-600" /><span className="text-xs font-bold text-slate-700">Premium SQL Sandbox (Monthly)</span></>
+                      <><Database className="w-4 h-4 text-emerald-600" /><span className="text-xs font-bold text-slate-700">Insert SQL for Monthly Reports</span></>
                     )}
                   </div>
                 </div>
@@ -3819,71 +3818,51 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
             <div className="max-w-[1380px] mx-auto px-6 mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
 
               {/* Card 1: Revenue */}
-              <div className="saas-card p-6 bg-white flex flex-col justify-between h-36 relative overflow-hidden">
-                <div>
-                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Revenue</p>
-                  {loading ? (
-                    <Skeleton className="h-8 w-28 mt-2 bg-slate-100" />
-                  ) : (
-                    <h3 className="text-2xl font-extrabold text-[#2D3748] tracking-tight mt-1.5">
-                      {formatCurrency(kpi.Total_Revenue)}
-                    </h3>
-                  )}
-                </div>
-                <div className="flex items-center gap-1.5 text-[11px] text-slate-450 mt-2">
-                  <span className="text-[#3182CE] font-bold">✓ Consol Revenue</span>
-                </div>
+              <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Revenue</p>
+                {loading ? (
+                  <Skeleton className="h-8 w-28 mt-2 bg-slate-100" />
+                ) : (
+                  <h3 className="text-2xl font-extrabold text-[#2D3748] tracking-tight mt-1">
+                    {formatCurrency(kpi.Total_Revenue)}
+                  </h3>
+                )}
               </div>
 
               {/* Card 2: Cost */}
-              <div className="saas-card p-6 bg-white flex flex-col justify-between h-36 relative overflow-hidden">
-                <div>
-                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Cost</p>
-                  {loading ? (
-                    <Skeleton className="h-8 w-28 mt-2 bg-slate-100" />
-                  ) : (
-                    <h3 className="text-2xl font-extrabold text-[#2D3748] tracking-tight mt-1.5">
-                      {formatCurrency(kpi.Total_Cost)}
-                    </h3>
-                  )}
-                </div>
-                <div className="flex items-center gap-1.5 text-[11px] text-slate-450 mt-2">
-                  <span className="text-rose-500 font-bold">✗ Total Expenses</span>
-                </div>
+              <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Cost</p>
+                {loading ? (
+                  <Skeleton className="h-8 w-28 mt-2 bg-slate-100" />
+                ) : (
+                  <h3 className="text-2xl font-extrabold text-[#2D3748] tracking-tight mt-1">
+                    {formatCurrency(kpi.Total_Cost)}
+                  </h3>
+                )}
               </div>
 
               {/* Card 3: Profit */}
-              <div className="saas-card p-6 bg-white flex flex-col justify-between h-36 relative overflow-hidden">
-                <div>
-                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Profit</p>
-                  {loading ? (
-                    <Skeleton className="h-8 w-28 mt-2 bg-slate-100" />
-                  ) : (
-                    <h3 className="text-2xl font-extrabold text-[#2D3748] tracking-tight mt-1.5">
-                      {formatCurrency(kpi.Total_Profit)}
-                    </h3>
-                  )}
-                </div>
-                <div className="flex items-center gap-1.5 text-[11px] text-slate-450 mt-2">
-                  <span className="text-emerald-600 font-bold">✓ Net Earnings</span>
-                </div>
+              <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Profit</p>
+                {loading ? (
+                  <Skeleton className="h-8 w-28 mt-2 bg-slate-100" />
+                ) : (
+                  <h3 className="text-2xl font-extrabold text-[#2D3748] tracking-tight mt-1">
+                    {formatCurrency(kpi.Total_Profit)}
+                  </h3>
+                )}
               </div>
 
               {/* Card 4: Total Tonnage */}
-              <div className="saas-card p-6 bg-white flex flex-col justify-between h-36 relative overflow-hidden">
-                <div>
-                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Total Tonnage</p>
-                  {loading ? (
-                    <Skeleton className="h-8 w-28 mt-2 bg-slate-100" />
-                  ) : (
-                    <h3 className="text-2xl font-extrabold text-[#2D3748] tracking-tight mt-1.5">
-                      {formatNumber(kpi.Total_Tonnage)} kg
-                    </h3>
-                  )}
-                </div>
-                <div className="flex items-center gap-1.5 text-[11px] text-slate-455 mt-2">
-                  <span className="text-indigo-600 font-bold">✈️ Active Cargo Weight</span>
-                </div>
+              <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Tonnage</p>
+                {loading ? (
+                  <Skeleton className="h-8 w-28 mt-2 bg-slate-100" />
+                ) : (
+                  <h3 className="text-2xl font-extrabold text-[#2D3748] tracking-tight mt-1">
+                    {formatNumber(kpi.Total_Tonnage)} kg
+                  </h3>
+                )}
               </div>
             </div>
           )}

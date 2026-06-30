@@ -915,14 +915,14 @@ function PrintViewContent() {
             <p className="text-xs font-semibold text-blue-900">
               PDF Sections:
               <span className="ml-2">
-                {selectedSections.weeklyVisual && <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[10px] font-bold mr-1 inline-block">{mode === "custom-sql" ? "Weekly Operational Performance" : "Weekly Charts"}</span>}
-                {selectedSections.weeklyLedger && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold mr-1 inline-block">{mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Tables"}</span>}
-                {selectedSections.monthlyVisual && <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[10px] font-bold mr-1 inline-block">{mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Charts"}</span>}
-                {selectedSections.monthlyLedger && mode !== "custom-sql" && <span className="bg-teal-100 text-teal-700 px-2 py-0.5 rounded text-[10px] font-bold mr-1 inline-block">Monthly Tables</span>}
+                {selectedSections.weeklyVisual && <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{mode === "custom-sql" ? "Weekly Operational Performance" : "Weekly Charts"}</span>}
+                {selectedSections.weeklyLedger && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Tables"}</span>}
+                {selectedSections.monthlyVisual && <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Charts"}</span>}
+                {selectedSections.monthlyLedger && mode !== "custom-sql" && <span className="bg-teal-100 text-teal-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">Monthly Tables</span>}
               </span>
             </p>
           </div>
-          <span className="text-[10px] font-bold text-blue-600 bg-white px-2.5 py-1 rounded-full border border-blue-200">
+          <span className="text-[9px] font-bold text-blue-600 bg-white px-2.5 py-1 rounded-full border border-blue-200">
             {mode === "custom-sql"
               ? `${[selectedSections.weeklyVisual, selectedSections.weeklyLedger, selectedSections.monthlyVisual].filter(Boolean).length} / 3 Sections (${(selectedSections.weeklyVisual ? 3 : 0) +
               (selectedSections.weeklyLedger ? 1 : 0) +
@@ -1089,57 +1089,55 @@ function PrintViewContent() {
             {/* PAGE 1: Operational Visuals - Airlines */}
             <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
               {/* Print Header */}
-              <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
-                <div className="flex items-center gap-2.5">
-                  <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                  <div>
-                    <h1 className="text-3xl font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
-                    <p className="text-[16px] text-slate-400 mt-0.5">
-                      Dart Global Logistics · Weekly Operational Performance — Airline Breakdown
-                    </p>
+              <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
+                {/* Top Row: Logo & Main Title (left) + Branch & Dest Badges (right) */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
+                    <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
                   </div>
-                </div>
-                <div className="flex flex-col items-end gap-0.5">
-                  <span className="text-black font-bold text-[17px] flex items-center gap-1">
-                    {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
-                  </span>
-                  <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
-
+                  <div className="flex gap-1 justify-end items-center">
                     {branch && (
-                      <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                      <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                         🏢 Branch: {branch}
                       </span>
                     )}
                     {destinationCountry && (
-                      <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                      <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                         📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
                       </span>
                     )}
                   </div>
                 </div>
+
+                {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
+                <div className="flex items-baseline justify-between mt-1">
+                  <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
+                    Dart Global Logistics · Weekly Operational Performance — Airline Breakdown
+                  </p>
+                  <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
+                    {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
+                  </span>
+                </div>
               </div>
 
               {/* KPI Cards Row */}
               <div className="grid grid-cols-4 gap-4 mt-4">
-                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[96px]">
-                  <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Total Revenue</span>
-                  <h3 className="text-3xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
-                  <span className="text-[14px] text-blue-500 font-semibold">✓ Consol Revenue</span>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Revenue</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
                 </div>
-                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[96px]">
-                  <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Total Cost</span>
-                  <h3 className="text-3xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
-                  <span className="text-[14px] text-rose-500 font-semibold">✗ Total Expenses</span>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Cost</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
                 </div>
-                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[96px]">
-                  <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Total Profit</span>
-                  <h3 className="text-3xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
-                  <span className="text-[14px] text-emerald-600 font-semibold">✓ Net Earnings</span>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Profit</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
                 </div>
-                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[96px]">
-                  <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Total Tonnage</span>
-                  <h3 className="text-3xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
-                  <span className="text-[14px] text-indigo-600 font-semibold">✈️ Active Weight</span>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Tonnage</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
                 </div>
               </div>
 
@@ -1148,8 +1146,8 @@ function PrintViewContent() {
                 {/* Left: Top 10 Airlines Tonnage Share */}
                 <div className="col-span-8 border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-full">
                   <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-1 shrink-0">
-                    <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Top 10 Airlines Tonnage Share</span>
-                    <span className="text-[13.5px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border">
+                    <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Top 10 Airlines Tonnage Share</span>
+                    <span className="text-[9px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border">
                       {reportType === "monthly" ? "Week-by-Week Stack" : "Day-by-Day Stack"}
                     </span>
                   </div>
@@ -1207,7 +1205,7 @@ function PrintViewContent() {
                     {top10Airlines.map((entry, idx) => {
                       const pct = totalTop10Tonnage > 0 ? ((entry.tonnage / totalTop10Tonnage) * 100).toFixed(1) : "0.0";
                       return (
-                        <div key={entry.name} className="flex items-center justify-between text-[13.5px] border-b border-slate-50 pb-0.5">
+                        <div key={entry.name} className="flex items-center justify-between text-[9px] border-b border-slate-50 pb-0.5">
                           <div className="flex items-center gap-1.5 min-w-0">
                             <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: getAirlineColor(entry.name, idx) }} />
                             <span className="font-bold text-slate-700 truncate max-w-[160px]" title={entry.name}>
@@ -1227,7 +1225,7 @@ function PrintViewContent() {
                 {/* Right: Airline Tonnage Share (Pie) */}
                 <div className="col-span-4 border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-full">
                   <div className="border-b border-[#F1F5F9] pb-1 shrink-0">
-                    <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Airline Tonnage Share</span>
+                    <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Airline Tonnage Share</span>
                   </div>
                   <div className="relative h-[220px] flex items-center justify-center mt-1 shrink-0">
                     <ResponsiveContainer width="100%" height="100%">
@@ -1248,7 +1246,7 @@ function PrintViewContent() {
                       </PieChart>
                     </ResponsiveContainer>
                     <div className="absolute text-center flex flex-col justify-center items-center pointer-events-none">
-                      <span className="text-[15px] font-bold text-slate-400 uppercase">Total</span>
+                      <span className="text-[9px] font-bold text-slate-400 uppercase">Total</span>
                       <span className="text-lg font-extrabold text-[#2D3748] tracking-tight">
                         {formatNumber(kpi.Total_Tonnage)} kg
                       </span>
@@ -1258,12 +1256,12 @@ function PrintViewContent() {
                     {airlinePieData.map((entry: any, idx: number) => {
                       const pct = kpi.Total_Tonnage > 0 ? ((entry.value / kpi.Total_Tonnage) * 100).toFixed(1) : "0.0";
                       return (
-                        <div key={entry.name} className="flex items-center justify-between text-[14px] text-slate-500">
+                        <div key={entry.name} className="flex items-center justify-between text-[12.5px] text-slate-500">
                           <div className="flex items-center gap-1.5 min-w-0">
                             <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: entry.name === "Others" ? "#CBD5E0" : getAirlineColor(entry.name, idx) }} />
                             <span className="truncate max-w-[120px] font-semibold">{entry.name}</span>
                           </div>
-                          <span className="font-bold text-slate-700 shrink-0 text-[14px]">{formatNumber(entry.value)} kg ({pct}%)</span>
+                          <span className="font-bold text-slate-700 shrink-0 text-[12.5px]">{formatNumber(entry.value)} kg ({pct}%)</span>
                         </div>
                       );
                     })}
@@ -1272,8 +1270,8 @@ function PrintViewContent() {
               </div>
 
               {/* Print Footer */}
-              <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[14px] text-slate-400 shrink-0">
-                <span>Generated via Headless Chromium PDF Print Engine</span>
+              <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[12.5px] text-slate-400 shrink-0">
+                <span></span>
                 <span>© 2026 Dart Global Logistics · Operational Performance — Airline Breakdown Page</span>
               </div>
             </div>
@@ -1281,41 +1279,43 @@ function PrintViewContent() {
             {/* PAGE 2: Operational Visuals - Airline Tonnage by Week Period */}
             <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
               {/* Print Header */}
-              <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
-                <div className="flex items-center gap-2.5">
-                  <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                  <div>
-                    <h1 className="text-3xl font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
-                    <p className="text-[16px] text-slate-400 mt-0.5">
-                      Dart Global Logistics · Weekly Operational Performance — Weekly Airline Trend
-                    </p>
+              <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
+                {/* Top Row: Logo & Main Title (left) + Branch & Dest Badges (right) */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
+                    <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
                   </div>
-                </div>
-                <div className="flex flex-col items-end gap-0.5">
-                  <span className="text-black font-bold text-[17px] flex items-center gap-1">
-                    📅 {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
-                  </span>
-                  <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
-
+                  <div className="flex gap-1 justify-end items-center">
                     {branch && (
-                      <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                      <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                         🏢 Branch: {branch}
                       </span>
                     )}
                     {destinationCountry && (
-                      <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                      <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                         📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
                       </span>
                     )}
                   </div>
+                </div>
+
+                {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
+                <div className="flex items-baseline justify-between mt-1">
+                  <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
+                    Dart Global Logistics · Weekly Operational Performance — Weekly Airline Trend
+                  </p>
+                  <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
+                    {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
+                  </span>
                 </div>
               </div>
 
               {/* Weekly Trend Chart in Large Container */}
               <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between h-[540px] mt-4 flex-1">
                 <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-1.5 shrink-0">
-                  <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Airline Tonnage by Week Period</span>
-                  <span className="bg-indigo-50 text-indigo-700 text-[14px] px-2 py-0.5 rounded font-black uppercase shrink-0">
+                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Airline Tonnage by Week Period</span>
+                  <span className="bg-indigo-50 text-indigo-700 text-[12.5px] px-2 py-0.5 rounded font-black uppercase shrink-0">
                     {airlineWeeklyStackData.length} Airlines
                   </span>
                 </div>
@@ -1367,7 +1367,7 @@ function PrintViewContent() {
                   {top10Airlines.map((entry, idx) => {
                     const pct = totalTop10Tonnage > 0 ? ((entry.tonnage / totalTop10Tonnage) * 100).toFixed(1) : "0.0";
                     return (
-                      <div key={entry.name} className="flex items-center justify-between text-[13.5px] border-b border-slate-50 pb-0.5">
+                      <div key={entry.name} className="flex items-center justify-between text-[9px] border-b border-slate-50 pb-0.5">
                         <div className="flex items-center gap-1.5 min-w-0">
                           <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: getAirlineColor(entry.name, idx) }} />
                           <span className="font-bold text-slate-700 truncate max-w-[160px]" title={entry.name}>
@@ -1385,8 +1385,8 @@ function PrintViewContent() {
               </div>
 
               {/* Print Footer */}
-              <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[14px] text-slate-400 shrink-0 mt-4">
-                <span>Generated via Headless Chromium PDF Print Engine</span>
+              <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[12.5px] text-slate-400 shrink-0 mt-4">
+                <span></span>
                 <span>© 2026 Dart Global Logistics · Operational Performance — Airline Tonnage by Week Period Page</span>
               </div>
             </div>
@@ -1394,33 +1394,35 @@ function PrintViewContent() {
             {/* PAGE 3: Operational Visuals - Trade Routes */}
             <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
               {/* Print Header */}
-              <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
-                <div className="flex items-center gap-2.5">
-                  <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                  <div>
-                    <h1 className="text-3xl font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
-                    <p className="text-[16px] text-slate-400 mt-0.5">
-                      Dart Global Logistics · Weekly Operational Performance — Trade Route Breakdown
-                    </p>
+              <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
+                {/* Top Row: Logo & Main Title (left) + Branch & Dest Badges (right) */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
+                    <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
                   </div>
-                </div>
-                <div className="flex flex-col items-end gap-0.5">
-                  <span className="text-black font-bold text-[17px] flex items-center gap-1">
-                    📅 {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
-                  </span>
-                  <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
-
+                  <div className="flex gap-1 justify-end items-center">
                     {branch && (
-                      <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                      <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                         🏢 Branch: {branch}
                       </span>
                     )}
                     {destinationCountry && (
-                      <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                      <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                         📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
                       </span>
                     )}
                   </div>
+                </div>
+
+                {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
+                <div className="flex items-baseline justify-between mt-1">
+                  <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
+                    Dart Global Logistics · Weekly Operational Performance — Trade Route Breakdown
+                  </p>
+                  <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
+                    {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
+                  </span>
                 </div>
               </div>
 
@@ -1447,7 +1449,7 @@ function PrintViewContent() {
                       </PieChart>
                     </ResponsiveContainer>
                     <div className="absolute text-center flex flex-col justify-center items-center pointer-events-none">
-                      <span className="text-[15px] font-bold text-slate-400 uppercase tracking-widest">Total Weight</span>
+                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Total Weight</span>
                       <span className="text-xl font-extrabold text-[#2D3748] tracking-tight">
                         {formatNumber(tradeRouteData.reduce((s, r) => s + r.value, 0))} kg
                       </span>
@@ -1459,25 +1461,25 @@ function PrintViewContent() {
                     const total = tradeRouteData.reduce((s, r) => s + r.value, 0);
                     const pct = total > 0 ? ((entry.value / total) * 100).toFixed(1) : "0.0";
                     return (
-                      <div key={entry.name} className="flex items-center justify-between text-[16px] text-slate-500 border-b border-slate-100 pb-2">
+                      <div key={entry.name} className="flex items-center justify-between text-[14.5px] text-slate-500 border-b border-slate-100 pb-2">
                         <div className="flex items-center gap-3 min-w-0">
                           <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }} />
                           {entry.isOthers ? (
-                            <span className="truncate font-bold text-slate-700 text-[19px]">Others</span>
+                            <span className="truncate font-bold text-slate-700 text-[17px]">Others</span>
                           ) : (
                             <div className="flex flex-col min-w-0 leading-normal">
-                              <span className="truncate max-w-[400px] font-bold text-slate-800 text-[19px]" title={`${entry.originCity} → ${entry.destCity}`}>
+                              <span className="truncate max-w-[400px] font-bold text-slate-800 text-[17px]" title={`${entry.originCity} → ${entry.destCity}`}>
                                 {entry.originCity} → {entry.destCity}
                               </span>
-                              <span className="truncate max-w-[400px] text-[15.5px] font-semibold text-slate-400" title={`${entry.originCountry} → ${entry.destCountry}`}>
+                              <span className="truncate max-w-[400px] text-[12.5px] font-semibold text-slate-400" title={`${entry.originCountry} → ${entry.destCountry}`}>
                                 {entry.originCountry} → {entry.destCountry}
                               </span>
                             </div>
                           )}
                         </div>
-                        <span className="font-bold text-slate-800 shrink-0 text-right text-[19px] leading-normal">
+                        <span className="font-bold text-slate-800 shrink-0 text-right text-[17px] leading-normal">
                           <div>{formatNumber(entry.value)} kg</div>
-                          <div className="text-[15.5px] font-semibold text-slate-400">{pct}%</div>
+                          <div className="text-[12.5px] font-semibold text-slate-400">{pct}%</div>
                         </span>
                       </div>
                     );
@@ -1486,8 +1488,8 @@ function PrintViewContent() {
               </div>
 
               {/* Print Footer */}
-              <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[14px] text-slate-400 shrink-0 mt-4">
-                <span>Generated via Headless Chromium PDF Print Engine</span>
+              <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[12.5px] text-slate-400 shrink-0 mt-4">
+                <span></span>
                 <span>© 2026 Dart Global Logistics · Operational Performance — Trade Route Breakdown Page</span>
               </div>
             </div>
@@ -1496,57 +1498,55 @@ function PrintViewContent() {
           /* Standard Page 1 */
           <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
             {/* Print Header */}
-            <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
-              <div className="flex items-center gap-2.5">
-                <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                <div>
-                  <h1 className="text-3xl font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
-                  <p className="text-[16px] text-slate-400 mt-0.5">
-                    Dart Global Logistics · Weekly Operational Performance Dashboard
-                  </p>
+            <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
+              {/* Top Row: Logo & Main Title (left) + Branch & Dest Badges (right) */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
+                  <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
                 </div>
-              </div>
-              <div className="flex flex-col items-end gap-0.5">
-                <span className="text-black font-bold text-[17px] flex items-center gap-1">
-                  📅 {startDate} to {endDate}
-                </span>
-                <div className="flex flex-wrap gap-1 mt-0.5 justify-end max-w-[500px]">
-
+                <div className="flex gap-1 justify-end items-center">
                   {branch && (
-                    <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                    <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                       🏢 Branch: {branch}
                     </span>
                   )}
                   {destinationCountry && (
-                    <span className="text-[13px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.5 rounded">
+                    <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                       📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
                     </span>
                   )}
                 </div>
               </div>
+
+              {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
+              <div className="flex items-baseline justify-between mt-1">
+                <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
+                  Dart Global Logistics · Weekly Operational Performance Dashboard
+                </p>
+                <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
+                  {startDate} to {endDate} | Station: {getStationLabel()}
+                </span>
+              </div>
             </div>
 
             {/* KPI Cards Row */}
             <div className="grid grid-cols-4 gap-4 mt-4">
-              <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[96px]">
-                <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Total Revenue</span>
-                <h3 className="text-3xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
-                <span className="text-[14px] text-blue-500 font-semibold">✓ Consol Revenue</span>
+              <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Revenue</span>
+                <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
               </div>
-              <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[96px]">
-                <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Total Cost</span>
-                <h3 className="text-3xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
-                <span className="text-[14px] text-rose-500 font-semibold">✗ Total Expenses</span>
+              <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Cost</span>
+                <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
               </div>
-              <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[96px]">
-                <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Total Profit</span>
-                <h3 className="text-3xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
-                <span className="text-[14px] text-emerald-600 font-semibold">✓ Net Earnings</span>
+              <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Profit</span>
+                <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
               </div>
-              <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[96px]">
-                <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Total Tonnage</span>
-                <h3 className="text-3xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
-                <span className="text-[14px] text-indigo-600 font-semibold">✈️ Active Weight</span>
+              <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Tonnage</span>
+                <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
               </div>
             </div>
 
@@ -1554,7 +1554,7 @@ function PrintViewContent() {
             <div className="grid grid-cols-12 gap-6 my-4 flex-1 items-stretch">
               {/* Left: Weekly Revenue Trend Area Chart */}
               <div className="col-span-8 border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between h-[450px]">
-                <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Revenue Flow & Trends (Weekly)</span>
+                <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Revenue Flow & Trends (Weekly)</span>
                 <div className="h-[390px] w-full mt-2">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={weeklyData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
@@ -1576,9 +1576,9 @@ function PrintViewContent() {
               {/* Right: Airline wise Tonnage Chart */}
               <div className="col-span-4 border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between h-[450px]">
                 <div className="flex items-center justify-between">
-                  <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Airline Carrier Tonnage</span>
+                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Airline Carrier Tonnage</span>
                   {selectedAirlines.length > 0 && (
-                    <Badge variant="outline" className="border-blue-200 text-blue-600 bg-blue-50/50 text-[10px] font-bold px-1 py-0.2 rounded shrink-0">
+                    <Badge variant="outline" className="border-blue-200 text-blue-600 bg-blue-50/50 text-[9px] font-bold px-1 py-0.2 rounded shrink-0">
                       Selection Active
                     </Badge>
                   )}
@@ -1621,8 +1621,8 @@ function PrintViewContent() {
             </div>
 
             {/* Print Footer */}
-            <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[14px] text-slate-400">
-              <span>Generated via Headless Chromium PDF Print Engine</span>
+            <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[12.5px] text-slate-400">
+              <span></span>
               <span>© 2026 Dart Global Logistics · Visual Summary Page</span>
             </div>
           </div>
@@ -1635,19 +1635,34 @@ function PrintViewContent() {
 
           <div className="flex flex-col print:block gap-6 flex-1">
             {/* Print Header */}
-            <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
-              <div className="flex items-center gap-2.5">
-                <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                <div>
-                  <h1 className="text-3xl font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
-                  <p className="text-[16px] text-slate-400 mt-0.5">
-                    Dart Global Logistics · {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Carrier Metrics Detailed Ledger"}
-                  </p>
+            <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
+              {/* Top Row: Logo & Main Title (left) + Branch & Dest Badges (right) */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
+                  <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+                </div>
+                <div className="flex gap-1 justify-end items-center">
+                  {branch && (
+                    <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
+                      🏢 Branch: {branch}
+                    </span>
+                  )}
+                  {destinationCountry && (
+                    <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
+                      📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
+                    </span>
+                  )}
                 </div>
               </div>
-              <div className="flex flex-col items-end gap-0.5">
-                <span className="text-black font-bold text-[17px] flex items-center gap-1">
-                  📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`} | Station: {getStationLabel()}
+
+              {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
+              <div className="flex items-baseline justify-between mt-1">
+                <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
+                  Dart Global Logistics · {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Carrier Metrics Detailed Ledger"}
+                </p>
+                <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
+                  {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`} | Station: {getStationLabel()}
                 </span>
               </div>
             </div>
@@ -1655,17 +1670,17 @@ function PrintViewContent() {
             {/* Carrier Metrics Table / Airline Performance Table */}
             <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex-1">
               <div className="flex items-center justify-between mb-2 pb-1 border-b border-[#F1F5F9]">
-                <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">
+                <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">
                   {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Carrier Ledger"}
                 </span>
-                <span className="text-[14px] text-slate-400 font-bold">
+                <span className="text-[12.5px] text-slate-400 font-bold">
                   {mode === "custom-sql" ? "Top 10 Airlines" : `All Carrier Records (${data.length})`}
                 </span>
               </div>
               <div>
-                <table className="w-full text-left text-[14px] border-collapse">
+                <table className="w-full text-left text-[12.5px] border-collapse">
                   <thead>
-                    <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[12px] tracking-wider bg-slate-50/50">
+                    <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[9px] tracking-wider bg-slate-50/50">
                       {mode === "custom-sql" ? (
                         <>
                           <th className="px-3 py-1.5 w-8">#</th>
@@ -1803,17 +1818,19 @@ function PrintViewContent() {
                                   <tr className={`hover:bg-slate-50/50 ${isOthers ? "bg-slate-50/30 italic" : ""}`}>
                                     <td className="px-3 py-1.5 text-slate-400 font-bold tabular-nums">
                                       {isOthers ? "—" : (
-                                        <span
-                                          className="inline-flex items-center justify-center w-4 h-4 rounded-full text-[14px] font-extrabold text-white"
-                                          style={{ backgroundColor: getAirlineColor(row.airline, i) }}
-                                        >
-                                          {i + 1}
-                                        </span>
+                                        <div className="flex items-center justify-center">
+                                          <span
+                                            className="flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-extrabold text-white text-center leading-[20px] shrink-0"
+                                            style={{ backgroundColor: getAirlineColor(row.airline, i) }}
+                                          >
+                                            {i + 1}
+                                          </span>
+                                        </div>
                                       )}
                                     </td>
                                     <td className="px-3 py-1.5">
                                       <div className="flex items-center gap-1.5 min-w-0">
-                                        <span className={`font-semibold ${isOthers ? "text-slate-500 italic" : "text-slate-800"}`}>
+                                        <span className={`font-bold ${isOthers ? "text-slate-500 italic" : "text-slate-800"}`}>
                                           {row.airline}
                                         </span>
                                       </div>
@@ -1829,12 +1846,12 @@ function PrintViewContent() {
                                         </div>
                                       </div>
                                     </td>
-                                    <td className="px-3 py-1.5 text-right text-slate-500 font-semibold tabular-nums">{formatNumber(row.shipments)}</td>
+                                    <td className="px-3 py-1.5 text-right text-slate-750 font-bold tabular-nums">{formatNumber(row.shipments)}</td>
                                     <td className="px-3 py-1.5 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
-                                    <td className="px-3 py-1.5 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td>
+                                    <td className="px-3 py-1.5 text-right font-bold text-slate-600 tabular-nums">{formatCurrency(row.cost)}</td>
                                     <td className="px-3 py-1.5 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td>
                                     <td className="px-3 py-1.5 text-right tabular-nums">
-                                      <span className={`font-bold text-[14px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
+                                      <span className={`font-bold text-[12.5px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
                                         {gpMargin.toFixed(1)}%
                                       </span>
                                     </td>
@@ -1843,18 +1860,18 @@ function PrintViewContent() {
                                     sortedRoutes.map((route, rIdx) => {
                                       const routeGpMargin = route.revenue > 0 ? ((route.revenue + route.cost) / route.revenue * 100) : 0;
                                       return (
-                                        <tr key={`${i}-route-${rIdx}`} className="bg-[#EBF8FF]/50 text-slate-950 text-[14.5px] border-l-4 border-blue-300">
-                                          <td className="px-3 py-1 text-center text-[14px] text-blue-400 font-bold"></td>
+                                        <tr key={`${i}-route-${rIdx}`} className="bg-[#EBF8FF]/50 text-slate-700 text-[12.5px] border-l-4 border-blue-300">
+                                          <td className="px-3 py-1 text-center text-[11.5px] text-blue-400 font-bold"></td>
                                           <td className="px-3 py-1 pl-8">
-                                            <span className="font-semibold text-slate-950">{route.originCity} → {route.destCity}</span>
+                                            <span className="font-semibold text-slate-800">{route.originCity} → {route.destCity}</span>
                                           </td>
-                                          <td className="px-3 py-1 text-right tabular-nums text-slate-950 font-bold">{formatNumber(route.tonnage)} kg</td>
-                                          <td className="px-3 py-1 text-right tabular-nums text-slate-950 font-semibold">{formatNumber(route.shipments)}</td>
-                                          <td className="px-3 py-1 text-right tabular-nums text-slate-950 font-bold">{formatCurrency(route.revenue)}</td>
-                                          <td className="px-3 py-1 text-right tabular-nums text-slate-950 font-semibold">{formatCurrency(route.cost)}</td>
-                                          <td className="px-3 py-1 text-right tabular-nums font-extrabold text-slate-950">{formatCurrency(route.revenue + route.cost)}</td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(route.tonnage)} kg</td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(route.shipments)}</td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatCurrency(route.revenue)}</td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatCurrency(route.cost)}</td>
+                                          <td className="px-3 py-1 text-right tabular-nums font-semibold text-slate-700">{formatCurrency(route.revenue + route.cost)}</td>
                                           <td className="px-3 py-1 text-right tabular-nums">
-                                            <span className="font-extrabold text-slate-950">
+                                            <span className="font-semibold text-slate-700">
                                               {routeGpMargin.toFixed(1)}%
                                             </span>
                                           </td>
@@ -1866,7 +1883,7 @@ function PrintViewContent() {
                               );
                             })}
                             {/* Grand Total Row */}
-                            <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-[15px]">
+                            <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-[13px]">
                               <td className="px-3 py-1.5 text-slate-500" colSpan={2}>TOTAL</td>
                               <td className="px-3 py-1.5 text-right text-blue-600 tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
                               <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
@@ -1874,7 +1891,7 @@ function PrintViewContent() {
                               <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td>
                               <td className="px-3 py-1.5 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td>
                               <td className="px-3 py-1.5 text-right">
-                                <span className="font-bold text-slate-600 text-[14px]">
+                                <span className="font-bold text-slate-600 text-[12.5px]">
                                   {grandTotal.revenue > 0 ? ((grandTotal.revenue + grandTotal.cost) / grandTotal.revenue * 100).toFixed(1) : "0.0"}%
                                 </span>
                               </td>
@@ -1885,21 +1902,21 @@ function PrintViewContent() {
                     ) : (
                       data.slice(0, maxDataRows).map((row: any, i: number) => (
                         <tr key={i} className="hover:bg-slate-50/50">
-                          <td className="px-3 py-1.5 font-bold text-slate-500">{row.Company_Code ?? "—"}</td>
+                          <td className="px-3 py-1.5 font-semibold text-slate-500">{row.Company_Code ?? "—"}</td>
                           <td className="px-3 py-1.5 font-semibold text-slate-800 truncate max-w-[150px]">{row.Airline ?? "—"}</td>
-                          <td className="px-3 py-1.5 text-slate-500 truncate max-w-[150px]">
+                          <td className="px-3 py-1.5 text-slate-600 font-semibold truncate max-w-[150px]">
                             {row.Origin_City ? `${row.Origin_City}, ` : ""}{row.Origin_Country ?? "—"}
                           </td>
-                          <td className="px-3 py-1.5 text-slate-500 truncate max-w-[150px]">
+                          <td className="px-3 py-1.5 text-slate-600 font-semibold truncate max-w-[150px]">
                             {row.Destination_City ? `${row.Destination_City}, ` : ""}{row.Destination_Country ?? "—"}
                           </td>
-                          <td className="px-3 py-1.5 text-right font-bold text-blue-600">
+                          <td className="px-3 py-1.5 text-right font-semibold text-blue-600">
                             {row.Total_Revenue != null ? formatCurrency(row.Total_Revenue) : "—"}
                           </td>
-                          <td className="px-3 py-1.5 text-right text-slate-600 font-semibold">
+                          <td className="px-3 py-1.5 text-right text-slate-700 font-semibold">
                             {row.Total_Tonnage != null ? `${formatNumber(row.Total_Tonnage)} kg` : "—"}
                           </td>
-                          <td className="px-3 py-1.5 text-right text-slate-400">
+                          <td className="px-3 py-1.5 text-right text-slate-700 font-semibold">
                             {row.Total_Shipments != null ? formatNumber(row.Total_Shipments) : "—"}
                           </td>
                         </tr>
@@ -1917,8 +1934,8 @@ function PrintViewContent() {
           </div>
 
           {/* Print Footer */}
-          <div className="border-t border-slate-200 pt-2 mt-4 flex items-center justify-between text-[14px] text-slate-400">
-            <span>Generated via Headless Chromium PDF Print Engine</span>
+          <div className="border-t border-slate-200 pt-2 mt-4 flex items-center justify-between text-[12.5px] text-slate-400">
+            <span></span>
             <span>© 2026 Dart Global Logistics · {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Carrier Ledger"} Page</span>
           </div>
         </div>
@@ -1929,19 +1946,34 @@ function PrintViewContent() {
         <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
 
           {/* Print Header */}
-          <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
-            <div className="flex items-center gap-2.5">
-              <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-              <div>
-                <h1 className="text-3xl font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
-                <p className="text-[16px] text-slate-400 mt-0.5">
-                  Dart Global Logistics · {mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Strategic Analysis & Contribution Dashboard"}
-                </p>
+          <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
+            {/* Top Row: Logo & Main Title (left) + Branch & Dest Badges (right) */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
+                <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+              </div>
+              <div className="flex gap-1 justify-end items-center">
+                {branch && (
+                  <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
+                    🏢 Branch: {branch}
+                  </span>
+                )}
+                {destinationCountry && (
+                  <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
+                    📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
+                  </span>
+                )}
               </div>
             </div>
-            <div className="flex flex-col items-end gap-0.5">
-              <span className="text-black font-bold text-[17px] flex items-center gap-1">
-                📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`} | Station: {getStationLabel()}
+
+            {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
+            <div className="flex items-baseline justify-between mt-1">
+              <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
+                Dart Global Logistics · {mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Strategic Analysis & Contribution Dashboard"}
+              </p>
+              <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
+                {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`} | Station: {getStationLabel()}
               </span>
             </div>
           </div>
@@ -1950,13 +1982,13 @@ function PrintViewContent() {
             /* Custom SQL Mode: Render Trade Route Performance Summary — Top 10 Table */
             <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex-1 mt-4">
               <div className="flex items-center justify-between mb-2 pb-1 border-b border-[#F1F5F9]">
-                <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Trade Route Performance Summary — Top 10</span>
-                <span className="text-[14px] text-slate-400 font-bold">Top 10 Routes</span>
+                <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Trade Route Performance Summary — Top 10</span>
+                <span className="text-[12.5px] text-slate-400 font-bold">Top 10 Routes</span>
               </div>
               <div>
-                <table className="w-full text-left text-[16px] border-collapse">
+                <table className="w-full text-left text-[14.5px] border-collapse">
                   <thead>
-                    <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[14px] tracking-wider bg-slate-50/50">
+                    <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[12.5px] tracking-wider bg-slate-50/50">
                       <th className="px-3 py-1.5 w-8">#</th>
                       <th className="px-3 py-1.5">Origin Country</th>
                       <th className="px-3 py-1.5">Origin City</th>
@@ -2077,14 +2109,16 @@ function PrintViewContent() {
                             const pct = grandTotal.tonnage > 0 ? (row.tonnage / grandTotal.tonnage * 100) : 0;
                             return (
                               <tr key={i} className={`hover:bg-slate-50/50 ${bgClass}`}>
-                                <td className="px-3 py-1.5 text-slate-400 font-bold tabular-nums">
+                                <td className="px-3 py-1.5 text-center text-slate-400 font-bold tabular-nums">
                                   {isOthers ? "—" : (
-                                    <span
-                                      className="inline-flex items-center justify-center w-4 h-4 rounded-full text-[14px] font-extrabold text-slate-800 border border-slate-300"
-                                      style={{ backgroundColor: solidBgColor }}
-                                    >
-                                      {i + 1}
-                                    </span>
+                                    <div className="flex items-center justify-center">
+                                      <span
+                                        className="flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-extrabold text-slate-800 border border-slate-300 text-center leading-[18px] shrink-0"
+                                        style={{ backgroundColor: solidBgColor }}
+                                      >
+                                        {i + 1}
+                                      </span>
+                                    </div>
                                   )}
                                 </td>
                                 <td className="px-3 py-1.5">
@@ -2099,7 +2133,7 @@ function PrintViewContent() {
                                 <td className="px-3 py-1.5 text-slate-600 font-medium">{row.destCity}</td>
                                 <td className="px-3 py-1.5 text-right tabular-nums">
                                   <div className="flex flex-col items-end gap-0.5">
-                                    <span className="font-bold text-[#319795]">{formatNumber(row.tonnage)} kg</span>
+                                    <span className="font-semibold text-[#319795]">{formatNumber(row.tonnage)} kg</span>
                                     <div className="h-0.5 rounded-full bg-slate-100 w-10 overflow-hidden">
                                       <div
                                         className="h-full rounded-full"
@@ -2109,11 +2143,11 @@ function PrintViewContent() {
                                   </div>
                                 </td>
                                 <td className="px-3 py-1.5 text-right text-slate-500 font-semibold tabular-nums">{formatNumber(row.shipments)}</td>
-                                <td className="px-3 py-1.5 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
+                                <td className="px-3 py-1.5 text-right font-semibold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
                                 <td className="px-3 py-1.5 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td>
-                                <td className="px-3 py-1.5 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td>
+                                <td className="px-3 py-1.5 text-right font-semibold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td>
                                 <td className="px-3 py-1.5 text-right tabular-nums">
-                                  <span className={`font-bold text-[14px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
+                                  <span className={`font-semibold text-[12.5px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
                                     {gpMargin.toFixed(1)}%
                                   </span>
                                 </td>
@@ -2121,7 +2155,7 @@ function PrintViewContent() {
                             );
                           })}
                           {/* Grand Total Row */}
-                          <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-[15px]">
+                          <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-[13px]">
                             <td className="px-3 py-1.5 text-slate-500" colSpan={2}>TOTAL</td>
                             <td className="px-3 py-1.5" />
                             <td className="px-3 py-1.5" />
@@ -2132,7 +2166,7 @@ function PrintViewContent() {
                             <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td>
                             <td className="px-3 py-1.5 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td>
                             <td className="px-3 py-1.5 text-right">
-                              <span className="font-bold text-slate-600 text-[14px]">
+                              <span className="font-bold text-slate-600 text-[12.5px]">
                                 {grandTotal.revenue > 0 ? ((grandTotal.revenue + grandTotal.cost) / grandTotal.revenue * 100).toFixed(1) : "0.0"}%
                               </span>
                             </td>
@@ -2149,25 +2183,21 @@ function PrintViewContent() {
             <>
               {/* KPI Cards Row */}
               <div className="grid grid-cols-4 gap-4 mt-4">
-                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[96px]">
-                  <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Total Revenue</span>
-                  <h3 className="text-3xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
-                  <span className="text-[14px] text-blue-500 font-semibold">✓ Consol Revenue</span>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Revenue</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
                 </div>
-                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[96px]">
-                  <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Total Cost</span>
-                  <h3 className="text-3xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
-                  <span className="text-[14px] text-rose-500 font-semibold">✗ Total Expenses</span>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Cost</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
                 </div>
-                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[96px]">
-                  <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Total Profit</span>
-                  <h3 className="text-3xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
-                  <span className="text-[14px] text-emerald-600 font-semibold">✓ Net Earnings</span>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Profit</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
                 </div>
-                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-[96px]">
-                  <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Total Tonnage</span>
-                  <h3 className="text-3xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
-                  <span className="text-[14px] text-indigo-600 font-semibold">✈️ Active Weight</span>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Tonnage</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
                 </div>
               </div>
 
@@ -2176,7 +2206,7 @@ function PrintViewContent() {
 
                 {/* Left Column - Origin Contribution (Pie Chart) */}
                 <div className="col-span-4 border border-slate-200 rounded-xl p-4 bg-white shadow-sm h-[450px] flex flex-col justify-between">
-                  <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Origin Contribution</span>
+                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Origin Contribution</span>
                   <div className="relative h-[220px] flex items-center justify-center mt-1">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
@@ -2196,14 +2226,14 @@ function PrintViewContent() {
                       </PieChart>
                     </ResponsiveContainer>
                     <div className="absolute text-center flex flex-col justify-center items-center">
-                      <span className="text-[13px] font-bold text-slate-400 uppercase tracking-widest">Share</span>
-                      <span className="text-[15px] font-extrabold text-[#2D3748]">{formatCurrency(kpi.Total_Revenue).slice(0, 7)}</span>
+                      <span className="text-[11.5px] font-bold text-slate-400 uppercase tracking-widest">Share</span>
+                      <span className="text-[9px] font-extrabold text-[#2D3748]">{formatCurrency(kpi.Total_Revenue).slice(0, 7)}</span>
                     </div>
                   </div>
 
                   <div className="space-y-1 mt-2 overflow-hidden flex-1">
                     {doughnutData.slice(0, 4).map((entry, idx) => (
-                      <div key={entry.name} className="flex items-center justify-between text-[15px] text-slate-500">
+                      <div key={entry.name} className="flex items-center justify-between text-[9px] text-slate-500">
                         <div className="flex items-center gap-1.5 min-w-0">
                           <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }} />
                           <span className="truncate max-w-[90px] font-semibold">{entry.name}</span>
@@ -2216,7 +2246,7 @@ function PrintViewContent() {
 
                 {/* Right Column - Monthly Revenue Flow Area Chart */}
                 <div className="col-span-8 border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between h-[450px]">
-                  <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">Revenue Flow & Trends (Monthly)</span>
+                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Revenue Flow & Trends (Monthly)</span>
                   <div className="h-[390px] w-full mt-2">
                     <ResponsiveContainer width="100%" height="100%">
                       <AreaChart data={monthlyData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
@@ -2239,8 +2269,8 @@ function PrintViewContent() {
           )}
 
           {/* Print Footer */}
-          <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[15px] text-slate-400">
-            <span>Generated via Headless Chromium PDF Print Engine</span>
+          <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[9px] text-slate-400">
+            <span></span>
             <span>© 2026 Dart Global Logistics · {mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Visual Summary"} Page</span>
           </div>
         </div>
@@ -2252,19 +2282,34 @@ function PrintViewContent() {
 
           <div className="flex flex-col print:block gap-6 flex-1">
             {/* Print Header */}
-            <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
-              <div className="flex items-center gap-2.5">
-                <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                <div>
-                  <h1 className="text-3xl font-bold text-slate-800 tracking-tight">DGL Tonnage Analysis</h1>
-                  <p className="text-[16px] text-slate-400 mt-0.5">
-                    Dart Global Logistics · {mode === "custom-sql" ? "Detailed Raw Query Ledger" : "Monthly Strategic Analysis & Contribution Ledger"}
-                  </p>
+            <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
+              {/* Top Row: Logo & Main Title (left) + Branch & Dest Badges (right) */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
+                  <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+                </div>
+                <div className="flex gap-1 justify-end items-center">
+                  {branch && (
+                    <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
+                      🏢 Branch: {branch}
+                    </span>
+                  )}
+                  {destinationCountry && (
+                    <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
+                      📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
+                    </span>
+                  )}
                 </div>
               </div>
-              <div className="flex flex-col items-end gap-0.5">
-                <span className="text-black font-bold text-[17px] flex items-center gap-1">
-                  📅 {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`} | Station: {getStationLabel()}
+
+              {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
+              <div className="flex items-baseline justify-between mt-1">
+                <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
+                  Dart Global Logistics · {mode === "custom-sql" ? "Detailed Raw Query Ledger" : "Monthly Strategic Analysis & Contribution Ledger"}
+                </p>
+                <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
+                  {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`} | Station: {getStationLabel()}
                 </span>
               </div>
             </div>
@@ -2272,17 +2317,17 @@ function PrintViewContent() {
             {/* Monthly Summary Table / Detailed Raw Query Ledger */}
             <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex-1">
               <div className="flex items-center justify-between mb-2 pb-1 border-b border-[#F1F5F9]">
-                <span className="text-[15px] uppercase tracking-wider font-bold text-slate-400">
+                <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">
                   {mode === "custom-sql" ? "Detailed Raw Query Ledger" : "Monthly Financial Ledger"}
                 </span>
-                <span className="text-[14px] text-slate-400 font-bold">
+                <span className="text-[12.5px] text-slate-400 font-bold">
                   {mode === "custom-sql" ? `Query Result Records (${data.length})` : `All Monthly Records (${monthlyData.length})`}
                 </span>
               </div>
               <div>
-                <table className="w-full text-left text-[16px] border-collapse">
+                <table className="w-full text-left text-[14.5px] border-collapse">
                   <thead>
-                    <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[14px] tracking-wider bg-slate-50/55">
+                    <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[12.5px] tracking-wider bg-slate-50/55">
                       {mode === "custom-sql" ? (
                         data.length > 0 ? (
                           Object.keys(data[0]).map((key) => (
@@ -2339,15 +2384,15 @@ function PrintViewContent() {
                     ) : (
                       monthlyData.slice(0, maxDataRows).map((row: any, i: number) => (
                         <tr key={i} className="hover:bg-slate-50/50">
-                          <td className="px-3 py-1.5 font-bold text-slate-500">{row.Year}</td>
+                          <td className="px-3 py-1.5 font-semibold text-slate-500">{row.Year}</td>
                           <td className="px-3 py-1.5 font-semibold text-slate-800">{row.month_label ? row.month_label.split(" '")[0] : "—"}</td>
-                          <td className="px-3 py-1.5 text-right font-bold text-teal-600">
+                          <td className="px-3 py-1.5 text-right font-semibold text-teal-600">
                             {row.Total_Revenue != null ? formatCurrency(row.Total_Revenue) : "$0"}
                           </td>
-                          <td className="px-3 py-1.5 text-right text-slate-600 font-semibold">
+                          <td className="px-3 py-1.5 text-right text-slate-700 font-semibold">
                             {row.Total_Tonnage != null ? `${formatNumber(row.Total_Tonnage)} kg` : "0 kg"}
                           </td>
-                          <td className="px-3 py-1.5 text-right text-slate-400">
+                          <td className="px-3 py-1.5 text-right text-slate-700 font-semibold">
                             {row.Total_Shipments != null ? formatNumber(row.Total_Shipments) : "0"}
                           </td>
                         </tr>
@@ -2365,8 +2410,8 @@ function PrintViewContent() {
           </div>
 
           {/* Print Footer */}
-          <div className="border-t border-slate-200 pt-2 mt-4 flex items-center justify-between text-[14px] text-slate-400">
-            <span>Generated via Headless Chromium PDF Print Engine</span>
+          <div className="border-t border-slate-200 pt-2 mt-4 flex items-center justify-between text-[12.5px] text-slate-400">
+            <span></span>
             <span>© 2026 Dart Global Logistics · {mode === "custom-sql" ? "Detailed Raw Query Ledger" : "Monthly Ledger"} Page</span>
           </div>
         </div>
