@@ -27,6 +27,7 @@ def generate_dashboard_pdf(
     include_weekly_ledger: bool = True,
     include_monthly_visual: bool = True,
     include_monthly_ledger: bool = True,
+    include_sector_distribution: bool = True,
     max_data_rows: int = 100,
     mode: str = "standard",
     custom_sql: str = None,
@@ -84,6 +85,7 @@ def generate_dashboard_pdf(
     params["include_weekly_ledger"] = str(include_weekly_ledger).lower()
     params["include_monthly_visual"] = str(include_monthly_visual).lower()
     params["include_monthly_ledger"] = str(include_monthly_ledger).lower()
+    params["include_sector_distribution"] = str(include_sector_distribution).lower()
     params["max_data_rows"] = max_data_rows
     params["report_type"] = report_type
     

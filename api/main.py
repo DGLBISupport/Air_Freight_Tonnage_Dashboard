@@ -32,6 +32,7 @@ from api.database import (
     get_destination_cities,
     get_branches,
     execute_custom_query,
+    get_sector_carrier_distribution,
 )
 from api.pdf_service import generate_dashboard_pdf
 from api.email_service import send_pdf_via_graph
@@ -81,6 +82,27 @@ def extract_station_info_from_sql(custom_sql: str) -> tuple[Optional[str], Optio
         country = country_match.group(1)
         
     return company_code, country
+
+
+def extract_dates_from_sql(custom_sql: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Extracts start_date and end_date from ETD comparisons in the query.
+    """
+    if not custom_sql:
+        return None, None
+    import re
+    start_date = None
+    end_date = None
+    
+    start_match = re.search(r"(?:[a-zA-Z0-9_]+\.)?ETD\s*>=\s*'([^']+)'", custom_sql, re.IGNORECASE)
+    if start_match:
+        start_date = start_match.group(1)
+        
+    end_match = re.search(r"(?:[a-zA-Z0-9_]+\.)?ETD\s*<=\s*'([^']+)'", custom_sql, re.IGNORECASE)
+    if end_match:
+        end_date = end_match.group(1)
+        
+    return start_date, end_date
 
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
@@ -195,6 +217,7 @@ class ReportRequest(BaseModel):
     include_weekly_ledger: bool = True
     include_monthly_visual: bool = True
     include_monthly_ledger: bool = True
+    include_sector_distribution: bool = True
     max_data_rows: int = 100  # Limit table rows to reduce PDF size
     report_type: Optional[str] = "weekly"
 
@@ -222,6 +245,49 @@ def fetch_data(
         data = get_filtered_data(
             start_date, end_date, country, airline, company_code, origin_city, destination_country, destination_city, branch
         )
+        return {"status": "success", "data": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sector-carrier-distribution")
+def fetch_sector_carrier_distribution(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    country: Optional[str] = None,
+    company_code: Optional[str] = None,
+    custom_sql: Optional[str] = None,
+    query_id: Optional[str] = None,
+):
+    """Provides sector-wise carrier tonnage distribution data."""
+    try:
+        sql_str = None
+        if query_id and query_id in query_cache:
+            sql_str = query_cache[query_id]
+        elif custom_sql:
+            sql_str = custom_sql
+
+        if sql_str:
+            sql_company, sql_country = extract_station_info_from_sql(sql_str)
+            sql_start, sql_end = extract_dates_from_sql(sql_str)
+            if sql_country:
+                country = sql_country
+            if sql_company:
+                company_code = sql_company
+            if sql_start:
+                start_date = sql_start
+            if sql_end:
+                end_date = sql_end
+
+        # Fallbacks to prevent validation/query errors
+        if not country or country == "":
+            country = "India"
+        if not start_date or start_date == "":
+            start_date = "2025-01-01"
+        if not end_date or end_date == "":
+            end_date = "2025-12-31"
+
+        data = get_sector_carrier_distribution(start_date, end_date, country, company_code)
         return {"status": "success", "data": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -415,6 +481,7 @@ def process_pdf_and_email(req: ReportRequest):
             include_weekly_ledger=req.include_weekly_ledger,
             include_monthly_visual=req.include_monthly_visual,
             include_monthly_ledger=req.include_monthly_ledger,
+            include_sector_distribution=req.include_sector_distribution,
             max_data_rows=req.max_data_rows,
             mode=req.mode,
             custom_sql=req.custom_sql,
@@ -899,6 +966,7 @@ def send_report(req: ReportRequest):
             include_weekly_ledger=req.include_weekly_ledger,
             include_monthly_visual=req.include_monthly_visual,
             include_monthly_ledger=req.include_monthly_ledger,
+            include_sector_distribution=req.include_sector_distribution,
             max_data_rows=req.max_data_rows,
             mode=req.mode,
             custom_sql=req.custom_sql,
@@ -1181,6 +1249,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             include_weekly_ledger=filters.get("include_weekly_ledger", True),
             include_monthly_visual=filters.get("include_monthly_visual", True),
             include_monthly_ledger=filters.get("include_monthly_ledger", True),
+            include_sector_distribution=filters.get("include_sector_distribution", True),
             max_data_rows=filters.get("max_data_rows", 100),
             mode=mode,
             custom_sql=custom_sql,

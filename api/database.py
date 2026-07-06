@@ -672,3 +672,83 @@ def execute_custom_query(sql_str: str):
     except Exception as e:
         # Re-raise with more context
         raise Exception(f"SQL execution error: {str(e)}")
+
+
+def get_sector_carrier_distribution(
+    start_date: str,
+    end_date: str,
+    country: str,
+    company_code: str = None,
+):
+    """
+    Fetches carrier tonnage distributed sector-wise for both exports and imports.
+    """
+    params = {
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+
+    country_filter = ""
+    if country and country != "all" and country != "":
+        countries_list = [c.strip() for c in country.split(",") if c.strip()]
+        placeholders = []
+        for i, c in enumerate(countries_list):
+            param_name = f"cty_{i}"
+            placeholders.append(f":{param_name}")
+            params[param_name] = c
+        country_filter = f"AND vt.ConLoadPortCountryName IN ({', '.join(placeholders)})"
+
+    company_filter = ""
+    if company_code and company_code != "all":
+        codes = [c.strip() for c in company_code.split(",") if c.strip()]
+        placeholders = []
+        for i, code in enumerate(codes):
+            param_name = f"cc_{i}"
+            placeholders.append(f":{param_name}")
+            params[param_name] = code
+        company_filter = f"AND vs.Company IN ({', '.join(placeholders)})"
+
+    query = f"""
+    SELECT 
+        Airline,
+        SUM(Export_Tonnage) AS Air_Exp_Tong,
+        0 AS Air_Imp_Tong,
+        SUM(Export_Tonnage) AS Total_Tons,
+        SUM(CASE WHEN Sector = 'Europe Other' THEN Tonnage ELSE 0 END) AS Europe,
+        SUM(CASE WHEN Sector = 'USA' THEN Tonnage ELSE 0 END) AS USA,
+        SUM(CASE WHEN Sector = 'North America Other' THEN Tonnage ELSE 0 END) AS North_America_Other,
+        SUM(CASE WHEN Sector = 'Central America & Caribbean' THEN Tonnage ELSE 0 END) AS Central_America,
+        SUM(CASE WHEN Sector = 'South America' THEN Tonnage ELSE 0 END) AS South_America,
+        SUM(CASE WHEN Sector = 'Middle East' THEN Tonnage ELSE 0 END) AS Middle_East,
+        SUM(CASE WHEN Sector = 'South East Asia' THEN Tonnage ELSE 0 END) AS South_East_Asia,
+        SUM(CASE WHEN Sector = 'India & Sub Continent' THEN Tonnage ELSE 0 END) AS India_Sub_Continent,
+        SUM(CASE WHEN Sector = 'Northern Asia' THEN Tonnage ELSE 0 END) AS Northern_Asia,
+        SUM(CASE WHEN Sector = 'Africa' THEN Tonnage ELSE 0 END) AS Africa,
+        SUM(CASE WHEN Sector = 'South Africa' THEN Tonnage ELSE 0 END) AS South_Africa,
+        SUM(CASE WHEN Sector = 'Australia' THEN Tonnage ELSE 0 END) AS Australia,
+        SUM(CASE WHEN Sector = 'Pacific Islands' THEN Tonnage ELSE 0 END) AS Pacific_Islands,
+        SUM(CASE WHEN Sector NOT IN ('Europe Other', 'USA', 'North America Other', 'Central America & Caribbean', 'South America', 'Middle East', 'South East Asia', 'India & Sub Continent', 'Northern Asia', 'Africa', 'South Africa', 'Australia', 'Pacific Islands') OR Sector IS NULL THEN Tonnage ELSE 0 END) AS Others
+    FROM (
+        -- EXPORTS ONLY (Grouped by Console to prevent duplication and align with Monthly rollup query)
+        SELECT 
+            vt.ConsoleNumber,
+            vt.AirlineName1 AS Airline,
+            MAX(vt.Air_ChargebleWeight) AS Tonnage,
+            MAX(vt.Air_ChargebleWeight) AS Export_Tonnage,
+            COALESCE(dc.Sector, 'Other') AS Sector
+        FROM dbo.ChatData_ViewShipConsolTransport vt
+        LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc ON vsc.Link_ConsolNumber = vt.ConsoleNumber
+        LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs ON vs.ShipmentNumber = vsc.Link_ShipmentNum
+        LEFT JOIN [DartBIDW].[dbo].[DimCountry] dc ON dc.CountryName = vt.ConDischargePortCountryName
+        WHERE vt.TransportMode = 'AIR'
+          AND vt.ETD >= :start_date 
+          AND vt.ETD <= :end_date
+          {country_filter}
+          {company_filter}
+        GROUP BY vt.ConsoleNumber, vt.AirlineName1, dc.Sector
+    ) Combined
+    GROUP BY Airline
+    ORDER BY Total_Tons DESC
+    """
+    df = run_query(query, params)
+    return to_clean_records(df)

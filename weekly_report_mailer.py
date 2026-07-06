@@ -180,6 +180,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             "include_weekly_ledger": "true",
             "include_monthly_visual": "true",
             "include_monthly_ledger": "true",
+            "include_sector_distribution": "true",
             "max_data_rows": 100,
             "country": country,
             "company_code": station_code

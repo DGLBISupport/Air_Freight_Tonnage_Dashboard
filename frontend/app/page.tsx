@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar,
+  ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, Line, LabelList, ComposedChart
 } from "recharts";
 import {
   Calendar, Globe, Plane, RefreshCw, Send, X, ArrowUpRight, ArrowDownRight, Layers, FileText, Printer, CheckCircle,
@@ -800,6 +800,7 @@ export default function Dashboard() {
   const [standardWeeklyData, setStandardWeeklyData] = useState<any[]>([]);
   const [standardMonthlyData, setStandardMonthlyData] = useState<any[]>([]);
   const [standardKpi, setStandardKpi] = useState<any>({});
+  const [standardSectorCarrierData, setStandardSectorCarrierData] = useState<any[]>([]);
 
   // Loading & Email Status
   const [loading, setLoading] = useState(false);
@@ -862,6 +863,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
   const [weeklySqlWeeklyData, setWeeklySqlWeeklyData] = useState<any[]>([]);
   const [weeklySqlMonthlyData, setWeeklySqlMonthlyData] = useState<any[]>([]);
   const [weeklySqlKpi, setWeeklySqlKpi] = useState<any>({});
+  const [weeklySqlSectorCarrierData, setWeeklySqlSectorCarrierData] = useState<any[]>([]);
   const [weeklySqlError, setWeeklySqlError] = useState("");
   const [weeklySqlExecutionStatus, setWeeklySqlExecutionStatus] = useState("");
   const [weeklySqlIsRunning, setWeeklySqlIsRunning] = useState(false);
@@ -911,6 +913,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
   const [monthlySqlWeeklyData, setMonthlySqlWeeklyData] = useState<any[]>([]);
   const [monthlySqlMonthlyData, setMonthlySqlMonthlyData] = useState<any[]>([]);
   const [monthlySqlKpi, setMonthlySqlKpi] = useState<any>({});
+  const [monthlySqlSectorCarrierData, setMonthlySqlSectorCarrierData] = useState<any[]>([]);
   const [monthlySqlError, setMonthlySqlError] = useState("");
   const [monthlySqlExecutionStatus, setMonthlySqlExecutionStatus] = useState("");
   const [monthlySqlIsRunning, setMonthlySqlIsRunning] = useState(false);
@@ -1117,6 +1120,18 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
         setWeeklySqlWeeklyData(parseWeeklyData(records));
         setWeeklySqlMonthlyData(parseMonthlyData(records));
         setWeeklySqlExecutionStatus(`✓ Query executed successfully! Returned ${records.length} rows.`);
+
+        // Resolve sector carrier distribution for custom sql
+        try {
+          const secParams = new URLSearchParams({ custom_sql: activeSql });
+          const secRes = await fetch(`${API}/api/sector-carrier-distribution?${secParams}`);
+          const secData = await secRes.json();
+          if (secData.status === "success") {
+            setWeeklySqlSectorCarrierData(secData.data);
+          }
+        } catch (secErr) {
+          console.error("Failed to fetch sector carrier distribution for custom SQL", secErr);
+        }
       } else {
         const errorMessage = d.detail || d.error || "Database query failed to execute. Please check your SQL syntax.";
         setWeeklySqlError(errorMessage);
@@ -1205,6 +1220,18 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
         setMonthlySqlWeeklyData(parseWeeklyData(records));
         setMonthlySqlMonthlyData(parseMonthlyData(records));
         setMonthlySqlExecutionStatus(`✓ Query executed successfully! Returned ${records.length} rows.`);
+
+        // Resolve sector carrier distribution for custom sql
+        try {
+          const secParams = new URLSearchParams({ custom_sql: activeSql });
+          const secRes = await fetch(`${API}/api/sector-carrier-distribution?${secParams}`);
+          const secData = await secRes.json();
+          if (secData.status === "success") {
+            setMonthlySqlSectorCarrierData(secData.data);
+          }
+        } catch (secErr) {
+          console.error("Failed to fetch sector carrier distribution for custom SQL", secErr);
+        }
       } else {
         const errorMessage = d.detail || d.error || "Database query failed to execute. Please check your SQL syntax.";
         setMonthlySqlError(errorMessage);
@@ -1267,17 +1294,19 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
       if (destinationCityParam) params.append("destination_city", destinationCityParam);
       if (branchParam) params.append("branch", branchParam);
 
-      const [dataRes, weekRes, monthRes, kpiRes] = await Promise.all([
+      const [dataRes, weekRes, monthRes, kpiRes, sectorRes] = await Promise.all([
         fetch(`${API}/api/data?${params}`),
         fetch(`${API}/api/weekly?${params}`),
         fetch(`${API}/api/monthly?${params}`),
         fetch(`${API}/api/kpi?${params}`),
+        fetch(`${API}/api/sector-carrier-distribution?${params}`),
       ]);
-      const [d, w, m, k] = await Promise.all([dataRes.json(), weekRes.json(), monthRes.json(), kpiRes.json()]);
+      const [d, w, m, k, sec] = await Promise.all([dataRes.json(), weekRes.json(), monthRes.json(), kpiRes.json(), sectorRes.json()]);
       if (d.status === "success") setStandardRecords(d.data);
       if (w.status === "success") setStandardWeeklyData(w.data);
       if (m.status === "success") setStandardMonthlyData(m.data);
       if (k.status === "success") setStandardKpi(k.data);
+      if (sec.status === "success") setStandardSectorCarrierData(sec.data);
     } catch (e) {
       console.error("Failed to sync database view", e);
     }
@@ -1731,6 +1760,165 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     : activeSection === "weekly-reports"
       ? weeklySqlKpi
       : monthlySqlKpi;
+
+  const sectorCarrierData = activeSection === "dashboard"
+    ? standardSectorCarrierData
+    : activeSection === "weekly-reports"
+      ? weeklySqlSectorCarrierData
+      : monthlySqlSectorCarrierData;
+
+  // Sector Tonnage Distribution (dual-axis chart & table) data helpers
+  const getSectorChartData = () => {
+    let tEurope = 0, tUSA = 0, tSEAsia = 0, tAfrica = 0, tIndiaSub = 0, tMidEast = 0, tAustralia = 0, tOthers = 0;
+    
+    sectorCarrierData.forEach((row: any) => {
+      tEurope += Number(row.Europe || 0);
+      tUSA += Number(row.USA || 0);
+      tSEAsia += Number(row.South_East_Asia || 0);
+      tAfrica += Number(row.Africa || 0);
+      tIndiaSub += Number(row.India_Sub_Continent || 0);
+      tMidEast += Number(row.Middle_East || 0);
+      tAustralia += Number(row.Australia || 0);
+      tOthers += Number(row.North_America_Other || 0) + Number(row.Central_America || 0) + Number(row.South_America || 0) + Number(row.Northern_Asia || 0) + Number(row.South_Africa || 0) + Number(row.Pacific_Islands || 0) + Number(row.Others || 0);
+    });
+
+    const total = tEurope + tUSA + tSEAsia + tAfrica + tIndiaSub + tMidEast + tAustralia + tOthers;
+    const pct = (val: number) => total > 0 ? (val / total) * 100 : 0;
+
+    return [
+      { name: "Europe", tonnage: Number((tEurope / 1000).toFixed(1)), contribution: pct(tEurope) },
+      { name: "USA", tonnage: Number((tUSA / 1000).toFixed(1)), contribution: pct(tUSA) },
+      { name: "S.East Asia", tonnage: Number((tSEAsia / 1000).toFixed(1)), contribution: pct(tSEAsia) },
+      { name: "Africa", tonnage: Number((tAfrica / 1000).toFixed(1)), contribution: pct(tAfrica) },
+      { name: "India & Sub Cont.", tonnage: Number((tIndiaSub / 1000).toFixed(1)), contribution: pct(tIndiaSub) },
+      { name: "Mid East", tonnage: Number((tMidEast / 1000).toFixed(1)), contribution: pct(tMidEast) },
+      { name: "Australia", tonnage: Number((tAustralia / 1000).toFixed(1)), contribution: pct(tAustralia) },
+      { name: "Other Sectors", tonnage: Number((tOthers / 1000).toFixed(1)), contribution: pct(tOthers) },
+    ];
+  };
+
+  const getSectorTableRows = () => {
+    const sorted = [...sectorCarrierData].sort((a, b) => b.Total_Tons - a.Total_Tons);
+    const top20 = sorted.slice(0, 20);
+    const others = sorted.slice(20);
+
+    const convertRow = (r: any) => ({
+      name: r.Airline || "Unknown Carrier",
+      exp: Math.round(r.Air_Exp_Tong / 1000),
+      imp: Math.round(r.Air_Imp_Tong / 1000),
+      total: Math.round(r.Total_Tons / 1000),
+      europe: Math.round(r.Europe / 1000),
+      usa: Math.round(r.USA / 1000),
+      northAmericaOther: Math.round(r.North_America_Other / 1000),
+      centralAmerica: Math.round(r.Central_America / 1000),
+      southAmerica: Math.round(r.South_America / 1000),
+      middleEast: Math.round(r.Middle_East / 1000),
+      southEastAsia: Math.round(r.South_East_Asia / 1000),
+      indiaSubContinent: Math.round(r.India_Sub_Continent / 1000),
+      northernAsia: Math.round(r.Northern_Asia / 1000),
+      africa: Math.round(r.Africa / 1000),
+      southAfrica: Math.round(r.South_Africa / 1000),
+      australia: Math.round(r.Australia / 1000),
+      pacificIslands: Math.round(r.Pacific_Islands / 1000),
+      others: Math.round(r.Others / 1000)
+    });
+
+    const rows = top20.map(convertRow);
+
+    if (others.length > 0) {
+      const othersRowCombined = others.reduce((acc, curr) => {
+        acc.Air_Exp_Tong += curr.Air_Exp_Tong;
+        acc.Air_Imp_Tong += curr.Air_Imp_Tong;
+        acc.Total_Tons += curr.Total_Tons;
+        acc.Europe += curr.Europe;
+        acc.USA += curr.USA;
+        acc.North_America_Other += curr.North_America_Other;
+        acc.Central_America += curr.Central_America;
+        acc.South_America += curr.South_America;
+        acc.Middle_East += curr.Middle_East;
+        acc.South_East_Asia += curr.South_East_Asia;
+        acc.India_Sub_Continent += curr.India_Sub_Continent;
+        acc.Northern_Asia += curr.Northern_Asia;
+        acc.Africa += curr.Africa;
+        acc.South_Africa += curr.South_Africa;
+        acc.Australia += curr.Australia;
+        acc.Pacific_Islands += curr.Pacific_Islands;
+        acc.Others += curr.Others;
+        return acc;
+      }, {
+        Airline: "OTHERS - Total",
+        Air_Exp_Tong: 0,
+        Air_Imp_Tong: 0,
+        Total_Tons: 0,
+        Europe: 0,
+        USA: 0,
+        North_America_Other: 0,
+        Central_America: 0,
+        South_America: 0,
+        Middle_East: 0,
+        South_East_Asia: 0,
+        India_Sub_Continent: 0,
+        Northern_Asia: 0,
+        Africa: 0,
+        South_Africa: 0,
+        Australia: 0,
+        Pacific_Islands: 0,
+        Others: 0
+      });
+      rows.push({
+        ...convertRow(othersRowCombined),
+        isOthersRow: true
+      } as any);
+    }
+
+    // Grand Total Row
+    const grandTotalCombined = sorted.reduce((acc, curr) => {
+      acc.Air_Exp_Tong += curr.Air_Exp_Tong;
+      acc.Air_Imp_Tong += curr.Air_Imp_Tong;
+      acc.Total_Tons += curr.Total_Tons;
+      acc.Europe += curr.Europe;
+      acc.USA += curr.USA;
+      acc.North_America_Other += curr.North_America_Other;
+      acc.Central_America += curr.Central_America;
+      acc.South_America += curr.South_America;
+      acc.Middle_East += curr.Middle_East;
+      acc.South_East_Asia += curr.South_East_Asia;
+      acc.India_Sub_Continent += curr.India_Sub_Continent;
+      acc.Northern_Asia += curr.Northern_Asia;
+      acc.Africa += curr.Africa;
+      acc.South_Africa += curr.South_Africa;
+      acc.Australia += curr.Australia;
+      acc.Pacific_Islands += curr.Pacific_Islands;
+      acc.Others += curr.Others;
+      return acc;
+    }, {
+      Airline: "Total",
+      Air_Exp_Tong: 0,
+      Air_Imp_Tong: 0,
+      Total_Tons: 0,
+      Europe: 0,
+      USA: 0,
+      North_America_Other: 0,
+      Central_America: 0,
+      South_America: 0,
+      Middle_East: 0,
+      South_East_Asia: 0,
+      India_Sub_Continent: 0,
+      Northern_Asia: 0,
+      Africa: 0,
+      Australia: 0,
+      South_Africa: 0,
+      Pacific_Islands: 0,
+      Others: 0
+    });
+
+    rows.push({
+      ...convertRow(grandTotalCombined),
+      isGrandTotal: true
+    } as any);
+
+    return rows;
+  };
 
   // --- DYNAMIC SQL CONSOLE STATES ---
   const isSqlConsoleOpen = activeSection === "weekly-reports" ? isWeeklySqlConsoleOpen : isMonthlySqlConsoleOpen;
@@ -5072,6 +5260,184 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                   </div>
                 </div>
               )}
+
+              {/* ── CHAPTER 3: SECTOR CARRIER & GEOGRAPHICAL DISTRIBUTION ── */}
+              <div className="space-y-4 pt-4 border-t border-[#E2E8F0]">
+                <div className="flex items-center gap-2 pb-2 border-b border-[#E2E8F0]">
+                  <span className="h-5 w-1.5 bg-violet-600 rounded-full animate-pulse" />
+                  <h2 className="text-base font-bold text-[#1A202C]">Sector-wise Carrier & Geographical Tonnage Performance</h2>
+                  <span className="text-[10px] text-violet-700 bg-violet-50 font-semibold px-2 py-0.5 rounded-full border border-violet-100">
+                    Carrier & Sector Performance
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-12 gap-6">
+                  {/* Left Chart (Col-span-12 or 8) */}
+                  <div className="col-span-12 lg:col-span-8 saas-card p-6 bg-white relative flex flex-col justify-between min-h-[350px]">
+                    <div className="flex items-center justify-between mb-4 border-b border-[#F1F5F9] pb-4">
+                      <div>
+                        <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Geographical contribution</p>
+                        <h2 className="text-lg font-bold text-[#1A202C] mt-0.5">Air Exports - Geographical Tonnage Contribution</h2>
+                      </div>
+                      <span className="text-xs font-bold text-violet-600 px-2 py-0.5 rounded-full bg-violet-50 border border-violet-100">
+                        Tons vs Contribution %
+                      </span>
+                    </div>
+
+                    <div className="h-80 w-full">
+                      {loading ? (
+                        <div className="h-full flex items-center justify-center">
+                          <RefreshCw className="w-6 h-6 text-slate-300 animate-spin" />
+                        </div>
+                      ) : sectorCarrierData.length === 0 ? (
+                        <div className="h-full flex items-center justify-center text-slate-400 text-sm">
+                          No sector data available. Try running a query.
+                        </div>
+                      ) : (
+                        <ResponsiveContainer width="100%" height="100%">
+                          <ComposedChart data={getSectorChartData()} margin={{ top: 20, right: 30, left: 10, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} />
+                            <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#718096", fontWeight: 600 }} axisLine={{ stroke: "#E2E8F0" }} tickLine={false} />
+                            <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v} t`} width={45} />
+                            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} width={35} />
+                            <Tooltip
+                              content={({ active, payload, label }) => {
+                                if (!active || !payload?.length) return null;
+                                return (
+                                  <div className="bg-white border border-[#CBD5E0] shadow-xl p-3 rounded-lg text-xs space-y-1">
+                                    <p className="font-bold text-slate-800 border-b border-[#F1F5F9] pb-1 mb-1">{label}</p>
+                                    <div className="flex justify-between gap-4">
+                                      <span className="text-slate-500 font-medium">Tonnage:</span>
+                                      <span className="text-blue-600 font-bold">{payload[0].value} Tons</span>
+                                    </div>
+                                    <div className="flex justify-between gap-4">
+                                      <span className="text-slate-500 font-medium">Contribution:</span>
+                                      <span className="text-[#E53E3E] font-bold">{Number(payload[1].value).toFixed(1)}%</span>
+                                    </div>
+                                  </div>
+                                );
+                              }}
+                            />
+                            <Bar yAxisId="left" dataKey="tonnage" fill="#3182CE" radius={[4, 4, 0, 0]} barSize={40} name="Tonnage (Tons)" />
+                            <Line yAxisId="right" type="monotone" dataKey="contribution" stroke="#E53E3E" strokeWidth={2.5} dot={{ fill: "#E53E3E", r: 4 }} activeDot={{ r: 6 }} name="Contribution %">
+                              <LabelList dataKey="contribution" position="top" formatter={(v: number) => `${v.toFixed(0)}%`} style={{ fontSize: 10, fill: "#E53E3E", fontWeight: 700 }} />
+                            </Line>
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Summary Box (Col-span-4) */}
+                  <div className="col-span-12 lg:col-span-4 saas-card p-6 bg-white flex flex-col justify-between min-h-[350px]">
+                    <div className="flex items-center justify-between mb-4 border-b border-[#F1F5F9] pb-4">
+                      <div>
+                        <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Geographical Summary</p>
+                        <h2 className="text-lg font-bold text-[#1A202C] mt-0.5">Top Sectors</h2>
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1 flex flex-col justify-center space-y-4">
+                      {sectorCarrierData.length === 0 ? (
+                        <div className="text-center text-slate-400 text-sm">
+                          No sector data available.
+                        </div>
+                      ) : (
+                        getSectorChartData().sort((a, b) => b.tonnage - a.tonnage).slice(0, 4).map((sector, index) => (
+                          <div key={sector.name} className="space-y-1">
+                            <div className="flex justify-between text-xs font-semibold text-slate-700">
+                              <span className="flex items-center gap-1.5">
+                                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: index === 0 ? "#3182CE" : index === 1 ? "#4299E1" : index === 2 ? "#63B3ED" : "#90CDF4" }} />
+                                {sector.name}
+                              </span>
+                              <span>{sector.tonnage} Tons ({sector.contribution.toFixed(1)}%)</span>
+                            </div>
+                            <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                              <div className="h-full rounded-full" style={{ width: `${sector.contribution}%`, backgroundColor: index === 0 ? "#3182CE" : index === 1 ? "#4299E1" : index === 2 ? "#63B3ED" : "#90CDF4" }} />
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Full Width: Top 20 Carrier Sector-wise distribution Table */}
+                  <div className="col-span-12 saas-card bg-white p-6">
+                    <div className="flex items-center justify-between mb-4 pb-2 border-b border-[#F1F5F9]">
+                      <div>
+                        <h4 className="text-sm font-bold text-[#1A202C]">TOP 20 AIR CARRIERS & Total Tonnage - Sector wise (Tons)</h4>
+                        <p className="text-xs text-slate-400 mt-0.5">Tonnage contribution broken down by carrier and sector (Rounded to nearest Ton)</p>
+                      </div>
+                      <Badge variant="outline" className="border-[#E2E8F0] text-violet-700 bg-violet-50 font-semibold px-2 py-0.5">
+                        Sector-wise Distribution
+                      </Badge>
+                    </div>
+
+                    <div className="overflow-x-auto max-h-[450px]">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b border-[#E2E8F0] text-slate-500 uppercase font-bold text-[9px] tracking-wider bg-slate-50/50 sticky top-0 z-10">
+                            <th className="px-2 py-2 first:rounded-l-md">SL</th>
+                            <th className="px-2 py-2">CARRIER NAME</th>
+                            <th className="px-2 py-2 text-right bg-blue-50/40 text-blue-700">EXP</th>
+                            <th className="px-2 py-2 text-right bg-slate-100 font-extrabold text-slate-800">TOTAL</th>
+                            <th className="px-1 py-2 text-right">EUROPE</th>
+                            <th className="px-1 py-2 text-right">USA</th>
+                            <th className="px-1 py-2 text-right">N.AMER</th>
+                            <th className="px-1 py-2 text-right">C.AMER</th>
+                            <th className="px-1 py-2 text-right">S.AMER</th>
+                            <th className="px-1 py-2 text-right">M.EAST</th>
+                            <th className="px-1 py-2 text-right">S.E.ASIA</th>
+                            <th className="px-1 py-2 text-right">IND.SUB</th>
+                            <th className="px-1 py-2 text-right">N.ASIA</th>
+                            <th className="px-1 py-2 text-right">AFRICA</th>
+                            <th className="px-1 py-2 text-right">S.AFR</th>
+                            <th className="px-1 py-2 text-right">AUST</th>
+                            <th className="px-1 py-2 text-right">PACIFIC</th>
+                            <th className="px-1 py-2 text-right last:rounded-r-md">OTHERS</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F5F9]">
+                          {sectorCarrierData.length === 0 ? (
+                            <tr>
+                              <td colSpan={18} className="text-center py-12 text-slate-400 font-medium">
+                                No carrier sector records available
+                              </td>
+                            </tr>
+                          ) : (
+                            getSectorTableRows().map((row: any, i: number) => {
+                              const isTotal = row.isGrandTotal;
+                              const isOthers = row.isOthersRow;
+                              return (
+                                <tr key={i} className={`${isTotal ? "font-extrabold bg-slate-100 border-t-2 border-slate-350" : isOthers ? "font-bold bg-slate-50/50" : "hover:bg-slate-50/30 text-slate-700"}`}>
+                                  <td className="px-2 py-1.5 text-slate-400 font-semibold">{isTotal ? "" : isOthers ? "" : i + 1}</td>
+                                  <td className="px-2 py-1.5 font-bold truncate max-w-[150px]" title={row.name}>{row.name}</td>
+                                  <td className={`px-2 py-1.5 text-right tabular-nums font-semibold text-blue-600 ${isTotal ? "bg-blue-100/50" : "bg-blue-50/20"}`}>{row.exp === 0 ? "-" : row.exp.toLocaleString()}</td>
+                                  <td className={`px-2 py-1.5 text-right tabular-nums font-black ${isTotal ? "bg-slate-200" : "bg-slate-100 text-slate-800"}`}>{row.total === 0 ? "-" : row.total.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.europe === 0 ? "-" : row.europe.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.usa === 0 ? "-" : row.usa.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.northAmericaOther === 0 ? "-" : row.northAmericaOther.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.centralAmerica === 0 ? "-" : row.centralAmerica.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.southAmerica === 0 ? "-" : row.southAmerica.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.middleEast === 0 ? "-" : row.middleEast.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.southEastAsia === 0 ? "-" : row.southEastAsia.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.indiaSubContinent === 0 ? "-" : row.indiaSubContinent.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.northernAsia === 0 ? "-" : row.northernAsia.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.africa === 0 ? "-" : row.africa.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.southAfrica === 0 ? "-" : row.southAfrica.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.australia === 0 ? "-" : row.australia.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.pacificIslands === 0 ? "-" : row.pacificIslands.toLocaleString()}</td>
+                                  <td className="px-1 py-1.5 text-right tabular-nums">{row.others === 0 ? "-" : row.others.toLocaleString()}</td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>{/* end main content area */}

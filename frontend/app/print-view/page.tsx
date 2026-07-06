@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, Suspense, Fragment } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
-  ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar,
+  ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, Line, LabelList, ComposedChart
 } from "recharts";
 import { Plane, Globe, CheckSquare, Square, Printer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -304,6 +304,7 @@ function PrintViewContent() {
   const [data, setData] = useState<any[]>([]);
   const [weeklyData, setWeeklyData] = useState<any[]>([]);
   const [monthlyData, setMonthlyData] = useState<any[]>([]);
+  const [sectorCarrierData, setSectorCarrierData] = useState<any[]>([]);
   const [kpi, setKpi] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [sqlQuery, setSqlQuery] = useState<string>("");
@@ -315,6 +316,7 @@ function PrintViewContent() {
     weeklyLedger: searchParams?.get("include_weekly_ledger") !== "false",
     monthlyVisual: searchParams?.get("include_monthly_visual") !== "false",
     monthlyLedger: searchParams?.get("include_monthly_ledger") !== "false",
+    sectorDistribution: searchParams?.get("include_sector_distribution") !== "false",
   });
 
   // Toggle section selection
@@ -332,6 +334,7 @@ function PrintViewContent() {
       weeklyLedger: true,
       monthlyVisual: true,
       monthlyLedger: true,
+      sectorDistribution: true,
     });
   };
 
@@ -342,6 +345,7 @@ function PrintViewContent() {
       weeklyLedger: false,
       monthlyVisual: false,
       monthlyLedger: false,
+      sectorDistribution: false,
     });
   };
 
@@ -351,6 +355,11 @@ function PrintViewContent() {
       const mode = searchParams?.get("mode");
       const queryId = searchParams?.get("query_id");
       let customSql = searchParams?.get("custom_sql");
+
+      let resolvedCountry = country;
+      let resolvedCompanyCode = companyCode;
+      let resolvedStart = startDate;
+      let resolvedEnd = endDate;
 
       if (mode === "custom-sql") {
         if (queryId) {
@@ -402,6 +411,22 @@ function PrintViewContent() {
             // Dynamic Date Groupings using same logic
             setWeeklyData(parseWeeklyData(records));
             setMonthlyData(parseMonthlyData(records));
+
+            // Extract values for sector query
+            const companyMatch = customSql.match(/(?:[a-zA-Z0-9_]+\.)?Company\s*=\s*['"]([^'"]+)['"]/i);
+            if (companyMatch) resolvedCompanyCode = companyMatch[1];
+            const countryMatch = customSql.match(/(?:[a-zA-Z0-9_]+\.)?ConLoadPortCountryName\s*=\s*['"]([^'"]+)['"]/i);
+            if (countryMatch) resolvedCountry = countryMatch[1];
+
+            const startMatch = customSql.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*>\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
+            if (startMatch) resolvedStart = startMatch[1].replace(/[_/.]/g, '-');
+            const endMatch = customSql.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*<\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
+            if (endMatch) resolvedEnd = endMatch[1].replace(/[_/.]/g, '-');
+            const betweenMatch = customSql.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s+between\s+['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?\s+and\s+['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
+            if (betweenMatch) {
+              resolvedStart = betweenMatch[1].replace(/[_/.]/g, '-');
+              resolvedEnd = betweenMatch[2].replace(/[_/.]/g, '-');
+            }
           }
         }
       } else {
@@ -426,6 +451,26 @@ function PrintViewContent() {
         if (m.status === "success") setMonthlyData(m.data);
         if (k.status === "success") setKpi(k.data);
       }
+
+      // Fetch sector distribution if we have a resolved country
+      if (resolvedCountry) {
+        const sectorParams = new URLSearchParams({
+          start_date: resolvedStart,
+          end_date: resolvedEnd,
+          country: resolvedCountry
+        });
+        if (resolvedCompanyCode) sectorParams.append("company_code", resolvedCompanyCode);
+
+        try {
+          const sectorRes = await fetch(`${API}/api/sector-carrier-distribution?${sectorParams}`);
+          const sectorD = await sectorRes.json();
+          if (sectorD.status === "success") {
+            setSectorCarrierData(sectorD.data);
+          }
+        } catch (sectorErr) {
+          console.error("Failed to fetch sector distribution data", sectorErr);
+        }
+      }
     } catch (e) {
       console.error("Failed to load print preview", e);
     }
@@ -443,9 +488,17 @@ function PrintViewContent() {
       weeklyLedger: searchParams?.get("include_weekly_ledger") !== "false",
       monthlyVisual: searchParams?.get("include_monthly_visual") !== "false",
       monthlyLedger: searchParams?.get("include_monthly_ledger") !== "false",
+      sectorDistribution: searchParams?.get("include_sector_distribution") !== "false",
     });
     setShowRouteBreakdown(searchParams?.get("show_route_breakdown") !== "false");
-  }, [searchParams?.get("include_weekly_visual"), searchParams?.get("include_weekly_ledger"), searchParams?.get("include_monthly_visual"), searchParams?.get("include_monthly_ledger"), searchParams?.get("show_route_breakdown")]);
+  }, [
+    searchParams?.get("include_weekly_visual"),
+    searchParams?.get("include_weekly_ledger"),
+    searchParams?.get("include_monthly_visual"),
+    searchParams?.get("include_monthly_ledger"),
+    searchParams?.get("include_sector_distribution"),
+    searchParams?.get("show_route_breakdown")
+  ]);
 
   // Process data for Doughnut distribution (top 4 countries + others)
   const getDoughnutData = () => {
@@ -565,6 +618,162 @@ function PrintViewContent() {
   };
 
   const airlineWeeklyStackData = getAirlineWeeklyStackData();
+
+  // Sector Tonnage Distribution (dual-axis chart & table) data helpers
+  const getSectorChartData = () => {
+    let tEurope = 0, tUSA = 0, tSEAsia = 0, tAfrica = 0, tIndiaSub = 0, tMidEast = 0, tAustralia = 0, tOthers = 0;
+    
+    sectorCarrierData.forEach((row: any) => {
+      tEurope += Number(row.Europe || 0);
+      tUSA += Number(row.USA || 0);
+      tSEAsia += Number(row.South_East_Asia || 0);
+      tAfrica += Number(row.Africa || 0);
+      tIndiaSub += Number(row.India_Sub_Continent || 0);
+      tMidEast += Number(row.Middle_East || 0);
+      tAustralia += Number(row.Australia || 0);
+      tOthers += Number(row.North_America_Other || 0) + Number(row.Central_America || 0) + Number(row.South_America || 0) + Number(row.Northern_Asia || 0) + Number(row.South_Africa || 0) + Number(row.Pacific_Islands || 0) + Number(row.Others || 0);
+    });
+
+    const total = tEurope + tUSA + tSEAsia + tAfrica + tIndiaSub + tMidEast + tAustralia + tOthers;
+    const pct = (val: number) => total > 0 ? (val / total) * 100 : 0;
+
+    return [
+      { name: "Europe", tonnage: Number((tEurope / 1000).toFixed(1)), contribution: pct(tEurope) },
+      { name: "USA", tonnage: Number((tUSA / 1000).toFixed(1)), contribution: pct(tUSA) },
+      { name: "S.East Asia", tonnage: Number((tSEAsia / 1000).toFixed(1)), contribution: pct(tSEAsia) },
+      { name: "Africa", tonnage: Number((tAfrica / 1000).toFixed(1)), contribution: pct(tAfrica) },
+      { name: "India & Sub Cont.", tonnage: Number((tIndiaSub / 1000).toFixed(1)), contribution: pct(tIndiaSub) },
+      { name: "Mid East", tonnage: Number((tMidEast / 1000).toFixed(1)), contribution: pct(tMidEast) },
+      { name: "Australia", tonnage: Number((tAustralia / 1000).toFixed(1)), contribution: pct(tAustralia) },
+      { name: "Other Sectors", tonnage: Number((tOthers / 1000).toFixed(1)), contribution: pct(tOthers) },
+    ];
+  };
+
+  const getSectorTableRows = () => {
+    const sorted = [...sectorCarrierData].sort((a, b) => b.Total_Tons - a.Total_Tons);
+    const top20 = sorted.slice(0, 20);
+    const others = sorted.slice(20);
+
+    const convertRow = (r: any) => ({
+      name: r.Airline || "Unknown Carrier",
+      exp: Math.round(r.Air_Exp_Tong / 1000),
+      imp: Math.round(r.Air_Imp_Tong / 1000),
+      total: Math.round(r.Total_Tons / 1000),
+      europe: Math.round(r.Europe / 1000),
+      usa: Math.round(r.USA / 1000),
+      northAmericaOther: Math.round(r.North_America_Other / 1000),
+      centralAmerica: Math.round(r.Central_America / 1000),
+      southAmerica: Math.round(r.South_America / 1000),
+      middleEast: Math.round(r.Middle_East / 1000),
+      southEastAsia: Math.round(r.South_East_Asia / 1000),
+      indiaSubContinent: Math.round(r.India_Sub_Continent / 1000),
+      northernAsia: Math.round(r.Northern_Asia / 1000),
+      africa: Math.round(r.Africa / 1000),
+      southAfrica: Math.round(r.South_Africa / 1000),
+      australia: Math.round(r.Australia / 1000),
+      pacificIslands: Math.round(r.Pacific_Islands / 1000),
+      others: Math.round(r.Others / 1000)
+    });
+
+    const rows = top20.map(convertRow);
+
+    if (others.length > 0) {
+      const othersRowCombined = others.reduce((acc, curr) => {
+        acc.Air_Exp_Tong += curr.Air_Exp_Tong;
+        acc.Air_Imp_Tong += curr.Air_Imp_Tong;
+        acc.Total_Tons += curr.Total_Tons;
+        acc.Europe += curr.Europe;
+        acc.USA += curr.USA;
+        acc.North_America_Other += curr.North_America_Other;
+        acc.Central_America += curr.Central_America;
+        acc.South_America += curr.South_America;
+        acc.Middle_East += curr.Middle_East;
+        acc.South_East_Asia += curr.South_East_Asia;
+        acc.India_Sub_Continent += curr.India_Sub_Continent;
+        acc.Northern_Asia += curr.Northern_Asia;
+        acc.Africa += curr.Africa;
+        acc.South_Africa += curr.South_Africa;
+        acc.Australia += curr.Australia;
+        acc.Pacific_Islands += curr.Pacific_Islands;
+        acc.Others += curr.Others;
+        return acc;
+      }, {
+        Airline: "OTHERS - Total",
+        Air_Exp_Tong: 0,
+        Air_Imp_Tong: 0,
+        Total_Tons: 0,
+        Europe: 0,
+        USA: 0,
+        North_America_Other: 0,
+        Central_America: 0,
+        South_America: 0,
+        Middle_East: 0,
+        South_East_Asia: 0,
+        India_Sub_Continent: 0,
+        Northern_Asia: 0,
+        Africa: 0,
+        South_Africa: 0,
+        Australia: 0,
+        Pacific_Islands: 0,
+        Others: 0
+      });
+      rows.push({
+        ...convertRow(othersRowCombined),
+        isOthersRow: true
+      } as any);
+    }
+
+    // Grand Total Row
+    const grandTotalCombined = sorted.reduce((acc, curr) => {
+      acc.Air_Exp_Tong += curr.Air_Exp_Tong;
+      acc.Air_Imp_Tong += curr.Air_Imp_Tong;
+      acc.Total_Tons += curr.Total_Tons;
+      acc.Europe += curr.Europe;
+      acc.USA += curr.USA;
+      acc.North_America_Other += curr.North_America_Other;
+      acc.Central_America += curr.Central_America;
+      acc.South_America += curr.South_America;
+      acc.Middle_East += curr.Middle_East;
+      acc.South_East_Asia += curr.South_East_Asia;
+      acc.India_Sub_Continent += curr.India_Sub_Continent;
+      acc.Northern_Asia += curr.Northern_Asia;
+      acc.Africa += curr.Africa;
+      acc.South_Africa += curr.South_Africa;
+      acc.Australia += curr.Australia;
+      acc.Pacific_Islands += curr.Pacific_Islands;
+      acc.Others += curr.Others;
+      return acc;
+    }, {
+      Airline: "Total",
+      Air_Exp_Tong: 0,
+      Air_Imp_Tong: 0,
+      Total_Tons: 0,
+      Europe: 0,
+      USA: 0,
+      North_America_Other: 0,
+      Central_America: 0,
+      South_America: 0,
+      Middle_East: 0,
+      South_East_Asia: 0,
+      India_Sub_Continent: 0,
+      Northern_Asia: 0,
+      Africa: 0,
+      South_Africa: 0,
+      Australia: 0,
+      Pacific_Islands: 0,
+      Others: 0
+    });
+
+    rows.push({
+      ...convertRow(grandTotalCombined),
+      isGrandTotal: true
+    } as any);
+
+    return rows;
+  };
+
+  const chartData = getSectorChartData();
+  const tableRows = getSectorTableRows();
 
   const weekStackLabels = (() => {
     const weekSet = new Map<string, string>();
@@ -932,7 +1141,7 @@ function PrintViewContent() {
         }
       `}} />
       {/* Hidden indicator for PDF capture readiness */}
-      <div id="pdf-ready" style={{ display: 'none' }}>ready</div>
+      <div id="pdf-ready" className="opacity-0 pointer-events-none absolute" style={{ width: '1px', height: '1px' }}>ready</div>
 
       {/* ── SECTIONS STATUS INDICATOR ── */}
       <div className="print:hidden w-full max-w-[1123px] bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg shadow-sm p-3 mx-auto">
@@ -1086,6 +1295,27 @@ function PrintViewContent() {
                 </div>
               </button>
             )}
+
+            {/* Section 5: Sector Tonnage Distribution */}
+            <button
+              onClick={() => toggleSection('sectorDistribution')}
+              className={`p-3 rounded-lg border-2 transition-all text-left ${selectedSections.sectorDistribution
+                ? 'border-rose-450 bg-rose-50/60 border-rose-300 shadow-sm'
+                : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                }`}
+            >
+              <div className="flex items-start gap-2">
+                {selectedSections.sectorDistribution ? (
+                  <CheckSquare className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                ) : (
+                  <Square className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <p className="font-semibold text-sm text-slate-800">Sector Distribution</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Top 20 carriers & sectors</p>
+                </div>
+              </div>
+            </button>
           </div>
 
           {mode === "custom-sql" && (
@@ -2467,6 +2697,132 @@ function PrintViewContent() {
           <div className="border-t border-slate-200 pt-2 mt-4 flex items-center justify-between text-[12.5px] text-slate-400">
             <span></span>
             <span>© 2026 Dart Global Logistics · {mode === "custom-sql" ? "Detailed Raw Query Ledger" : "Monthly Ledger"} Page</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── SECTION 5: SECTOR TONNAGE DISTRIBUTION (Page at the end of the report) ── */}
+      {selectedSections.sectorDistribution && (
+        <div className="print-page-container bg-white text-slate-900 p-6 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakBefore: "always", breakAfter: "page" }}>
+          {/* Print Header */}
+          <div className="border-b-2 border-slate-200 pb-2 flex flex-col gap-0.5 shrink-0">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-6 w-auto rounded object-contain" />
+                <h1 className="text-xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+              </div>
+              <div className="flex gap-1 justify-end items-center">
+                {branch && (
+                  <span className="text-[8px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
+                    🏢 Branch: {branch}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-baseline justify-between mt-1">
+              <p className="text-[11px] font-semibold text-slate-400 leading-none">
+                Dart Global Logistics · Sector-wise Carrier & Geographical Tonnage Performance
+              </p>
+              <span className="text-slate-700 font-bold text-[11px] tabular-nums whitespace-nowrap leading-none">
+                {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
+              </span>
+            </div>
+          </div>
+
+          {/* Graphical Tonnage Contribution (Top half) & Carrier Table (Bottom half) */}
+          <div className="flex flex-col gap-2.5 flex-1 overflow-hidden mt-2.5">
+            {/* Top Chart Area */}
+            <div className="h-[210px] border border-slate-200 rounded-xl p-2.5 bg-white shadow-sm flex flex-col justify-between shrink-0">
+              <div className="border-b border-[#F1F5F9] pb-0.5 flex justify-between items-center shrink-0">
+                <span className="text-[9px] uppercase tracking-wider font-extrabold text-slate-400">
+                  AIR EXPORTS - Geographical Tonnage Contribution (Tons vs Contribution %)
+                </span>
+              </div>
+              <div className="h-[170px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={chartData} margin={{ top: 15, right: 30, left: 10, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} />
+                    <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#718096", fontWeight: 600 }} axisLine={{ stroke: "#E2E8F0" }} tickLine={false} />
+                    <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v} t`} width={45} />
+                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} width={35} />
+                    <Bar yAxisId="left" dataKey="tonnage" fill="#3182CE" radius={[3, 3, 0, 0]} barSize={32} name="Tonnage (Tons)" />
+                    <Line yAxisId="right" type="monotone" dataKey="contribution" stroke="#E53E3E" strokeWidth={2.5} dot={{ fill: "#E53E3E", r: 3.5 }} activeDot={{ r: 5 }} name="Contribution %">
+                      <LabelList dataKey="contribution" position="top" formatter={(v: number) => `${v.toFixed(0)}%`} style={{ fontSize: 9, fill: "#E53E3E", fontWeight: 700 }} />
+                    </Line>
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Bottom Table Area */}
+            <div className="border border-slate-200 rounded-xl p-2.5 bg-white shadow-sm flex-1 overflow-hidden flex flex-col justify-between">
+              <div className="border-b border-[#F1F5F9] pb-0.5 flex justify-between items-center shrink-0 mb-1">
+                <span className="text-[9px] uppercase tracking-wider font-extrabold text-slate-400">
+                  TOP 20 AIR CARRIERS & Total Tonnage - Sector wise (Tons)
+                </span>
+              </div>
+              <div className="flex-1 overflow-y-auto min-h-0">
+                <table className="w-full text-left text-[9.5px] border-collapse">
+                  <thead>
+                    <tr className="border-b border-[#E2E8F0] text-slate-500 uppercase font-bold text-[8.5px] tracking-wider bg-slate-50/50 sticky top-0 z-10">
+                      <th className="px-1 py-0.5 first:rounded-l-md">SL</th>
+                      <th className="px-1 py-0.5">CARRIER NAME</th>
+                      <th className="px-1.5 py-0.5 text-right bg-blue-50/40 text-blue-700">EXP</th>
+                      <th className="px-1.5 py-0.5 text-right bg-slate-100 font-extrabold text-slate-800">TOTAL</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px]">EUROPE</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px]">USA</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px]">N.AMER</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px]">C.AMER</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px]">S.AMER</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px]">M.EAST</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px]">S.E.ASIA</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px]">IND.SUB</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px]">N.ASIA</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px]">AFRICA</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px]">S.AFR</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px]">AUST</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px]">PACIFIC</th>
+                      <th className="px-1 py-0.5 text-right text-[8.5px] last:rounded-r-md">OTHERS</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#F1F5F9]">
+                    {tableRows.map((row: any, i: number) => {
+                      const isTotal = row.isGrandTotal;
+                      const isOthers = row.isOthersRow;
+                      return (
+                        <tr key={i} className={`${isTotal ? "font-extrabold bg-slate-100 border-t-2 border-slate-350" : isOthers ? "font-bold bg-slate-50/50" : "hover:bg-slate-50/30 text-slate-700"}`}>
+                          <td className="px-1 py-0.5 text-slate-400 font-semibold">{isTotal ? "" : isOthers ? "" : i + 1}</td>
+                          <td className="px-1 py-0.5 font-bold truncate max-w-[125px]" title={row.name}>{row.name}</td>
+                          <td className={`px-1.5 py-0.5 text-right tabular-nums font-semibold text-blue-600 ${isTotal ? "bg-blue-100/50" : "bg-blue-50/20"}`}>{row.exp === 0 ? "-" : row.exp.toLocaleString()}</td>
+                          <td className={`px-1.5 py-0.5 text-right tabular-nums font-black ${isTotal ? "bg-slate-200" : "bg-slate-100 text-slate-800"}`}>{row.total === 0 ? "-" : row.total.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.europe === 0 ? "-" : row.europe.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.usa === 0 ? "-" : row.usa.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.northAmericaOther === 0 ? "-" : row.northAmericaOther.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.centralAmerica === 0 ? "-" : row.centralAmerica.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.southAmerica === 0 ? "-" : row.southAmerica.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.middleEast === 0 ? "-" : row.middleEast.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.southEastAsia === 0 ? "-" : row.southEastAsia.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.indiaSubContinent === 0 ? "-" : row.indiaSubContinent.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.northernAsia === 0 ? "-" : row.northernAsia.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.africa === 0 ? "-" : row.africa.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.southAfrica === 0 ? "-" : row.southAfrica.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.australia === 0 ? "-" : row.australia.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.pacificIslands === 0 ? "-" : row.pacificIslands.toLocaleString()}</td>
+                          <td className="px-1 py-0.5 text-right tabular-nums">{row.others === 0 ? "-" : row.others.toLocaleString()}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          {/* Print Footer */}
+          <div className="border-t border-slate-200 pt-1.5 flex items-center justify-between text-[10px] text-slate-400 shrink-0">
+            <span></span>
+            <span>© 2026 Dart Global Logistics · Sector-wise Carrier & Geographical Tonnage Performance Page</span>
           </div>
         </div>
       )}
