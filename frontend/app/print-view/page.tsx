@@ -1052,7 +1052,7 @@ function PrintViewContent() {
           fontSize={isRotated ? 9.5 : 11}
           fontWeight="bold"
           textAnchor={isRotated ? "start" : "middle"}
-          transform={isRotated ? "rotate(-35)" : undefined}
+          transform={isRotated ? "rotate(-85)" : undefined}
         >
           {formatNumber(row.total_tonnage)}
         </text>
@@ -1422,7 +1422,7 @@ function PrintViewContent() {
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart
                         data={reportType === "monthly" ? weeklyStackedAirlineData : dailyStackedAirlineData}
-                        margin={{ top: 25, right: 10, left: 4, bottom: reportType === "monthly" ? 25 : ((reportType === "monthly" ? weeklyStackedAirlineData : dailyStackedAirlineData).length > 8 ? 35 : 5) }}
+                        margin={{ top: 45, right: 10, left: 4, bottom: reportType === "monthly" ? 25 : ((reportType === "monthly" ? weeklyStackedAirlineData : dailyStackedAirlineData).length > 8 ? 35 : 5) }}
                       >
                         <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} horizontal={true} />
                         <XAxis
