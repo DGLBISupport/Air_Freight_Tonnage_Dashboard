@@ -48,7 +48,7 @@ const formatNumber = (val: number | null | undefined) => {
 };
 
 // Customized Pie Chart Colors matching user's image
-const PIE_COLORS = ["#4299E1", "#81E6D9", "#CBD5E0", "#5A67D8", "#ED64A6"];
+const PIE_COLORS = ["#4299E1", "#81E6D9", "#ED8936", "#5A67D8", "#ED64A6"];
 const TEN_COLORS = ["#4299E1", "#319795", "#ED64A6", "#5A67D8", "#81E6D9", "#ED8936", "#ECC94B", "#48BB78", "#9F7AEA", "#718096"];
 
 // Branded airline colors — matched by lowercase substring of airline name
@@ -4388,7 +4388,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                 dataKey="value"
                               >
                                 {airlinePieData.map((entry: any, index: number) => (
-                                  <Cell key={`cell-${index}`} fill={entry.name === "Others" ? "#CBD5E0" : getAirlineColor(entry.name, index)} />
+                                  <Cell key={`cell-${index}`} fill={entry.name === "Others" ? "#718096" : getAirlineColor(entry.name, index)} />
                                 ))}
                               </Pie>
                             </PieChart>
@@ -4408,7 +4408,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                       {airlinePieData.map((entry: any, idx: number) => (
                         <div key={entry.name} className="flex items-center justify-between text-xs text-slate-655">
                           <div className="flex items-center gap-2 min-w-0">
-                            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: entry.name === "Others" ? "#CBD5E0" : getAirlineColor(entry.name, idx) }} />
+                            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: entry.name === "Others" ? "#718096" : getAirlineColor(entry.name, idx) }} />
                             <span className="font-semibold text-slate-700 truncate max-w-[120px]">{entry.name}</span>
                           </div>
                           <span className="font-bold text-[#2D3748] tabular-nums shrink-0">{formatNumber(entry.value)} kg</span>
@@ -4541,7 +4541,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                   dataKey="value"
                                 >
                                   {tradeRouteData.map((entry, index) => (
-                                    <Cell key={`tr-cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                                    <Cell key={`tr-cell-${index}`} fill={entry.isOthers ? "#718096" : PIE_COLORS[index % PIE_COLORS.length]} />
                                   ))}
                                 </Pie>
                                 <Tooltip
@@ -4550,7 +4550,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                     const item = payload[0]?.payload;
                                     const total = tradeRouteData.reduce((s, r) => s + r.value, 0);
                                     const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : "0.0";
-                                    const color = PIE_COLORS[tradeRouteData.findIndex(r => r.name === item.name) % PIE_COLORS.length];
+                                    const color = item.isOthers ? "#718096" : PIE_COLORS[tradeRouteData.findIndex(r => r.name === item.name) % PIE_COLORS.length];
                                     return (
                                       <div className="bg-white border border-[#CBD5E0] shadow-xl rounded-lg p-3 text-xs min-w-[180px] max-w-[240px]">
                                         <div className="flex items-start gap-2 mb-2 pb-1.5 border-b border-slate-100">
@@ -4598,7 +4598,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                 <div key={entry.name} className="flex items-start gap-2.5">
                                   <span
                                     className="w-2.5 h-2.5 rounded-full flex-shrink-0 mt-1"
-                                    style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }}
+                                    style={{ backgroundColor: entry.isOthers ? "#718096" : PIE_COLORS[idx % PIE_COLORS.length] }}
                                   />
                                   <div className="flex-1 min-w-0">
                                     <div className="flex items-start justify-between gap-1">
@@ -4619,7 +4619,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                     <div className="mt-1.5 h-1 bg-slate-100 rounded-full overflow-hidden">
                                       <div
                                         className="h-full rounded-full transition-all duration-500"
-                                        style={{ width: `${pct}%`, backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }}
+                                        style={{ width: `${pct}%`, backgroundColor: entry.isOthers ? "#718096" : PIE_COLORS[idx % PIE_COLORS.length] }}
                                       />
                                     </div>
                                   </div>
@@ -5182,7 +5182,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                   dataKey="value"
                                 >
                                   {doughnutData.map((entry, index) => (
-                                    <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                                    <Cell key={`cell-${index}`} fill={entry.name === "Others" ? "#718096" : PIE_COLORS[index % PIE_COLORS.length]} />
                                   ))}
                                 </Pie>
                               </PieChart>
@@ -5202,7 +5202,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                         {doughnutData.slice(0, 4).map((entry, idx) => (
                           <div key={entry.name} className="flex items-center justify-between text-xs text-slate-655">
                             <div className="flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }} />
+                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: entry.name === "Others" ? "#718096" : PIE_COLORS[idx % PIE_COLORS.length] }} />
                               <span className="font-semibold text-slate-700 truncate max-w-[120px]">{entry.name}</span>
                             </div>
                             <span className="font-bold text-[#2D3748]">{formatCurrency(entry.value)}</span>

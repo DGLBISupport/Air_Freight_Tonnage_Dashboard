@@ -33,7 +33,7 @@ const formatNumber = (val: number | null | undefined) => {
   return Number(val).toLocaleString("en-US", { maximumFractionDigits: 0 });
 };
 
-const PIE_COLORS = ["#4299E1", "#81E6D9", "#CBD5E0", "#5A67D8", "#ED64A6"];
+const PIE_COLORS = ["#4299E1", "#81E6D9", "#ED8936", "#5A67D8", "#ED64A6"];
 const TEN_COLORS = ["#4299E1", "#319795", "#ED64A6", "#5A67D8", "#81E6D9", "#ED8936", "#ECC94B", "#48BB78", "#9F7AEA", "#718096"];
 
 // Branded airline colors — matched by lowercase substring of airline name
@@ -1448,13 +1448,15 @@ function PrintViewContent() {
                             dataKey={airlineName}
                             stackId="airlines"
                             fill={getAirlineColor(airlineName, idx)}
+                            isAnimationActive={false}
                           />
                         ))}
                         <Bar
                           key="Others"
                           dataKey="Others"
                           stackId="airlines"
-                          fill="#CBD5E0"
+                          fill="#718096"
+                          isAnimationActive={false}
                         />
                         <Bar
                           key="total_tonnage_label"
@@ -1462,6 +1464,7 @@ function PrintViewContent() {
                           stackId="airlines"
                           fill="transparent"
                           label={<CustomLabel />}
+                          isAnimationActive={false}
                         />
                       </BarChart>
                     </ResponsiveContainer>
@@ -1532,9 +1535,10 @@ function PrintViewContent() {
                           outerRadius={64}
                           paddingAngle={2}
                           dataKey="value"
+                          isAnimationActive={false}
                         >
                           {airlinePieData.map((entry: any, index: number) => (
-                            <Cell key={`cell-${index}`} fill={entry.name === "Others" ? "#CBD5E0" : getAirlineColor(entry.name, index)} />
+                            <Cell key={`cell-${index}`} fill={entry.name === "Others" ? "#718096" : getAirlineColor(entry.name, index)} />
                           ))}
                         </Pie>
                       </PieChart>
@@ -1552,7 +1556,7 @@ function PrintViewContent() {
                       return (
                         <div key={entry.name} className="flex items-center justify-between text-[12.5px] text-slate-500">
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: entry.name === "Others" ? "#CBD5E0" : getAirlineColor(entry.name, idx) }} />
+                            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: entry.name === "Others" ? "#718096" : getAirlineColor(entry.name, idx) }} />
                             <span className="truncate max-w-[120px] font-semibold">{entry.name}</span>
                           </div>
                           <span className="font-bold text-slate-700 shrink-0 text-[12.5px]">{formatNumber(entry.value)} kg ({pct}%)</span>
@@ -1642,6 +1646,7 @@ function PrintViewContent() {
                           dataKey={wkLabel}
                           stackId="awstack"
                           radius={wIdx === weekStackLabels.length - 1 ? [0, 3, 3, 0] : [0, 0, 0, 0]}
+                          isAnimationActive={false}
                         >
                           {airlineWeeklyStackData.map((row: any) => (
                             <Cell
@@ -1735,9 +1740,10 @@ function PrintViewContent() {
                           outerRadius={140}
                           paddingAngle={2}
                           dataKey="value"
+                          isAnimationActive={false}
                         >
                           {tradeRouteData.map((entry, index) => (
-                            <Cell key={`tr-cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                            <Cell key={`tr-cell-${index}`} fill={entry.isOthers ? "#718096" : PIE_COLORS[index % PIE_COLORS.length]} />
                           ))}
                         </Pie>
                       </PieChart>
@@ -1757,7 +1763,7 @@ function PrintViewContent() {
                     return (
                       <div key={entry.name} className="flex items-center justify-between text-[14.5px] text-slate-500 border-b border-slate-100 pb-2">
                         <div className="flex items-center gap-3 min-w-0">
-                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }} />
+                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: entry.isOthers ? "#718096" : PIE_COLORS[idx % PIE_COLORS.length] }} />
                           {entry.isOthers ? (
                             <span className="truncate font-bold text-slate-700 text-[17px]">Others</span>
                           ) : (
@@ -1861,7 +1867,7 @@ function PrintViewContent() {
                       <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} />
                       <XAxis dataKey="week_label" tick={{ fontSize: 14, fill: "#718096" }} axisLine={{ stroke: "#E2E8F0" }} tickLine={false} />
                       <YAxis tick={{ fontSize: 14, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} width={50} />
-                      <Area type="monotone" dataKey="Total_Revenue" stroke="#3182CE" strokeWidth={2} fill="url(#printArea)" dot={{ fill: "#3182CE", r: 3 }} />
+                      <Area type="monotone" dataKey="Total_Revenue" stroke="#3182CE" strokeWidth={2} fill="url(#printArea)" dot={{ fill: "#3182CE", r: 3 }} isAnimationActive={false} />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
@@ -1900,7 +1906,7 @@ function PrintViewContent() {
                         tickLine={false}
                         width={120}
                       />
-                      <Bar dataKey="tonnage" radius={[0, 4, 4, 0]} maxBarSize={14}>
+                      <Bar dataKey="tonnage" radius={[0, 4, 4, 0]} maxBarSize={14} isAnimationActive={false}>
                         {airlineWiseData.map((entry: any, index: number) => (
                           <Cell
                             key={`cell-${index}`}
@@ -2512,9 +2518,10 @@ function PrintViewContent() {
                           outerRadius={75}
                           paddingAngle={2}
                           dataKey="value"
+                          isAnimationActive={false}
                         >
                           {doughnutData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                            <Cell key={`cell-${index}`} fill={entry.name === "Others" ? "#718096" : PIE_COLORS[index % PIE_COLORS.length]} />
                           ))}
                         </Pie>
                       </PieChart>
@@ -2529,7 +2536,7 @@ function PrintViewContent() {
                     {doughnutData.slice(0, 4).map((entry, idx) => (
                       <div key={entry.name} className="flex items-center justify-between text-[9px] text-slate-500">
                         <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }} />
+                          <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: entry.name === "Others" ? "#718096" : PIE_COLORS[idx % PIE_COLORS.length] }} />
                           <span className="truncate max-w-[90px] font-semibold">{entry.name}</span>
                         </div>
                         <span className="font-bold text-slate-700">{formatCurrency(entry.value)}</span>
@@ -2553,7 +2560,7 @@ function PrintViewContent() {
                         <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} />
                         <XAxis dataKey="month_label" tick={{ fontSize: 14, fill: "#718096" }} axisLine={{ stroke: "#E2E8F0" }} tickLine={false} />
                         <YAxis tick={{ fontSize: 14, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} width={50} />
-                        <Area type="monotone" dataKey="Total_Revenue" stroke="#319795" strokeWidth={2} fill="url(#printAreaMonthly)" dot={{ fill: "#319795", r: 3 }} />
+                        <Area type="monotone" dataKey="Total_Revenue" stroke="#319795" strokeWidth={2} fill="url(#printAreaMonthly)" dot={{ fill: "#319795", r: 3 }} isAnimationActive={false} />
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
@@ -2756,8 +2763,8 @@ function PrintViewContent() {
                     <XAxis dataKey="name" tick={{ fontSize: 11.5, fill: "#718096", fontWeight: 600 }} axisLine={{ stroke: "#E2E8F0" }} tickLine={false} />
                     <YAxis yAxisId="left" tick={{ fontSize: 11.5, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v} t`} width={50} />
                     <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11.5, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} width={40} />
-                    <Bar yAxisId="left" dataKey="tonnage" fill="#3182CE" radius={[4, 4, 0, 0]} barSize={40} name="Tonnage (Tons)" />
-                    <Line yAxisId="right" type="monotone" dataKey="contribution" stroke="#E53E3E" strokeWidth={3} dot={{ fill: "#E53E3E", r: 4.5 }} activeDot={{ r: 6 }} name="Contribution %">
+                    <Bar yAxisId="left" dataKey="tonnage" fill="#3182CE" radius={[4, 4, 0, 0]} barSize={40} name="Tonnage (Tons)" isAnimationActive={false} />
+                    <Line yAxisId="right" type="monotone" dataKey="contribution" stroke="#E53E3E" strokeWidth={3} dot={{ fill: "#E53E3E", r: 4.5 }} activeDot={{ r: 6 }} name="Contribution %" isAnimationActive={false}>
                       <LabelList dataKey="contribution" position="top" formatter={(v: number) => `${v.toFixed(0)}%`} style={{ fontSize: 11, fill: "#E53E3E", fontWeight: 700 }} />
                     </Line>
                   </ComposedChart>
