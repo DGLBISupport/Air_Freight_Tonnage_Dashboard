@@ -1389,11 +1389,12 @@ function PrintViewContent() {
               </div>
 
               {/* KPI Cards Row */}
-              <div className="grid grid-cols-4 gap-4 mt-4">
+              <div className="grid grid-cols-2 gap-4 mt-4">
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Revenue</span>
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
                 </div>
+                {/* Total Cost & Total Profit (Commented out)
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Cost</span>
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
@@ -1402,6 +1403,7 @@ function PrintViewContent() {
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Profit</span>
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
                 </div>
+                */}
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Tonnage</span>
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
@@ -1831,11 +1833,12 @@ function PrintViewContent() {
             </div>
 
             {/* KPI Cards Row */}
-            <div className="grid grid-cols-4 gap-4 mt-4">
+            <div className="grid grid-cols-2 gap-4 mt-4">
               <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                 <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Revenue</span>
                 <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
               </div>
+              {/* Total Cost & Total Profit (Commented out)
               <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                 <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Cost</span>
                 <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
@@ -1844,6 +1847,7 @@ function PrintViewContent() {
                 <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Profit</span>
                 <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
               </div>
+              */}
               <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                 <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Tonnage</span>
                 <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
@@ -1988,9 +1992,9 @@ function PrintViewContent() {
                           <th className="px-3 py-1.5 text-right">Tonnage (kg)</th>
                           <th className="px-3 py-1.5 text-right">Shipments</th>
                           <th className="px-3 py-1.5 text-right">Shipment Revenue (USD)</th>
-                          <th className="px-3 py-1.5 text-right">Shipment Cost (USD)</th>
-                          <th className="px-3 py-1.5 text-right">Gross Profit (USD)</th>
-                          <th className="px-3 py-1.5 text-right">GP Margin</th>
+                          {/* <th className="px-3 py-1.5 text-right">Shipment Cost (USD)</th> */}
+                          {/* <th className="px-3 py-1.5 text-right">Gross Profit (USD)</th> */}
+                          {/* <th className="px-3 py-1.5 text-right">GP Margin</th> */}
                         </>
                       ) : (
                         <>
@@ -2148,13 +2152,13 @@ function PrintViewContent() {
                                     </td>
                                     <td className="px-3 py-1.5 text-right text-slate-750 font-bold tabular-nums">{formatNumber(row.shipments)}</td>
                                     <td className="px-3 py-1.5 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
-                                    <td className="px-3 py-1.5 text-right font-bold text-slate-600 tabular-nums">{formatCurrency(row.cost)}</td>
-                                    <td className="px-3 py-1.5 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td>
-                                    <td className="px-3 py-1.5 text-right tabular-nums">
+                                    {/* <td className="px-3 py-1.5 text-right font-bold text-slate-600 tabular-nums">{formatCurrency(row.cost)}</td> */}
+                                    {/* <td className="px-3 py-1.5 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td> */}
+                                    {/* <td className="px-3 py-1.5 text-right tabular-nums">
                                       <span className={`font-bold text-[12.5px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
                                         {gpMargin.toFixed(1)}%
                                       </span>
-                                    </td>
+                                    </td> */}
                                   </tr>
                                   {showRouteBreakdown && sortedRoutes.length > 0 && (
                                     sortedRoutes.map((route, rIdx) => {
@@ -2168,13 +2172,13 @@ function PrintViewContent() {
                                           <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(route.tonnage)} kg</td>
                                           <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(route.shipments)}</td>
                                           <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatCurrency(route.revenue)}</td>
-                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatCurrency(route.cost)}</td>
-                                          <td className="px-3 py-1 text-right tabular-nums font-semibold text-slate-700">{formatCurrency(route.revenue + route.cost)}</td>
-                                          <td className="px-3 py-1 text-right tabular-nums">
+                                          {/* <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatCurrency(route.cost)}</td> */}
+                                          {/* <td className="px-3 py-1 text-right tabular-nums font-semibold text-slate-700">{formatCurrency(route.revenue + route.cost)}</td> */}
+                                          {/* <td className="px-3 py-1 text-right tabular-nums">
                                             <span className="font-semibold text-slate-700">
                                               {routeGpMargin.toFixed(1)}%
                                             </span>
-                                          </td>
+                                          </td> */}
                                         </tr>
                                       );
                                     })
@@ -2188,13 +2192,13 @@ function PrintViewContent() {
                               <td className="px-3 py-1.5 text-right text-blue-600 tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
                               <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                               <td className="px-3 py-1.5 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
-                              <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td>
-                              <td className="px-3 py-1.5 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td>
-                              <td className="px-3 py-1.5 text-right">
+                              {/* <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td> */}
+                              {/* <td className="px-3 py-1.5 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td> */}
+                              {/* <td className="px-3 py-1.5 text-right">
                                 <span className="font-bold text-slate-600 text-[12.5px]">
                                   {grandTotal.revenue > 0 ? ((grandTotal.revenue + grandTotal.cost) / grandTotal.revenue * 100).toFixed(1) : "0.0"}%
                                 </span>
-                              </td>
+                              </td> */}
                             </tr>
                           </>
                         );
@@ -2297,9 +2301,9 @@ function PrintViewContent() {
                       <th className="px-3 py-1.5 text-right">Tonnage (kg)</th>
                       <th className="px-3 py-1.5 text-right">Shipments</th>
                       <th className="px-3 py-1.5 text-right">Shipment Revenue (USD)</th>
-                      <th className="px-3 py-1.5 text-right">Shipment Cost</th>
-                      <th className="px-3 py-1.5 text-right">Gross Profit (USD)</th>
-                      <th className="px-3 py-1.5 text-right">GP Margin</th>
+                      {/* <th className="px-3 py-1.5 text-right">Shipment Cost</th> */}
+                      {/* <th className="px-3 py-1.5 text-right">Gross Profit (USD)</th> */}
+                      {/* <th className="px-3 py-1.5 text-right">GP Margin</th> */}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#F1F5F9]">
@@ -2444,13 +2448,13 @@ function PrintViewContent() {
                                 </td>
                                 <td className="px-3 py-1.5 text-right text-slate-500 font-semibold tabular-nums">{formatNumber(row.shipments)}</td>
                                 <td className="px-3 py-1.5 text-right font-semibold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
-                                <td className="px-3 py-1.5 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td>
-                                <td className="px-3 py-1.5 text-right font-semibold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td>
-                                <td className="px-3 py-1.5 text-right tabular-nums">
+                                {/* <td className="px-3 py-1.5 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td> */}
+                                {/* <td className="px-3 py-1.5 text-right font-semibold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td> */}
+                                {/* <td className="px-3 py-1.5 text-right tabular-nums">
                                   <span className={`font-semibold text-[12.5px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
                                     {gpMargin.toFixed(1)}%
                                   </span>
-                                </td>
+                                </td> */}
                               </tr>
                             );
                           })}
@@ -2463,13 +2467,13 @@ function PrintViewContent() {
                             <td className="px-3 py-1.5 text-right text-[#319795] tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
                             <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                             <td className="px-3 py-1.5 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
-                            <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td>
-                            <td className="px-3 py-1.5 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td>
-                            <td className="px-3 py-1.5 text-right">
+                            {/* <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td> */}
+                            {/* <td className="px-3 py-1.5 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td> */}
+                            {/* <td className="px-3 py-1.5 text-right">
                               <span className="font-bold text-slate-600 text-[12.5px]">
                                 {grandTotal.revenue > 0 ? ((grandTotal.revenue + grandTotal.cost) / grandTotal.revenue * 100).toFixed(1) : "0.0"}%
                               </span>
-                            </td>
+                            </td> */}
                           </tr>
                         </>
                       );
@@ -2482,11 +2486,12 @@ function PrintViewContent() {
             /* Standard Mode: Render original monthly visual charts */
             <>
               {/* KPI Cards Row */}
-              <div className="grid grid-cols-4 gap-4 mt-4">
+              <div className="grid grid-cols-2 gap-4 mt-4">
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Revenue</span>
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
                 </div>
+                {/* Total Cost & Total Profit (Commented out)
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Cost</span>
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
@@ -2495,6 +2500,7 @@ function PrintViewContent() {
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Profit</span>
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
                 </div>
+                */}
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Tonnage</span>
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
@@ -2854,7 +2860,7 @@ function PrintViewContent() {
                       return (
                         <tr key={i} className={`${isTotal ? "font-extrabold bg-slate-100 border-t-2 border-slate-350 text-[11px]" : isOthers ? "font-bold bg-slate-50/50" : "hover:bg-slate-50/30 text-slate-700"}`}>
                           <td className="px-1.5 py-[3px] text-slate-400 font-semibold">{isTotal ? "" : isOthers ? "" : i + 1}</td>
-                          <td className="px-1.5 py-[3px] font-bold truncate max-w-[135px]" title={row.name}>{row.name}</td>
+                          <td className="px-1.5 py-[3px] font-bold whitespace-normal break-words" title={row.name}>{row.name}</td>
                           <td className={`px-2 py-[3px] text-right tabular-nums font-semibold text-blue-600 ${isTotal ? "bg-blue-100/50" : "bg-blue-50/20"}`}>{formatTonnage(row.exp)}</td>
                           <td className={`px-2 py-[3px] text-right tabular-nums font-black ${isTotal ? "bg-slate-200" : "bg-slate-100 text-slate-800"}`}>{formatTonnage(row.total)}</td>
                           <td className="px-1 py-[3px] text-right tabular-nums">{formatTonnage(row.europe)}</td>

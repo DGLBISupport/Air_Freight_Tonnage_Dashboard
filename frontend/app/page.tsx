@@ -4007,7 +4007,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
 
           {/* ── FOUR FINANCIAL KPI CARDS ROW (Dashboard + Weekly Reports only) ── */}
           {activeSection !== "admin" && activeSection !== "email-scheduling" && activeSection !== "users" && (
-            <div className="max-w-[1380px] mx-auto px-6 mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="max-w-[1380px] mx-auto px-6 mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-6">
 
               {/* Card 1: Revenue */}
               <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
@@ -4021,7 +4021,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                 )}
               </div>
 
-              {/* Card 2: Cost */}
+              {/* Card 2: Cost (Commented out)
               <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Cost</p>
                 {loading ? (
@@ -4032,8 +4032,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                   </h3>
                 )}
               </div>
+              */}
 
-              {/* Card 3: Profit */}
+              {/* Card 3: Profit (Commented out)
               <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Profit</p>
                 {loading ? (
@@ -4044,6 +4045,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                   </h3>
                 )}
               </div>
+              */}
 
               {/* Card 4: Total Tonnage */}
               <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
@@ -4755,9 +4757,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               <th className="px-3 py-3 text-right">Tonnage (kg)</th>
                               <th className="px-3 py-3 text-right">Shipments</th>
                               <th className="px-3 py-3 text-right">Shipment Revenue (USD)</th>
-                              <th className="px-3 py-3 text-right">Shipment Cost (USD)</th>
-                              <th className="px-3 py-3 text-right">Gross Profit (USD)</th>
-                              <th className="px-3 py-3 text-right">GP Margin</th>
+                              {/* <th className="px-3 py-3 text-right">Shipment Cost (USD)</th> */}
+                              {/* <th className="px-3 py-3 text-right">Gross Profit (USD)</th> */}
+                              {/* <th className="px-3 py-3 text-right">GP Margin</th> */}
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-[#F1F5F9]">
@@ -4803,13 +4805,13 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                     </td>
                                     <td className="px-3 py-3 text-right font-semibold text-slate-700 tabular-nums">{formatNumber(row.shipments)}</td>
                                     <td className="px-3 py-3 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
-                                    <td className="px-3 py-3 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td>
-                                    <td className="px-3 py-3 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td>
-                                    <td className="px-3 py-3 text-right tabular-nums">
+                                    {/* <td className="px-3 py-3 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td> */}
+                                    {/* <td className="px-3 py-3 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td> */}
+                                    {/* <td className="px-3 py-3 text-right tabular-nums">
                                       <span className={`font-bold text-[10px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
                                         {gpMargin.toFixed(1)}%
                                       </span>
-                                    </td>
+                                    </td> */}
                                   </tr>
                                   {sortedRoutes.length > 0 && (
                                     sortedRoutes.map((route, rIdx) => {
@@ -4823,13 +4825,13 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                           <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatNumber(route.tonnage)} kg</td>
                                           <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatNumber(route.shipments)}</td>
                                           <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatCurrency(route.revenue)}</td>
-                                          <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatCurrency(route.cost)}</td>
-                                          <td className="px-3 py-2 text-right tabular-nums font-extrabold text-slate-950">{formatCurrency(route.revenue + route.cost)}</td>
-                                          <td className="px-3 py-2 text-right tabular-nums">
+                                          {/* <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatCurrency(route.cost)}</td> */}
+                                          {/* <td className="px-3 py-2 text-right tabular-nums font-extrabold text-slate-950">{formatCurrency(route.revenue + route.cost)}</td> */}
+                                          {/* <td className="px-3 py-2 text-right tabular-nums">
                                             <span className="font-extrabold text-slate-950">
                                               {routeGpMargin.toFixed(1)}%
                                             </span>
-                                          </td>
+                                          </td> */}
                                         </tr>
                                       );
                                     })
@@ -4845,13 +4847,13 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               <td className="px-3 py-3 text-right text-[#3182CE] tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
                               <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                               <td className="px-3 py-3 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
-                              <td className="px-3 py-3 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td>
-                              <td className="px-3 py-3 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td>
-                              <td className="px-3 py-3 text-right">
+                              {/* <td className="px-3 py-3 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td> */}
+                              {/* <td className="px-3 py-3 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td> */}
+                              {/* <td className="px-3 py-3 text-right">
                                 <span className="font-bold text-slate-600 text-[10px]">
                                   {grandTotal.revenue > 0 ? ((grandTotal.revenue + grandTotal.cost) / grandTotal.revenue * 100).toFixed(1) : "0.0"}%
                                 </span>
-                              </td>
+                              </td> */}
                             </tr>
                           </tfoot>
                         </table>
@@ -4974,9 +4976,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               <th className="px-3 py-3 text-right">Tonnage (kg)</th>
                               <th className="px-3 py-3 text-right">Shipments</th>
                               <th className="px-3 py-3 text-right">Shipment Revenue (USD)</th>
-                              <th className="px-3 py-3 text-right">Shipment Cost</th>
-                              <th className="px-3 py-3 text-right">Gross Profit (USD)</th>
-                              <th className="px-3 py-3 text-right">GP Margin</th>
+                              {/* <th className="px-3 py-3 text-right">Shipment Cost</th> */}
+                              {/* <th className="px-3 py-3 text-right">Gross Profit (USD)</th> */}
+                              {/* <th className="px-3 py-3 text-right">GP Margin</th> */}
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-[#F1F5F9]">
@@ -5030,13 +5032,13 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                   </td>
                                   <td className="px-3 py-3 text-right font-semibold text-slate-700 tabular-nums">{formatNumber(row.shipments)}</td>
                                   <td className="px-3 py-3 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
-                                  <td className="px-3 py-3 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td>
-                                  <td className="px-3 py-3 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td>
-                                  <td className="px-3 py-3 text-right tabular-nums">
+                                  {/* <td className="px-3 py-3 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td> */}
+                                  {/* <td className="px-3 py-3 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td> */}
+                                  {/* <td className="px-3 py-3 text-right tabular-nums">
                                     <span className={`font-bold text-[10px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
                                       {gpMargin.toFixed(1)}%
                                     </span>
-                                  </td>
+                                  </td> */}
                                 </tr>
                               );
                             })}
@@ -5051,13 +5053,13 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               <td className="px-3 py-3 text-right text-[#319795] tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
                               <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                               <td className="px-3 py-3 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
-                              <td className="px-3 py-3 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td>
-                              <td className="px-3 py-3 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td>
-                              <td className="px-3 py-3 text-right">
+                              {/* <td className="px-3 py-3 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td> */}
+                              {/* <td className="px-3 py-3 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td> */}
+                              {/* <td className="px-3 py-3 text-right">
                                 <span className="font-bold text-slate-600 text-[10px]">
                                   {grandTotal.revenue > 0 ? ((grandTotal.revenue + grandTotal.cost) / grandTotal.revenue * 100).toFixed(1) : "0.0"}%
                                 </span>
-                              </td>
+                              </td> */}
                             </tr>
                           </tfoot>
                         </table>
@@ -5419,7 +5421,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               return (
                                 <tr key={i} className={`${isTotal ? "font-extrabold bg-slate-100 border-t-2 border-slate-350" : isOthers ? "font-bold bg-slate-50/50" : "hover:bg-slate-50/30 text-slate-700"}`}>
                                   <td className="px-2 py-1.5 text-slate-400 font-semibold">{isTotal ? "" : isOthers ? "" : i + 1}</td>
-                                  <td className="px-2 py-1.5 font-bold truncate max-w-[150px]" title={row.name}>{row.name}</td>
+                                  <td className="px-2 py-1.5 font-bold whitespace-normal break-words" title={row.name}>{row.name}</td>
                                   <td className={`px-2 py-1.5 text-right tabular-nums font-semibold text-blue-600 ${isTotal ? "bg-blue-100/50" : "bg-blue-50/20"}`}>{formatTonnage(row.exp)}</td>
                                   <td className={`px-2 py-1.5 text-right tabular-nums font-black ${isTotal ? "bg-slate-200" : "bg-slate-100 text-slate-800"}`}>{formatTonnage(row.total)}</td>
                                   <td className="px-1 py-1.5 text-right tabular-nums">{formatTonnage(row.europe)}</td>
