@@ -8,7 +8,7 @@ import {
 import {
   Calendar, Globe, Plane, RefreshCw, Send, X, ArrowUpRight, ArrowDownRight, Layers, FileText, Printer, CheckCircle,
   Users, Check, ChevronDown, Plus, Settings, Eye, Info, LayoutDashboard, BarChart2, ShieldCheck,
-  Mail, Clock, UserCheck, Trash2, Bell, Database, Lock, ChevronRight, Play
+  Mail, Clock, UserCheck, Trash2, Bell, Database, Lock, ChevronRight, Play, AlertTriangle, AlertCircle
 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
@@ -719,11 +719,23 @@ export default function Dashboard() {
     }
   };
 
-  const handleDeleteSchedule = async (scheduleId: string) => {
-    if (!confirm("Are you sure you want to delete this schedule?")) return;
+  // Delete Schedule Modal State
+  const [scheduleToDelete, setScheduleToDelete] = useState<{ id: string; stationLabel?: string; triggerDesc?: string } | null>(null);
+  const [isDeletingSchedule, setIsDeletingSchedule] = useState(false);
+  const [scheduleDeleteError, setScheduleDeleteError] = useState<string | null>(null);
+
+  const handleDeleteSchedule = (scheduleId: string, stationLabel?: string, triggerDesc?: string) => {
+    setScheduleDeleteError(null);
+    setScheduleToDelete({ id: scheduleId, stationLabel, triggerDesc });
+  };
+
+  const handleConfirmDeleteSchedule = async () => {
+    if (!scheduleToDelete) return;
+    setIsDeletingSchedule(true);
+    setScheduleDeleteError(null);
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API}/api/schedules/${scheduleId}`, {
+      const res = await fetch(`${API}/api/schedules/${scheduleToDelete.id}`, {
         method: "DELETE",
         headers: {
           "Authorization": authHeaders.Authorization
@@ -731,13 +743,16 @@ export default function Dashboard() {
       });
       const data = await res.json();
       if (data.status === "success") {
+        setScheduleToDelete(null);
         fetchSchedules(supabase);
       } else {
-        alert(data.detail || "Could not delete schedule.");
+        setScheduleDeleteError(data.detail || "Could not delete schedule.");
       }
     } catch (e) {
       console.error(e);
-      alert("Failed to delete schedule.");
+      setScheduleDeleteError("Failed to delete schedule. Please check server connection.");
+    } finally {
+      setIsDeletingSchedule(false);
     }
   };
 
@@ -1109,6 +1124,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
 
         const airlinesSet = new Set(records.map((r: any) => r.Airline ?? r.AirlineName1 ?? r.carrier).filter(Boolean));
         const countriesSet = new Set(records.map((r: any) => r.Origin_Country ?? r.ConLoadPortCountryName ?? r.country).filter(Boolean));
+        const mastersSet = new Set(records.map((r: any) => r.Console_Number ?? r.ConsoleNumber ?? r.Master_Airway_Bill ?? r.MasterBillNum ?? r.Console_No ?? r.Number_of_Masters).filter(Boolean));
+        const totalMasters = records.reduce((sum: number, r: any) => sum + Number(r.Number_of_Masters ?? r.Total_Masters ?? 0), 0) || mastersSet.size || records.length;
 
         setWeeklySqlKpi({
           Total_Tonnage: totalTonnage,
@@ -1117,6 +1134,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
           Total_Profit: totalProfit,
           GP_Margin: gpMargin,
           Total_Shipments: totalShipments,
+          Total_Masters: totalMasters,
           Unique_Airlines: airlinesSet.size,
           Unique_Countries: countriesSet.size,
         });
@@ -1209,6 +1227,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
 
         const airlinesSet = new Set(records.map((r: any) => r.Airline ?? r.AirlineName1 ?? r.carrier).filter(Boolean));
         const countriesSet = new Set(records.map((r: any) => r.Origin_Country ?? r.ConLoadPortCountryName ?? r.country).filter(Boolean));
+        const mastersSet = new Set(records.map((r: any) => r.Console_Number ?? r.ConsoleNumber ?? r.Master_Airway_Bill ?? r.MasterBillNum ?? r.Console_No ?? r.Number_of_Masters).filter(Boolean));
+        const totalMasters = records.reduce((sum: number, r: any) => sum + Number(r.Number_of_Masters ?? r.Total_Masters ?? 0), 0) || mastersSet.size || records.length;
 
         setMonthlySqlKpi({
           Total_Tonnage: totalTonnage,
@@ -1217,6 +1237,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
           Total_Profit: totalProfit,
           GP_Margin: gpMargin,
           Total_Shipments: totalShipments,
+          Total_Masters: totalMasters,
           Unique_Airlines: airlinesSet.size,
           Unique_Countries: countriesSet.size,
         });
@@ -3838,9 +3859,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                         <Play className="w-3.5 h-3.5" />
                                       </button>
                                       <button
-                                        onClick={() => handleDeleteSchedule(s.id)}
+                                        onClick={() => handleDeleteSchedule(s.id, stationLabel, triggerDesc)}
                                         className="p-1 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 transition-colors"
-                                        title="Delete"
+                                        title="Delete Schedule"
                                       >
                                         <Trash2 className="w-3.5 h-3.5" />
                                       </button>
@@ -4005,9 +4026,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
             </div>
           )}
 
-          {/* ── FOUR FINANCIAL KPI CARDS ROW (Dashboard + Weekly Reports only) ── */}
+          {/* ── FOUR FINANCIAL & OPERATIONAL KPI CARDS ROW (Dashboard + Weekly/Monthly Reports) ── */}
           {activeSection !== "admin" && activeSection !== "email-scheduling" && activeSection !== "users" && (
-            <div className="max-w-[1380px] mx-auto px-6 mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-6">
+            <div className="max-w-[1380px] mx-auto px-6 mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
 
               {/* Card 1: Revenue */}
               <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
@@ -4021,33 +4042,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                 )}
               </div>
 
-              {/* Card 2: Cost (Commented out)
-              <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Cost</p>
-                {loading ? (
-                  <Skeleton className="h-8 w-28 mt-2 bg-slate-100" />
-                ) : (
-                  <h3 className="text-2xl font-extrabold text-[#2D3748] tracking-tight mt-1">
-                    {formatCurrency(kpi.Total_Cost)}
-                  </h3>
-                )}
-              </div>
-              */}
-
-              {/* Card 3: Profit (Commented out)
-              <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Profit</p>
-                {loading ? (
-                  <Skeleton className="h-8 w-28 mt-2 bg-slate-100" />
-                ) : (
-                  <h3 className="text-2xl font-extrabold text-[#2D3748] tracking-tight mt-1">
-                    {formatCurrency(kpi.Total_Profit)}
-                  </h3>
-                )}
-              </div>
-              */}
-
-              {/* Card 4: Total Tonnage */}
+              {/* Card 2: Total Tonnage */}
               <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Tonnage</p>
                 {loading ? (
@@ -4058,6 +4053,31 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                   </h3>
                 )}
               </div>
+
+              {/* Card 3: No of Shipments */}
+              <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">No of Shipments</p>
+                {loading ? (
+                  <Skeleton className="h-8 w-28 mt-2 bg-slate-100" />
+                ) : (
+                  <h3 className="text-2xl font-extrabold text-[#2D3748] tracking-tight mt-1">
+                    {formatNumber(kpi.Total_Shipments)}
+                  </h3>
+                )}
+              </div>
+
+              {/* Card 4: No of Masters */}
+              <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">No of Masters</p>
+                {loading ? (
+                  <Skeleton className="h-8 w-28 mt-2 bg-slate-100" />
+                ) : (
+                  <h3 className="text-2xl font-extrabold text-[#2D3748] tracking-tight mt-1">
+                    {formatNumber(kpi.Total_Masters ?? kpi.Number_of_Masters ?? kpi.Weekly_Total_Masters ?? kpi.Unique_Masters)}
+                  </h3>
+                )}
+              </div>
+
             </div>
           )}
 
@@ -4657,6 +4677,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                           revenue: number;
                           cost: number;
                           shipments: number;
+                          mastersSet: Set<string>;
+                          numericMasters: number;
                           routes: {
                             [routeKey: string]: {
                               originCity: string;
@@ -4665,6 +4687,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               revenue: number;
                               cost: number;
                               shipments: number;
+                              mastersSet: Set<string>;
+                              numericMasters: number;
                             };
                           };
                         }
@@ -4673,17 +4697,27 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                       data.forEach((r: any) => {
                         const airline = r.Airline ?? r.AirlineName1 ?? r.carrier ?? "Unknown";
                         if (!aggMap[airline]) {
-                          aggMap[airline] = { airline, tonnage: 0, revenue: 0, cost: 0, shipments: 0, routes: {} };
+                          aggMap[airline] = { airline, tonnage: 0, revenue: 0, cost: 0, shipments: 0, mastersSet: new Set<string>(), numericMasters: 0, routes: {} };
                         }
                         const tonnage = Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
                         const revenue = Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
                         const cost = Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
                         const shipments = Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
 
+                        const masterId = r.Console_Number ?? r.ConsoleNumber ?? r.Master_Airway_Bill ?? r.MasterBillNum ?? r.Console_No;
+                        const numericMasterVal = Number(r.Number_of_Masters ?? r.Total_Masters ?? 0);
+
                         aggMap[airline].tonnage += tonnage;
                         aggMap[airline].revenue += revenue;
                         aggMap[airline].cost += cost;
                         aggMap[airline].shipments += shipments;
+                        if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
+                          aggMap[airline].mastersSet.add(String(masterId).trim());
+                        } else if (numericMasterVal > 0) {
+                          aggMap[airline].numericMasters += numericMasterVal;
+                        } else {
+                          aggMap[airline].numericMasters += 1;
+                        }
 
                         const originCity = r.Origin_City ?? r.OriginCity ?? r.origin_city ?? "—";
                         const destCity = r.Destination_City ?? r.DestCity ?? r.dest_city ?? "—";
@@ -4696,7 +4730,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                             tonnage: 0,
                             revenue: 0,
                             cost: 0,
-                            shipments: 0
+                            shipments: 0,
+                            mastersSet: new Set<string>(),
+                            numericMasters: 0
                           };
                         }
                         const rt = aggMap[airline].routes[routeKey];
@@ -4704,6 +4740,13 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                         rt.revenue += revenue;
                         rt.cost += cost;
                         rt.shipments += shipments;
+                        if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
+                          rt.mastersSet.add(String(masterId).trim());
+                        } else if (numericMasterVal > 0) {
+                          rt.numericMasters += numericMasterVal;
+                        } else {
+                          rt.numericMasters += 1;
+                        }
                       });
 
                       const sorted = Object.values(aggMap).sort((a, b) => b.tonnage - a.tonnage);
@@ -4715,16 +4758,26 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                         revenue: others.reduce((s, r) => s + r.revenue, 0),
                         cost: others.reduce((s, r) => s + r.cost, 0),
                         shipments: others.reduce((s, r) => s + r.shipments, 0),
+                        mastersSet: others.reduce((accSet, o) => {
+                          o.mastersSet.forEach((m) => accSet.add(m));
+                          return accSet;
+                        }, new Set<string>()),
+                        numericMasters: others.reduce((s, r) => s + r.numericMasters, 0),
                         routes: others.reduce((acc: any, o) => {
                           Object.values(o.routes || {}).forEach((rt: any) => {
                             const routeKey = `${rt.originCity} → ${rt.destCity}`;
                             if (!acc[routeKey]) {
-                              acc[routeKey] = { ...rt };
+                              acc[routeKey] = {
+                                ...rt,
+                                mastersSet: new Set<string>(rt.mastersSet),
+                              };
                             } else {
                               acc[routeKey].tonnage += rt.tonnage;
                               acc[routeKey].revenue += rt.revenue;
                               acc[routeKey].cost += rt.cost;
                               acc[routeKey].shipments += rt.shipments;
+                              rt.mastersSet.forEach((m: string) => acc[routeKey].mastersSet.add(m));
+                              acc[routeKey].numericMasters += rt.numericMasters;
                             }
                           });
                           return acc;
@@ -4732,11 +4785,23 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                       } : null;
 
                       const rows = othersRow ? [...top10, othersRow] : top10;
+
+                      const grandMastersSet = new Set<string>();
+                      let grandNumericMasters = 0;
+                      rows.forEach((r: any) => {
+                        if (r.mastersSet && r.mastersSet.size > 0) {
+                          r.mastersSet.forEach((m: string) => grandMastersSet.add(m));
+                        } else {
+                          grandNumericMasters += (r.numericMasters || 0);
+                        }
+                      });
+
                       const grandTotal = {
                         tonnage: rows.reduce((s, r) => s + r.tonnage, 0),
                         revenue: rows.reduce((s, r) => s + r.revenue, 0),
                         cost: rows.reduce((s, r) => s + r.cost, 0),
                         shipments: rows.reduce((s, r) => s + r.shipments, 0),
+                        masters: grandMastersSet.size > 0 ? grandMastersSet.size : grandNumericMasters,
                       };
 
                       if (rows.length === 0) {
@@ -4755,6 +4820,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               <th className="px-3 py-3 w-8">#</th>
                               <th className="px-3 py-3">Airline</th>
                               <th className="px-3 py-3 text-right">Tonnage (kg)</th>
+                              <th className="px-3 py-3 text-right">No of Masters</th>
                               <th className="px-3 py-3 text-right">Shipments</th>
                               <th className="px-3 py-3 text-right">Shipment Revenue (USD)</th>
                               {/* <th className="px-3 py-3 text-right">Shipment Cost (USD)</th> */}
@@ -4769,6 +4835,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               const totalTonnage = grandTotal.tonnage;
                               const pct = totalTonnage > 0 ? (row.tonnage / totalTonnage * 100) : 0;
                               const sortedRoutes = (Object.values(row.routes || {}) as any[]).sort((a, b) => b.tonnage - a.tonnage);
+                              const rowMasters = row.mastersSet?.size > 0 ? row.mastersSet.size : row.numericMasters;
 
                               return (
                                 <Fragment key={i}>
@@ -4803,6 +4870,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                         </div>
                                       </div>
                                     </td>
+                                    <td className="px-3 py-3 text-right font-semibold text-slate-700 tabular-nums">{formatNumber(rowMasters)}</td>
                                     <td className="px-3 py-3 text-right font-semibold text-slate-700 tabular-nums">{formatNumber(row.shipments)}</td>
                                     <td className="px-3 py-3 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
                                     {/* <td className="px-3 py-3 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td> */}
@@ -4816,6 +4884,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                   {sortedRoutes.length > 0 && (
                                     sortedRoutes.map((route, rIdx) => {
                                       const routeGpMargin = route.revenue > 0 ? ((route.revenue + route.cost) / route.revenue * 100) : 0;
+                                      const routeMasters = route.mastersSet?.size > 0 ? route.mastersSet.size : route.numericMasters;
                                       return (
                                         <tr key={`${i}-route-${rIdx}`} className="bg-[#EBF8FF]/50 text-slate-950 text-[11px] border-l-4 border-blue-300 hover:bg-[#EBF8FF]/70 transition-colors">
                                           <td className="px-3 py-1 text-center text-[8px] text-blue-400 font-bold"></td>
@@ -4823,6 +4892,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                             <span className="font-semibold text-slate-950">{route.originCity} → {route.destCity}</span>
                                           </td>
                                           <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatNumber(route.tonnage)} kg</td>
+                                          <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatNumber(routeMasters)}</td>
                                           <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatNumber(route.shipments)}</td>
                                           <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatCurrency(route.revenue)}</td>
                                           {/* <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatCurrency(route.cost)}</td> */}
@@ -4845,6 +4915,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                             <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-xs">
                               <td className="px-3 py-3 text-slate-500" colSpan={2}>TOTAL</td>
                               <td className="px-3 py-3 text-right text-[#3182CE] tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
+                              <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.masters)}</td>
                               <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                               <td className="px-3 py-3 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
                               {/* <td className="px-3 py-3 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td> */}
@@ -4879,6 +4950,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                           originCountry: string; destCountry: string;
                           originCity: string; destCity: string;
                           tonnage: number; revenue: number; cost: number; shipments: number;
+                          mastersSet: Set<string>;
+                          numericMasters: number;
                         }
                       } = {};
 
@@ -4889,12 +4962,31 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                         const destCity = r.Destination_City ?? r.DestCity ?? r.dest_city ?? "—";
                         const key = `${originCountry}||${destCountry}||${originCity}||${destCity}`;
                         if (!routeMap[key]) {
-                          routeMap[key] = { originCountry, destCountry, originCity, destCity, tonnage: 0, revenue: 0, cost: 0, shipments: 0 };
+                          routeMap[key] = {
+                            originCountry, destCountry, originCity, destCity,
+                            tonnage: 0, revenue: 0, cost: 0, shipments: 0,
+                            mastersSet: new Set<string>(), numericMasters: 0
+                          };
                         }
-                        routeMap[key].tonnage += Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
-                        routeMap[key].revenue += Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
-                        routeMap[key].cost += Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
-                        routeMap[key].shipments += Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
+                        const tonnage = Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
+                        const revenue = Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
+                        const cost = Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
+                        const shipments = Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
+
+                        const masterId = r.Console_Number ?? r.ConsoleNumber ?? r.Master_Airway_Bill ?? r.MasterBillNum ?? r.Console_No;
+                        const numericMasterVal = Number(r.Number_of_Masters ?? r.Total_Masters ?? 0);
+
+                        routeMap[key].tonnage += tonnage;
+                        routeMap[key].revenue += revenue;
+                        routeMap[key].cost += cost;
+                        routeMap[key].shipments += shipments;
+                        if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
+                          routeMap[key].mastersSet.add(String(masterId).trim());
+                        } else if (numericMasterVal > 0) {
+                          routeMap[key].numericMasters += numericMasterVal;
+                        } else {
+                          routeMap[key].numericMasters += 1;
+                        }
                       });
 
                       const sorted = Object.values(routeMap).sort((a, b) => b.tonnage - a.tonnage);
@@ -4907,14 +4999,31 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                         revenue: others.reduce((s, r) => s + r.revenue, 0),
                         cost: others.reduce((s, r) => s + r.cost, 0),
                         shipments: others.reduce((s, r) => s + r.shipments, 0),
+                        mastersSet: others.reduce((accSet, o) => {
+                          o.mastersSet.forEach((m) => accSet.add(m));
+                          return accSet;
+                        }, new Set<string>()),
+                        numericMasters: others.reduce((s, r) => s + r.numericMasters, 0),
                       } : null;
 
                       const rows = othersRow ? [...top10, othersRow] : top10;
+
+                      const grandMastersSet = new Set<string>();
+                      let grandNumericMasters = 0;
+                      rows.forEach((r: any) => {
+                        if (r.mastersSet && r.mastersSet.size > 0) {
+                          r.mastersSet.forEach((m: string) => grandMastersSet.add(m));
+                        } else {
+                          grandNumericMasters += (r.numericMasters || 0);
+                        }
+                      });
+
                       const grandTotal = {
                         tonnage: rows.reduce((s, r) => s + r.tonnage, 0),
                         revenue: rows.reduce((s, r) => s + r.revenue, 0),
                         cost: rows.reduce((s, r) => s + r.cost, 0),
                         shipments: rows.reduce((s, r) => s + r.shipments, 0),
+                        masters: grandMastersSet.size > 0 ? grandMastersSet.size : grandNumericMasters,
                       };
 
                       const ROUTE_COLORS = ["#319795", "#4299E1", "#805AD5", "#D69E2E", "#E53E3E", "#38A169", "#DD6B20", "#3182CE", "#744210", "#2B6CB0"];
@@ -4974,6 +5083,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               <th className="px-3 py-3">Destination Country</th>
                               <th className="px-3 py-3">Destination City</th>
                               <th className="px-3 py-3 text-right">Tonnage (kg)</th>
+                              <th className="px-3 py-3 text-right">No of Masters</th>
                               <th className="px-3 py-3 text-right">Shipments</th>
                               <th className="px-3 py-3 text-right">Shipment Revenue (USD)</th>
                               {/* <th className="px-3 py-3 text-right">Shipment Cost</th> */}
@@ -4989,6 +5099,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               const pct = totalTonnage > 0 ? (row.tonnage / totalTonnage * 100) : 0;
                               const color = getCountryColor(row.originCountry);
                               const bgClass = isOthers ? "bg-slate-50/50 italic" : getDestBgColorClass(row.destCountry);
+                              const rowMasters = row.mastersSet?.size > 0 ? row.mastersSet.size : row.numericMasters;
 
                               // Extract solid hex color from bgClass (e.g. "bg-[#EBF8FF]/50" -> "#EBF8FF")
                               const bgMatch = bgClass.match(/bg-\[([^\]]+)\]/);
@@ -5030,6 +5141,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                                       </div>
                                     </div>
                                   </td>
+                                  <td className="px-3 py-3 text-right font-semibold text-slate-700 tabular-nums">{formatNumber(rowMasters)}</td>
                                   <td className="px-3 py-3 text-right font-semibold text-slate-700 tabular-nums">{formatNumber(row.shipments)}</td>
                                   <td className="px-3 py-3 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
                                   {/* <td className="px-3 py-3 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td> */}
@@ -5051,6 +5163,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                               <td className="px-3 py-3" />
                               <td className="px-3 py-3" />
                               <td className="px-3 py-3 text-right text-[#319795] tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
+                              <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.masters)}</td>
                               <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                               <td className="px-3 py-3 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
                               {/* <td className="px-3 py-3 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td> */}
@@ -5723,6 +5836,88 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
               <span>Dart Global Logistics PDF Engine</span>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* ── DELETE SCHEDULE CONFIRMATION MODAL ── */}
+      {scheduleToDelete && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in-0 duration-200">
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xl max-w-md w-full p-6 text-slate-800 animate-in zoom-in-95 duration-200 relative overflow-hidden">
+            {/* Top Accent Bar */}
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-rose-500 via-red-500 to-amber-500" />
+            
+            <div className="flex items-start gap-4">
+              <div className="w-11 h-11 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center shrink-0 text-rose-600 shadow-inner">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-base font-extrabold text-slate-900 tracking-tight">Delete Automated Schedule?</h3>
+                  <button
+                    type="button"
+                    onClick={() => { setScheduleToDelete(null); setScheduleDeleteError(null); }}
+                    className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  Are you sure you want to delete this schedule? Automated report emails will stop being sent for this configuration.
+                </p>
+
+                {scheduleToDelete.stationLabel && (
+                  <div className="mt-3.5 p-3 bg-slate-50 border border-slate-200/80 rounded-xl text-xs space-y-1">
+                    <div className="flex items-center justify-between font-bold text-slate-800">
+                      <span>📍 {scheduleToDelete.stationLabel}</span>
+                      <span className="text-[10px] bg-rose-100 text-rose-700 px-2 py-0.5 rounded-md font-bold uppercase">To be deleted</span>
+                    </div>
+                    {scheduleToDelete.triggerDesc && (
+                      <div className="text-[11px] font-medium text-slate-500 flex items-center gap-1 mt-0.5">
+                        <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                        <span>{scheduleToDelete.triggerDesc}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {scheduleDeleteError && (
+                  <div className="mt-3 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-semibold text-rose-600 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{scheduleDeleteError}</span>
+                  </div>
+                )}
+
+                <div className="mt-6 flex items-center justify-end gap-2.5">
+                  <button
+                    type="button"
+                    disabled={isDeletingSchedule}
+                    onClick={() => { setScheduleToDelete(null); setScheduleDeleteError(null); }}
+                    className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200/70 border border-slate-200 rounded-xl transition-all disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isDeletingSchedule}
+                    onClick={handleConfirmDeleteSchedule}
+                    className="px-4.5 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 active:bg-rose-800 rounded-xl shadow-md shadow-rose-600/20 hover:shadow-lg transition-all flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isDeletingSchedule ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Deleting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Yes, Delete Schedule</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

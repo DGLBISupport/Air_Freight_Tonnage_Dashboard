@@ -400,6 +400,8 @@ function PrintViewContent() {
 
             const airlinesSet = new Set(records.map((r: any) => r.Airline ?? r.AirlineName1 ?? r.carrier).filter(Boolean));
             const countriesSet = new Set(records.map((r: any) => r.Origin_Country ?? r.ConLoadPortCountryName ?? r.country).filter(Boolean));
+            const mastersSet = new Set(records.map((r: any) => r.Console_Number ?? r.ConsoleNumber ?? r.Master_Airway_Bill ?? r.MasterBillNum ?? r.Console_No ?? r.Number_of_Masters).filter(Boolean));
+            const totalMasters = records.reduce((sum: number, r: any) => sum + Number(r.Number_of_Masters ?? r.Total_Masters ?? 0), 0) || mastersSet.size || records.length;
 
             setKpi({
               Total_Tonnage: totalTonnage,
@@ -408,6 +410,7 @@ function PrintViewContent() {
               Total_Profit: totalProfit,
               GP_Margin: gpMargin,
               Total_Shipments: totalShipments,
+              Total_Masters: totalMasters,
               Unique_Airlines: airlinesSet.size,
               Unique_Countries: countriesSet.size,
             });
@@ -1389,24 +1392,22 @@ function PrintViewContent() {
               </div>
 
               {/* KPI Cards Row */}
-              <div className="grid grid-cols-2 gap-4 mt-4">
+              <div className="grid grid-cols-4 gap-4 mt-4">
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Revenue</span>
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
                 </div>
-                {/* Total Cost & Total Profit (Commented out)
-                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
-                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Cost</span>
-                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
-                </div>
-                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
-                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Profit</span>
-                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
-                </div>
-                */}
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Tonnage</span>
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
+                </div>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">No of Shipments</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Shipments)}</h3>
+                </div>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">No of Masters</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Masters ?? kpi.Number_of_Masters ?? kpi.Weekly_Total_Masters ?? kpi.Unique_Masters)}</h3>
                 </div>
               </div>
 
@@ -1833,24 +1834,22 @@ function PrintViewContent() {
             </div>
 
             {/* KPI Cards Row */}
-            <div className="grid grid-cols-2 gap-4 mt-4">
+            <div className="grid grid-cols-4 gap-4 mt-4">
               <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                 <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Revenue</span>
                 <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
               </div>
-              {/* Total Cost & Total Profit (Commented out)
-              <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
-                <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Cost</span>
-                <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
-              </div>
-              <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
-                <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Profit</span>
-                <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
-              </div>
-              */}
               <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                 <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Tonnage</span>
                 <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
+              </div>
+              <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">No of Shipments</span>
+                <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Shipments)}</h3>
+              </div>
+              <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">No of Masters</span>
+                <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Masters ?? kpi.Number_of_Masters ?? kpi.Weekly_Total_Masters ?? kpi.Unique_Masters)}</h3>
               </div>
             </div>
 
@@ -1990,6 +1989,7 @@ function PrintViewContent() {
                           <th className="px-3 py-1.5 w-8">#</th>
                           <th className="px-3 py-1.5">Airline</th>
                           <th className="px-3 py-1.5 text-right">Tonnage (kg)</th>
+                          <th className="px-3 py-1.5 text-right">No of Masters</th>
                           <th className="px-3 py-1.5 text-right">Shipments</th>
                           <th className="px-3 py-1.5 text-right">Shipment Revenue (USD)</th>
                           {/* <th className="px-3 py-1.5 text-right">Shipment Cost (USD)</th> */}
@@ -2020,6 +2020,8 @@ function PrintViewContent() {
                             revenue: number;
                             cost: number;
                             shipments: number;
+                            mastersSet: Set<string>;
+                            numericMasters: number;
                             routes: {
                               [routeKey: string]: {
                                 originCity: string;
@@ -2028,6 +2030,8 @@ function PrintViewContent() {
                                 revenue: number;
                                 cost: number;
                                 shipments: number;
+                                mastersSet: Set<string>;
+                                numericMasters: number;
                               };
                             };
                           }
@@ -2036,17 +2040,27 @@ function PrintViewContent() {
                         data.forEach((r: any) => {
                           const airline = r.Airline ?? r.AirlineName1 ?? r.carrier ?? "Unknown";
                           if (!aggMap[airline]) {
-                            aggMap[airline] = { airline, tonnage: 0, revenue: 0, cost: 0, shipments: 0, routes: {} };
+                            aggMap[airline] = { airline, tonnage: 0, revenue: 0, cost: 0, shipments: 0, mastersSet: new Set<string>(), numericMasters: 0, routes: {} };
                           }
                           const tonnage = Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
                           const revenue = Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
                           const cost = Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
                           const shipments = Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
 
+                          const masterId = r.Console_Number ?? r.ConsoleNumber ?? r.Master_Airway_Bill ?? r.MasterBillNum ?? r.Console_No;
+                          const numericMasterVal = Number(r.Number_of_Masters ?? r.Total_Masters ?? 0);
+
                           aggMap[airline].tonnage += tonnage;
                           aggMap[airline].revenue += revenue;
                           aggMap[airline].cost += cost;
                           aggMap[airline].shipments += shipments;
+                          if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
+                            aggMap[airline].mastersSet.add(String(masterId).trim());
+                          } else if (numericMasterVal > 0) {
+                            aggMap[airline].numericMasters += numericMasterVal;
+                          } else {
+                            aggMap[airline].numericMasters += 1;
+                          }
 
                           const originCity = r.Origin_City ?? r.OriginCity ?? r.origin_city ?? "—";
                           const destCity = r.Destination_City ?? r.DestCity ?? r.dest_city ?? "—";
@@ -2059,7 +2073,9 @@ function PrintViewContent() {
                               tonnage: 0,
                               revenue: 0,
                               cost: 0,
-                              shipments: 0
+                              shipments: 0,
+                              mastersSet: new Set<string>(),
+                              numericMasters: 0
                             };
                           }
                           const rt = aggMap[airline].routes[routeKey];
@@ -2067,6 +2083,13 @@ function PrintViewContent() {
                           rt.revenue += revenue;
                           rt.cost += cost;
                           rt.shipments += shipments;
+                          if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
+                            rt.mastersSet.add(String(masterId).trim());
+                          } else if (numericMasterVal > 0) {
+                            rt.numericMasters += numericMasterVal;
+                          } else {
+                            rt.numericMasters += 1;
+                          }
                         });
 
                         const sorted = Object.values(aggMap).sort((a, b) => b.tonnage - a.tonnage);
@@ -2078,16 +2101,26 @@ function PrintViewContent() {
                           revenue: others.reduce((s, r) => s + r.revenue, 0),
                           cost: others.reduce((s, r) => s + r.cost, 0),
                           shipments: others.reduce((s, r) => s + r.shipments, 0),
+                          mastersSet: others.reduce((accSet, o) => {
+                            o.mastersSet.forEach((m) => accSet.add(m));
+                            return accSet;
+                          }, new Set<string>()),
+                          numericMasters: others.reduce((s, r) => s + r.numericMasters, 0),
                           routes: others.reduce((acc: any, o) => {
                             Object.values(o.routes || {}).forEach((rt: any) => {
                               const routeKey = `${rt.originCity} → ${rt.destCity}`;
                               if (!acc[routeKey]) {
-                                acc[routeKey] = { ...rt };
+                                acc[routeKey] = {
+                                  ...rt,
+                                  mastersSet: new Set<string>(rt.mastersSet),
+                                };
                               } else {
                                 acc[routeKey].tonnage += rt.tonnage;
                                 acc[routeKey].revenue += rt.revenue;
                                 acc[routeKey].cost += rt.cost;
                                 acc[routeKey].shipments += rt.shipments;
+                                rt.mastersSet.forEach((m: string) => acc[routeKey].mastersSet.add(m));
+                                acc[routeKey].numericMasters += rt.numericMasters;
                               }
                             });
                             return acc;
@@ -2095,11 +2128,23 @@ function PrintViewContent() {
                         } : null;
 
                         const rows = othersRow ? [...top10, othersRow] : top10;
+
+                        const grandMastersSet = new Set<string>();
+                        let grandNumericMasters = 0;
+                        rows.forEach((r: any) => {
+                          if (r.mastersSet && r.mastersSet.size > 0) {
+                            r.mastersSet.forEach((m: string) => grandMastersSet.add(m));
+                          } else {
+                            grandNumericMasters += (r.numericMasters || 0);
+                          }
+                        });
+
                         const grandTotal = {
                           tonnage: rows.reduce((s, r) => s + r.tonnage, 0),
                           revenue: rows.reduce((s, r) => s + r.revenue, 0),
                           cost: rows.reduce((s, r) => s + r.cost, 0),
                           shipments: rows.reduce((s, r) => s + r.shipments, 0),
+                          masters: grandMastersSet.size > 0 ? grandMastersSet.size : grandNumericMasters,
                         };
 
                         if (rows.length === 0) {
@@ -2117,6 +2162,8 @@ function PrintViewContent() {
                               const gpMargin = row.revenue > 0 ? ((row.revenue + row.cost) / row.revenue * 100) : 0;
                               const pct = grandTotal.tonnage > 0 ? (row.tonnage / grandTotal.tonnage * 100) : 0;
                               const sortedRoutes = (Object.values(row.routes || {}) as any[]).sort((a, b) => b.tonnage - a.tonnage);
+                              const rowMasters = row.mastersSet?.size > 0 ? row.mastersSet.size : row.numericMasters;
+
                               return (
                                 <Fragment key={i}>
                                   <tr className={`hover:bg-slate-50/50 ${isOthers ? "bg-slate-50/30 italic" : ""}`}>
@@ -2150,6 +2197,7 @@ function PrintViewContent() {
                                         </div>
                                       </div>
                                     </td>
+                                    <td className="px-3 py-1.5 text-right text-slate-750 font-bold tabular-nums">{formatNumber(rowMasters)}</td>
                                     <td className="px-3 py-1.5 text-right text-slate-750 font-bold tabular-nums">{formatNumber(row.shipments)}</td>
                                     <td className="px-3 py-1.5 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
                                     {/* <td className="px-3 py-1.5 text-right font-bold text-slate-600 tabular-nums">{formatCurrency(row.cost)}</td> */}
@@ -2163,6 +2211,7 @@ function PrintViewContent() {
                                   {showRouteBreakdown && sortedRoutes.length > 0 && (
                                     sortedRoutes.map((route, rIdx) => {
                                       const routeGpMargin = route.revenue > 0 ? ((route.revenue + route.cost) / route.revenue * 100) : 0;
+                                      const routeMasters = route.mastersSet?.size > 0 ? route.mastersSet.size : route.numericMasters;
                                       return (
                                         <tr key={`${i}-route-${rIdx}`} className="bg-[#EBF8FF]/50 text-slate-700 text-[12.5px] border-l-4 border-blue-300">
                                           <td className="px-3 py-1 text-center text-[11.5px] text-blue-400 font-bold"></td>
@@ -2170,6 +2219,7 @@ function PrintViewContent() {
                                             <span className="font-semibold text-slate-800">{route.originCity} → {route.destCity}</span>
                                           </td>
                                           <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(route.tonnage)} kg</td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(routeMasters)}</td>
                                           <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(route.shipments)}</td>
                                           <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatCurrency(route.revenue)}</td>
                                           {/* <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatCurrency(route.cost)}</td> */}
@@ -2190,6 +2240,7 @@ function PrintViewContent() {
                             <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-[13px]">
                               <td className="px-3 py-1.5 text-slate-500" colSpan={2}>TOTAL</td>
                               <td className="px-3 py-1.5 text-right text-blue-600 tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
+                              <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.masters)}</td>
                               <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                               <td className="px-3 py-1.5 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
                               {/* <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td> */}
@@ -2299,6 +2350,7 @@ function PrintViewContent() {
                       <th className="px-3 py-1.5">Destination Country</th>
                       <th className="px-3 py-1.5">Destination City</th>
                       <th className="px-3 py-1.5 text-right">Tonnage (kg)</th>
+                      <th className="px-3 py-1.5 text-right">No of Masters</th>
                       <th className="px-3 py-1.5 text-right">Shipments</th>
                       <th className="px-3 py-1.5 text-right">Shipment Revenue (USD)</th>
                       {/* <th className="px-3 py-1.5 text-right">Shipment Cost</th> */}
@@ -2314,6 +2366,8 @@ function PrintViewContent() {
                           originCountry: string; destCountry: string;
                           originCity: string; destCity: string;
                           tonnage: number; revenue: number; cost: number; shipments: number;
+                          mastersSet: Set<string>;
+                          numericMasters: number;
                         }
                       } = {};
 
@@ -2324,12 +2378,31 @@ function PrintViewContent() {
                         const destCity = r.Destination_City ?? r.DestCity ?? r.dest_city ?? "—";
                         const key = `${originCountry}||${destCountry}||${originCity}||${destCity}`;
                         if (!routeMap[key]) {
-                          routeMap[key] = { originCountry, destCountry, originCity, destCity, tonnage: 0, revenue: 0, cost: 0, shipments: 0 };
+                          routeMap[key] = {
+                            originCountry, destCountry, originCity, destCity,
+                            tonnage: 0, revenue: 0, cost: 0, shipments: 0,
+                            mastersSet: new Set<string>(), numericMasters: 0
+                          };
                         }
-                        routeMap[key].tonnage += Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
-                        routeMap[key].revenue += Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
-                        routeMap[key].cost += Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
-                        routeMap[key].shipments += Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
+                        const tonnage = Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
+                        const revenue = Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
+                        const cost = Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
+                        const shipments = Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
+
+                        const masterId = r.Console_Number ?? r.ConsoleNumber ?? r.Master_Airway_Bill ?? r.MasterBillNum ?? r.Console_No;
+                        const numericMasterVal = Number(r.Number_of_Masters ?? r.Total_Masters ?? 0);
+
+                        routeMap[key].tonnage += tonnage;
+                        routeMap[key].revenue += revenue;
+                        routeMap[key].cost += cost;
+                        routeMap[key].shipments += shipments;
+                        if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
+                          routeMap[key].mastersSet.add(String(masterId).trim());
+                        } else if (numericMasterVal > 0) {
+                          routeMap[key].numericMasters += numericMasterVal;
+                        } else {
+                          routeMap[key].numericMasters += 1;
+                        }
                       });
 
                       const sorted = Object.values(routeMap).sort((a, b) => b.tonnage - a.tonnage);
@@ -2342,14 +2415,31 @@ function PrintViewContent() {
                         revenue: others.reduce((s, r) => s + r.revenue, 0),
                         cost: others.reduce((s, r) => s + r.cost, 0),
                         shipments: others.reduce((s, r) => s + r.shipments, 0),
+                        mastersSet: others.reduce((accSet, o) => {
+                          o.mastersSet.forEach((m) => accSet.add(m));
+                          return accSet;
+                        }, new Set<string>()),
+                        numericMasters: others.reduce((s, r) => s + r.numericMasters, 0),
                       } : null;
 
                       const rows = othersRow ? [...top10, othersRow] : top10;
+
+                      const grandMastersSet = new Set<string>();
+                      let grandNumericMasters = 0;
+                      rows.forEach((r: any) => {
+                        if (r.mastersSet && r.mastersSet.size > 0) {
+                          r.mastersSet.forEach((m: string) => grandMastersSet.add(m));
+                        } else {
+                          grandNumericMasters += (r.numericMasters || 0);
+                        }
+                      });
+
                       const grandTotal = {
                         tonnage: rows.reduce((s, r) => s + r.tonnage, 0),
                         revenue: rows.reduce((s, r) => s + r.revenue, 0),
                         cost: rows.reduce((s, r) => s + r.cost, 0),
                         shipments: rows.reduce((s, r) => s + r.shipments, 0),
+                        masters: grandMastersSet.size > 0 ? grandMastersSet.size : grandNumericMasters,
                       };
 
                       const ROUTE_COLORS = ["#319795", "#4299E1", "#805AD5", "#D69E2E", "#E53E3E", "#38A169", "#DD6B20", "#3182CE", "#744210", "#2B6CB0"];
@@ -2411,6 +2501,7 @@ function PrintViewContent() {
 
                             const gpMargin = row.revenue > 0 ? ((row.revenue + row.cost) / row.revenue * 100) : 0;
                             const pct = grandTotal.tonnage > 0 ? (row.tonnage / grandTotal.tonnage * 100) : 0;
+                            const rowMasters = row.mastersSet?.size > 0 ? row.mastersSet.size : row.numericMasters;
                             return (
                               <tr key={i} className={`hover:bg-slate-50/50 ${bgClass}`}>
                                 <td className="px-3 py-1.5 text-center text-slate-400 font-bold tabular-nums">
@@ -2446,6 +2537,7 @@ function PrintViewContent() {
                                     </div>
                                   </div>
                                 </td>
+                                <td className="px-3 py-1.5 text-right text-slate-500 font-semibold tabular-nums">{formatNumber(rowMasters)}</td>
                                 <td className="px-3 py-1.5 text-right text-slate-500 font-semibold tabular-nums">{formatNumber(row.shipments)}</td>
                                 <td className="px-3 py-1.5 text-right font-semibold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
                                 {/* <td className="px-3 py-1.5 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td> */}
@@ -2465,6 +2557,7 @@ function PrintViewContent() {
                             <td className="px-3 py-1.5" />
                             <td className="px-3 py-1.5" />
                             <td className="px-3 py-1.5 text-right text-[#319795] tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
+                            <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.masters)}</td>
                             <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                             <td className="px-3 py-1.5 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
                             {/* <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td> */}
@@ -2486,24 +2579,22 @@ function PrintViewContent() {
             /* Standard Mode: Render original monthly visual charts */
             <>
               {/* KPI Cards Row */}
-              <div className="grid grid-cols-2 gap-4 mt-4">
+              <div className="grid grid-cols-4 gap-4 mt-4">
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Revenue</span>
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
                 </div>
-                {/* Total Cost & Total Profit (Commented out)
-                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
-                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Cost</span>
-                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Cost)}</h3>
-                </div>
-                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
-                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Profit</span>
-                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Profit)}</h3>
-                </div>
-                */}
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Tonnage</span>
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
+                </div>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">No of Shipments</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Shipments)}</h3>
+                </div>
+                <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">No of Masters</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Masters ?? kpi.Number_of_Masters ?? kpi.Weekly_Total_Masters ?? kpi.Unique_Masters)}</h3>
                 </div>
               </div>
 

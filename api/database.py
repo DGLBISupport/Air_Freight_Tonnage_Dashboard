@@ -506,6 +506,7 @@ def get_kpi_summary(
     query = f"""
     WITH FilteredConsols AS (
         SELECT 
+            vt.ConsoleNumber,
             vt.Air_ChargebleWeight,
             vt.Revenue_USD,
             vt.Cost_USD,
@@ -534,6 +535,7 @@ def get_kpi_summary(
         SUM(Profit_USD) AS Total_Profit,
         CASE WHEN SUM(Revenue_USD) > 0 THEN (SUM(Profit_USD) / SUM(Revenue_USD)) * 100 ELSE 0 END AS GP_Margin,
         SUM(ShipmentCount) AS Total_Shipments,
+        COUNT(DISTINCT ConsoleNumber) AS Total_Masters,
         COUNT(DISTINCT AirlineName1) AS Unique_Airlines,
         COUNT(DISTINCT ConLoadPortCountryName) AS Unique_Countries
     FROM FilteredConsols
