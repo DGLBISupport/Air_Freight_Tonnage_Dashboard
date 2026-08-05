@@ -1947,365 +1947,6 @@ function PrintViewContent() {
         )
       )}
 
-      {/* ── SECTION 2: WEEKLY DETAILED CARRIER LEDGER / Airline Performance Summary (Page 2+, Dynamic Flow) ── */}
-      {selectedSections.weeklyLedger && (
-        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
-
-          <div className="flex flex-col print:block gap-6 flex-1">
-            {/* Print Header */}
-            <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
-              {/* Top Row: Logo & Main Title (left) + Branch & Dest Badges (right) */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                  <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
-                </div>
-                <div className="flex gap-1 justify-end items-center">
-                  {destinationCountry && (
-                    <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
-                      📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
-              <div className="flex items-baseline justify-between mt-1">
-                <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
-                  Dart Global Logistics · {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Carrier Metrics Detailed Ledger"}
-                </p>
-                <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
-                  {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`} | Station: {getStationLabel()}
-                </span>
-              </div>
-            </div>
-
-            {/* Carrier Metrics Table / Airline Performance Table */}
-            <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex-1">
-              <div className="flex items-center justify-between mb-2 pb-1 border-b border-[#F1F5F9]">
-                <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">
-                  {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Carrier Ledger"}
-                </span>
-                <span className="text-[12.5px] text-slate-400 font-bold">
-                  {mode === "custom-sql" ? "Top 10 Airlines" : `All Carrier Records (${data.length})`}
-                </span>
-              </div>
-              <div>
-                <table className="w-full text-left text-[12.5px] border-collapse">
-                  <thead>
-                    <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[9px] tracking-wider bg-slate-50/50">
-                      {mode === "custom-sql" ? (
-                        <>
-                          <th className="px-3 py-1.5 w-8">#</th>
-                          <th className="px-3 py-1.5">Airline</th>
-                          <th className="px-3 py-1.5 text-right">Tonnage (kg)</th>
-                          <th className="px-3 py-1.5 text-right">No of Masters</th>
-                          <th className="px-3 py-1.5 text-right">Shipments</th>
-                          <th className="px-3 py-1.5 text-right">Shipment Revenue (USD)</th>
-                          {/* <th className="px-3 py-1.5 text-right">Shipment Cost (USD)</th> */}
-                          {/* <th className="px-3 py-1.5 text-right">Gross Profit (USD)</th> */}
-                          {/* <th className="px-3 py-1.5 text-right">GP Margin</th> */}
-                        </>
-                      ) : (
-                        <>
-                          <th className="px-3 py-1.5">Branch</th>
-                          <th className="px-3 py-1.5">Airline Name</th>
-                          <th className="px-3 py-1.5">Origin</th>
-                          <th className="px-3 py-1.5">Destination</th>
-                          <th className="px-3 py-1.5 text-right">Revenue</th>
-                          <th className="px-3 py-1.5 text-right">Tonnage</th>
-                          <th className="px-3 py-1.5 text-right">Shipments</th>
-                        </>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#F1F5F9]">
-                    {mode === "custom-sql" ? (
-                      (() => {
-                        // Aggregate raw rows by Airline and Route (using origin city → dest city)
-                        const aggMap: {
-                          [key: string]: {
-                            airline: string;
-                            tonnage: number;
-                            revenue: number;
-                            cost: number;
-                            shipments: number;
-                            mastersSet: Set<string>;
-                            numericMasters: number;
-                            routes: {
-                              [routeKey: string]: {
-                                originCity: string;
-                                destCity: string;
-                                tonnage: number;
-                                revenue: number;
-                                cost: number;
-                                shipments: number;
-                                mastersSet: Set<string>;
-                                numericMasters: number;
-                              };
-                            };
-                          }
-                        } = {};
-
-                        data.forEach((r: any) => {
-                          const airline = r.Airline ?? r.AirlineName1 ?? r.carrier ?? "Unknown";
-                          if (!aggMap[airline]) {
-                            aggMap[airline] = { airline, tonnage: 0, revenue: 0, cost: 0, shipments: 0, mastersSet: new Set<string>(), numericMasters: 0, routes: {} };
-                          }
-                          const tonnage = Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
-                          const revenue = Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
-                          const cost = Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
-                          const shipments = Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
-
-                          const masterId = r.Console_Number ?? r.ConsoleNumber ?? r.Master_Airway_Bill ?? r.MasterBillNum ?? r.Console_No;
-                          const numericMasterVal = Number(r.Number_of_Masters ?? r.Total_Masters ?? 0);
-
-                          aggMap[airline].tonnage += tonnage;
-                          aggMap[airline].revenue += revenue;
-                          aggMap[airline].cost += cost;
-                          aggMap[airline].shipments += shipments;
-                          if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
-                            aggMap[airline].mastersSet.add(String(masterId).trim());
-                          } else if (numericMasterVal > 0) {
-                            aggMap[airline].numericMasters += numericMasterVal;
-                          } else {
-                            aggMap[airline].numericMasters += 1;
-                          }
-
-                          const originCity = r.Origin_City ?? r.OriginCity ?? r.origin_city ?? "—";
-                          const destCity = r.Destination_City ?? r.DestCity ?? r.dest_city ?? "—";
-                          const routeKey = `${originCity} → ${destCity}`;
-
-                          if (!aggMap[airline].routes[routeKey]) {
-                            aggMap[airline].routes[routeKey] = {
-                              originCity,
-                              destCity,
-                              tonnage: 0,
-                              revenue: 0,
-                              cost: 0,
-                              shipments: 0,
-                              mastersSet: new Set<string>(),
-                              numericMasters: 0
-                            };
-                          }
-                          const rt = aggMap[airline].routes[routeKey];
-                          rt.tonnage += tonnage;
-                          rt.revenue += revenue;
-                          rt.cost += cost;
-                          rt.shipments += shipments;
-                          if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
-                            rt.mastersSet.add(String(masterId).trim());
-                          } else if (numericMasterVal > 0) {
-                            rt.numericMasters += numericMasterVal;
-                          } else {
-                            rt.numericMasters += 1;
-                          }
-                        });
-
-                        const sorted = Object.values(aggMap).sort((a, b) => b.tonnage - a.tonnage);
-                        const top10 = sorted.slice(0, 10);
-                        const others = sorted.slice(10);
-                        const othersRow = others.length > 0 ? {
-                          airline: `Others (${others.length} airlines)`,
-                          tonnage: others.reduce((s, r) => s + r.tonnage, 0),
-                          revenue: others.reduce((s, r) => s + r.revenue, 0),
-                          cost: others.reduce((s, r) => s + r.cost, 0),
-                          shipments: others.reduce((s, r) => s + r.shipments, 0),
-                          mastersSet: others.reduce((accSet, o) => {
-                            o.mastersSet.forEach((m) => accSet.add(m));
-                            return accSet;
-                          }, new Set<string>()),
-                          numericMasters: others.reduce((s, r) => s + r.numericMasters, 0),
-                          routes: others.reduce((acc: any, o) => {
-                            Object.values(o.routes || {}).forEach((rt: any) => {
-                              const routeKey = `${rt.originCity} → ${rt.destCity}`;
-                              if (!acc[routeKey]) {
-                                acc[routeKey] = {
-                                  ...rt,
-                                  mastersSet: new Set<string>(rt.mastersSet),
-                                };
-                              } else {
-                                acc[routeKey].tonnage += rt.tonnage;
-                                acc[routeKey].revenue += rt.revenue;
-                                acc[routeKey].cost += rt.cost;
-                                acc[routeKey].shipments += rt.shipments;
-                                rt.mastersSet.forEach((m: string) => acc[routeKey].mastersSet.add(m));
-                                acc[routeKey].numericMasters += rt.numericMasters;
-                              }
-                            });
-                            return acc;
-                          }, {})
-                        } : null;
-
-                        const rows = othersRow ? [...top10, othersRow] : top10;
-
-                        const grandMastersSet = new Set<string>();
-                        let grandNumericMasters = 0;
-                        rows.forEach((r: any) => {
-                          if (r.mastersSet && r.mastersSet.size > 0) {
-                            r.mastersSet.forEach((m: string) => grandMastersSet.add(m));
-                          } else {
-                            grandNumericMasters += (r.numericMasters || 0);
-                          }
-                        });
-
-                        const grandTotal = {
-                          tonnage: rows.reduce((s, r) => s + r.tonnage, 0),
-                          revenue: rows.reduce((s, r) => s + r.revenue, 0),
-                          cost: rows.reduce((s, r) => s + r.cost, 0),
-                          shipments: rows.reduce((s, r) => s + r.shipments, 0),
-                          masters: grandMastersSet.size > 0 ? grandMastersSet.size : grandNumericMasters,
-                        };
-
-                        if (rows.length === 0) {
-                          return (
-                            <tr>
-                              <td colSpan={8} className="text-center py-6 text-slate-400">No airline aggregate data available.</td>
-                            </tr>
-                          );
-                        }
-
-                        return (
-                          <>
-                            {rows.map((row, i) => {
-                              const isOthers = row.airline.startsWith("Others");
-                              const gpMargin = row.revenue > 0 ? ((row.revenue + row.cost) / row.revenue * 100) : 0;
-                              const pct = grandTotal.tonnage > 0 ? (row.tonnage / grandTotal.tonnage * 100) : 0;
-                              const sortedRoutes = (Object.values(row.routes || {}) as any[]).sort((a, b) => b.tonnage - a.tonnage);
-                              const rowMasters = row.mastersSet?.size > 0 ? row.mastersSet.size : row.numericMasters;
-
-                              return (
-                                <Fragment key={i}>
-                                  <tr className={`hover:bg-slate-50/50 ${isOthers ? "bg-slate-50/30 italic" : ""}`}>
-                                    <td className="px-3 py-1.5 text-slate-400 font-bold tabular-nums">
-                                      {isOthers ? "—" : (
-                                        <div className="flex items-center justify-center">
-                                          <span
-                                            className="flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-extrabold text-white text-center leading-[20px] shrink-0"
-                                            style={{ backgroundColor: getAirlineColor(row.airline, i) }}
-                                          >
-                                            {i + 1}
-                                          </span>
-                                        </div>
-                                      )}
-                                    </td>
-                                    <td className="px-3 py-1.5">
-                                      <div className="flex items-center gap-1.5 min-w-0">
-                                        <span className={`font-bold ${isOthers ? "text-slate-500 italic" : "text-slate-800"}`}>
-                                          {row.airline}
-                                        </span>
-                                      </div>
-                                    </td>
-                                    <td className="px-3 py-1.5 text-right tabular-nums">
-                                      <div className="flex flex-col items-end gap-0.5">
-                                        <span className="font-bold text-blue-600">{formatNumber(row.tonnage)} kg</span>
-                                        <div className="h-0.5 rounded-full bg-slate-100 w-10 overflow-hidden">
-                                          <div
-                                            className="h-full rounded-full"
-                                            style={{ width: `${pct}%`, backgroundColor: getAirlineColor(row.airline, i) }}
-                                          />
-                                        </div>
-                                      </div>
-                                    </td>
-                                    <td className="px-3 py-1.5 text-right text-slate-750 font-bold tabular-nums">{formatNumber(rowMasters)}</td>
-                                    <td className="px-3 py-1.5 text-right text-slate-750 font-bold tabular-nums">{formatNumber(row.shipments)}</td>
-                                    <td className="px-3 py-1.5 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
-                                    {/* <td className="px-3 py-1.5 text-right font-bold text-slate-600 tabular-nums">{formatCurrency(row.cost)}</td> */}
-                                    {/* <td className="px-3 py-1.5 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td> */}
-                                    {/* <td className="px-3 py-1.5 text-right tabular-nums">
-                                      <span className={`font-bold text-[12.5px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
-                                        {gpMargin.toFixed(1)}%
-                                      </span>
-                                    </td> */}
-                                  </tr>
-                                  {showRouteBreakdown && sortedRoutes.length > 0 && (
-                                    sortedRoutes.map((route, rIdx) => {
-                                      const routeGpMargin = route.revenue > 0 ? ((route.revenue + route.cost) / route.revenue * 100) : 0;
-                                      const routeMasters = route.mastersSet?.size > 0 ? route.mastersSet.size : route.numericMasters;
-                                      return (
-                                        <tr key={`${i}-route-${rIdx}`} className="bg-[#EBF8FF]/50 text-slate-700 text-[12.5px] border-l-4 border-blue-300">
-                                          <td className="px-3 py-1 text-center text-[11.5px] text-blue-400 font-bold"></td>
-                                          <td className="px-3 py-1 pl-8">
-                                            <span className="font-semibold text-slate-800">{route.originCity} → {route.destCity}</span>
-                                          </td>
-                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(route.tonnage)} kg</td>
-                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(routeMasters)}</td>
-                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(route.shipments)}</td>
-                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatCurrency(route.revenue)}</td>
-                                          {/* <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatCurrency(route.cost)}</td> */}
-                                          {/* <td className="px-3 py-1 text-right tabular-nums font-semibold text-slate-700">{formatCurrency(route.revenue + route.cost)}</td> */}
-                                          {/* <td className="px-3 py-1 text-right tabular-nums">
-                                            <span className="font-semibold text-slate-700">
-                                              {routeGpMargin.toFixed(1)}%
-                                            </span>
-                                          </td> */}
-                                        </tr>
-                                      );
-                                    })
-                                  )}
-                                </Fragment>
-                              );
-                            })}
-                            {/* Grand Total Row */}
-                            <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-[13px]">
-                              <td className="px-3 py-1.5 text-slate-500" colSpan={2}>TOTAL</td>
-                              <td className="px-3 py-1.5 text-right text-blue-600 tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
-                              <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.masters)}</td>
-                              <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
-                              <td className="px-3 py-1.5 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
-                              {/* <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td> */}
-                              {/* <td className="px-3 py-1.5 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td> */}
-                              {/* <td className="px-3 py-1.5 text-right">
-                                <span className="font-bold text-slate-600 text-[12.5px]">
-                                  {grandTotal.revenue > 0 ? ((grandTotal.revenue + grandTotal.cost) / grandTotal.revenue * 100).toFixed(1) : "0.0"}%
-                                </span>
-                              </td> */}
-                            </tr>
-                          </>
-                        );
-                      })()
-                    ) : (
-                      data.slice(0, maxDataRows).map((row: any, i: number) => (
-                        <tr key={i} className="hover:bg-slate-50/50">
-                          <td className="px-3 py-1.5 font-semibold text-slate-500">{row.Company_Code ?? "—"}</td>
-                          <td className="px-3 py-1.5 font-semibold text-slate-800 truncate max-w-[150px]">{row.Airline ?? "—"}</td>
-                          <td className="px-3 py-1.5 text-slate-600 font-semibold truncate max-w-[150px]">
-                            {row.Origin_City ? `${row.Origin_City}, ` : ""}{row.Origin_Country ?? "—"}
-                          </td>
-                          <td className="px-3 py-1.5 text-slate-600 font-semibold truncate max-w-[150px]">
-                            {row.Destination_City ? `${row.Destination_City}, ` : ""}{row.Destination_Country ?? "—"}
-                          </td>
-                          <td className="px-3 py-1.5 text-right font-semibold text-blue-600">
-                            {row.Total_Revenue != null ? formatCurrency(row.Total_Revenue) : "—"}
-                          </td>
-                          <td className="px-3 py-1.5 text-right text-slate-700 font-semibold">
-                            {row.Total_Tonnage != null ? `${formatNumber(row.Total_Tonnage)} kg` : "—"}
-                          </td>
-                          <td className="px-3 py-1.5 text-right text-slate-700 font-semibold">
-                            {row.Total_Shipments != null ? formatNumber(row.Total_Shipments) : "—"}
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                    {data.length === 0 && (
-                      <tr>
-                        <td colSpan={10} className="text-center py-6 text-slate-400">No carrier ledger data available.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-
-          {/* Print Footer */}
-          <div className="border-t border-slate-200 pt-2 mt-4 flex items-center justify-between text-[12.5px] text-slate-400">
-            <span></span>
-            <span>© 2026 Dart Global Logistics · {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Carrier Ledger"} Page</span>
-          </div>
-        </div>
-      )}
-
       {/* ── SECTION 3: MONTHLY VISUAL DASHBOARD / Trade Route Performance Summary (Page 3) ── */}
       {selectedSections.monthlyVisual && (
         <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
@@ -2971,6 +2612,365 @@ function PrintViewContent() {
           <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[11px] text-slate-400 shrink-0">
             <span></span>
             <span>© 2026 Dart Global Logistics · Sector-wise Carrier & Geographical Tonnage Performance — Detail Table Page</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── SECTION 2: WEEKLY DETAILED CARRIER LEDGER / Airline Performance Summary (Page 2+, Dynamic Flow) ── */}
+      {selectedSections.weeklyLedger && (
+        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+
+          <div className="flex flex-col print:block gap-6 flex-1">
+            {/* Print Header */}
+            <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
+              {/* Top Row: Logo & Main Title (left) + Branch & Dest Badges (right) */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
+                  <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+                </div>
+                <div className="flex gap-1 justify-end items-center">
+                  {destinationCountry && (
+                    <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
+                      📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
+              <div className="flex items-baseline justify-between mt-1">
+                <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
+                  Dart Global Logistics · {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Carrier Metrics Detailed Ledger"}
+                </p>
+                <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
+                  {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`} | Station: {getStationLabel()}
+                </span>
+              </div>
+            </div>
+
+            {/* Carrier Metrics Table / Airline Performance Table */}
+            <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex-1">
+              <div className="flex items-center justify-between mb-2 pb-1 border-b border-[#F1F5F9]">
+                <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">
+                  {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Carrier Ledger"}
+                </span>
+                <span className="text-[12.5px] text-slate-400 font-bold">
+                  {mode === "custom-sql" ? "Top 10 Airlines" : `All Carrier Records (${data.length})`}
+                </span>
+              </div>
+              <div>
+                <table className="w-full text-left text-[12.5px] border-collapse">
+                  <thead>
+                    <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[9px] tracking-wider bg-slate-50/50">
+                      {mode === "custom-sql" ? (
+                        <>
+                          <th className="px-3 py-1.5 w-8">#</th>
+                          <th className="px-3 py-1.5">Airline</th>
+                          <th className="px-3 py-1.5 text-right">Tonnage (kg)</th>
+                          <th className="px-3 py-1.5 text-right">No of Masters</th>
+                          <th className="px-3 py-1.5 text-right">Shipments</th>
+                          <th className="px-3 py-1.5 text-right">Shipment Revenue (USD)</th>
+                          {/* <th className="px-3 py-1.5 text-right">Shipment Cost (USD)</th> */}
+                          {/* <th className="px-3 py-1.5 text-right">Gross Profit (USD)</th> */}
+                          {/* <th className="px-3 py-1.5 text-right">GP Margin</th> */}
+                        </>
+                      ) : (
+                        <>
+                          <th className="px-3 py-1.5">Branch</th>
+                          <th className="px-3 py-1.5">Airline Name</th>
+                          <th className="px-3 py-1.5">Origin</th>
+                          <th className="px-3 py-1.5">Destination</th>
+                          <th className="px-3 py-1.5 text-right">Revenue</th>
+                          <th className="px-3 py-1.5 text-right">Tonnage</th>
+                          <th className="px-3 py-1.5 text-right">Shipments</th>
+                        </>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#F1F5F9]">
+                    {mode === "custom-sql" ? (
+                      (() => {
+                        // Aggregate raw rows by Airline and Route (using origin city → dest city)
+                        const aggMap: {
+                          [key: string]: {
+                            airline: string;
+                            tonnage: number;
+                            revenue: number;
+                            cost: number;
+                            shipments: number;
+                            mastersSet: Set<string>;
+                            numericMasters: number;
+                            routes: {
+                              [routeKey: string]: {
+                                originCity: string;
+                                destCity: string;
+                                tonnage: number;
+                                revenue: number;
+                                cost: number;
+                                shipments: number;
+                                mastersSet: Set<string>;
+                                numericMasters: number;
+                              };
+                            };
+                          }
+                        } = {};
+
+                        data.forEach((r: any) => {
+                          const airline = r.Airline ?? r.AirlineName1 ?? r.carrier ?? "Unknown";
+                          if (!aggMap[airline]) {
+                            aggMap[airline] = { airline, tonnage: 0, revenue: 0, cost: 0, shipments: 0, mastersSet: new Set<string>(), numericMasters: 0, routes: {} };
+                          }
+                          const tonnage = Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
+                          const revenue = Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
+                          const cost = Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
+                          const shipments = Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
+
+                          const masterId = r.Console_Number ?? r.ConsoleNumber ?? r.Master_Airway_Bill ?? r.MasterBillNum ?? r.Console_No;
+                          const numericMasterVal = Number(r.Number_of_Masters ?? r.Total_Masters ?? 0);
+
+                          aggMap[airline].tonnage += tonnage;
+                          aggMap[airline].revenue += revenue;
+                          aggMap[airline].cost += cost;
+                          aggMap[airline].shipments += shipments;
+                          if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
+                            aggMap[airline].mastersSet.add(String(masterId).trim());
+                          } else if (numericMasterVal > 0) {
+                            aggMap[airline].numericMasters += numericMasterVal;
+                          } else {
+                            aggMap[airline].numericMasters += 1;
+                          }
+
+                          const originCity = r.Origin_City ?? r.OriginCity ?? r.origin_city ?? "—";
+                          const destCity = r.Destination_City ?? r.DestCity ?? r.dest_city ?? "—";
+                          const routeKey = `${originCity} → ${destCity}`;
+
+                          if (!aggMap[airline].routes[routeKey]) {
+                            aggMap[airline].routes[routeKey] = {
+                              originCity,
+                              destCity,
+                              tonnage: 0,
+                              revenue: 0,
+                              cost: 0,
+                              shipments: 0,
+                              mastersSet: new Set<string>(),
+                              numericMasters: 0
+                            };
+                          }
+                          const rt = aggMap[airline].routes[routeKey];
+                          rt.tonnage += tonnage;
+                          rt.revenue += revenue;
+                          rt.cost += cost;
+                          rt.shipments += shipments;
+                          if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
+                            rt.mastersSet.add(String(masterId).trim());
+                          } else if (numericMasterVal > 0) {
+                            rt.numericMasters += numericMasterVal;
+                          } else {
+                            rt.numericMasters += 1;
+                          }
+                        });
+
+                        const sorted = Object.values(aggMap).sort((a, b) => b.tonnage - a.tonnage);
+                        const top10 = sorted.slice(0, 10);
+                        const others = sorted.slice(10);
+                        const othersRow = others.length > 0 ? {
+                          airline: `Others (${others.length} airlines)`,
+                          tonnage: others.reduce((s, r) => s + r.tonnage, 0),
+                          revenue: others.reduce((s, r) => s + r.revenue, 0),
+                          cost: others.reduce((s, r) => s + r.cost, 0),
+                          shipments: others.reduce((s, r) => s + r.shipments, 0),
+                          mastersSet: others.reduce((accSet, o) => {
+                            o.mastersSet.forEach((m) => accSet.add(m));
+                            return accSet;
+                          }, new Set<string>()),
+                          numericMasters: others.reduce((s, r) => s + r.numericMasters, 0),
+                          routes: others.reduce((acc: any, o) => {
+                            Object.values(o.routes || {}).forEach((rt: any) => {
+                              const routeKey = `${rt.originCity} → ${rt.destCity}`;
+                              if (!acc[routeKey]) {
+                                acc[routeKey] = {
+                                  ...rt,
+                                  mastersSet: new Set<string>(rt.mastersSet),
+                                };
+                              } else {
+                                acc[routeKey].tonnage += rt.tonnage;
+                                acc[routeKey].revenue += rt.revenue;
+                                acc[routeKey].cost += rt.cost;
+                                acc[routeKey].shipments += rt.shipments;
+                                rt.mastersSet.forEach((m: string) => acc[routeKey].mastersSet.add(m));
+                                acc[routeKey].numericMasters += rt.numericMasters;
+                              }
+                            });
+                            return acc;
+                          }, {})
+                        } : null;
+
+                        const rows = othersRow ? [...top10, othersRow] : top10;
+
+                        const grandMastersSet = new Set<string>();
+                        let grandNumericMasters = 0;
+                        rows.forEach((r: any) => {
+                          if (r.mastersSet && r.mastersSet.size > 0) {
+                            r.mastersSet.forEach((m: string) => grandMastersSet.add(m));
+                          } else {
+                            grandNumericMasters += (r.numericMasters || 0);
+                          }
+                        });
+
+                        const grandTotal = {
+                          tonnage: rows.reduce((s, r) => s + r.tonnage, 0),
+                          revenue: rows.reduce((s, r) => s + r.revenue, 0),
+                          cost: rows.reduce((s, r) => s + r.cost, 0),
+                          shipments: rows.reduce((s, r) => s + r.shipments, 0),
+                          masters: grandMastersSet.size > 0 ? grandMastersSet.size : grandNumericMasters,
+                        };
+
+                        if (rows.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan={8} className="text-center py-6 text-slate-400">No airline aggregate data available.</td>
+                            </tr>
+                          );
+                        }
+
+                        return (
+                          <>
+                            {rows.map((row, i) => {
+                              const isOthers = row.airline.startsWith("Others");
+                              const gpMargin = row.revenue > 0 ? ((row.revenue + row.cost) / row.revenue * 100) : 0;
+                              const pct = grandTotal.tonnage > 0 ? (row.tonnage / grandTotal.tonnage * 100) : 0;
+                              const sortedRoutes = (Object.values(row.routes || {}) as any[]).sort((a, b) => b.tonnage - a.tonnage);
+                              const rowMasters = row.mastersSet?.size > 0 ? row.mastersSet.size : row.numericMasters;
+
+                              return (
+                                <Fragment key={i}>
+                                  <tr className={`hover:bg-slate-50/50 ${isOthers ? "bg-slate-50/30 italic" : ""}`}>
+                                    <td className="px-3 py-1.5 text-slate-400 font-bold tabular-nums">
+                                      {isOthers ? "—" : (
+                                        <div className="flex items-center justify-center">
+                                          <span
+                                            className="flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-extrabold text-white text-center leading-[20px] shrink-0"
+                                            style={{ backgroundColor: getAirlineColor(row.airline, i) }}
+                                          >
+                                            {i + 1}
+                                          </span>
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td className="px-3 py-1.5">
+                                      <div className="flex items-center gap-1.5 min-w-0">
+                                        <span className={`font-bold ${isOthers ? "text-slate-500 italic" : "text-slate-800"}`}>
+                                          {row.airline}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-1.5 text-right tabular-nums">
+                                      <div className="flex flex-col items-end gap-0.5">
+                                        <span className="font-bold text-blue-600">{formatNumber(row.tonnage)} kg</span>
+                                        <div className="h-0.5 rounded-full bg-slate-100 w-10 overflow-hidden">
+                                          <div
+                                            className="h-full rounded-full"
+                                            style={{ width: `${pct}%`, backgroundColor: getAirlineColor(row.airline, i) }}
+                                          />
+                                        </div>
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-1.5 text-right text-slate-750 font-bold tabular-nums">{formatNumber(rowMasters)}</td>
+                                    <td className="px-3 py-1.5 text-right text-slate-750 font-bold tabular-nums">{formatNumber(row.shipments)}</td>
+                                    <td className="px-3 py-1.5 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
+                                    {/* <td className="px-3 py-1.5 text-right font-bold text-slate-600 tabular-nums">{formatCurrency(row.cost)}</td> */}
+                                    {/* <td className="px-3 py-1.5 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td> */}
+                                    {/* <td className="px-3 py-1.5 text-right tabular-nums">
+                                      <span className={`font-bold text-[12.5px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
+                                        {gpMargin.toFixed(1)}%
+                                      </span>
+                                    </td> */}
+                                  </tr>
+                                  {showRouteBreakdown && sortedRoutes.length > 0 && (
+                                    sortedRoutes.map((route, rIdx) => {
+                                      const routeGpMargin = route.revenue > 0 ? ((route.revenue + route.cost) / route.revenue * 100) : 0;
+                                      const routeMasters = route.mastersSet?.size > 0 ? route.mastersSet.size : route.numericMasters;
+                                      return (
+                                        <tr key={`${i}-route-${rIdx}`} className="bg-[#EBF8FF]/50 text-slate-700 text-[12.5px] border-l-4 border-blue-300">
+                                          <td className="px-3 py-1 text-center text-[11.5px] text-blue-400 font-bold"></td>
+                                          <td className="px-3 py-1 pl-8">
+                                            <span className="font-semibold text-slate-800">{route.originCity} → {route.destCity}</span>
+                                          </td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(route.tonnage)} kg</td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(routeMasters)}</td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(route.shipments)}</td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatCurrency(route.revenue)}</td>
+                                          {/* <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatCurrency(route.cost)}</td> */}
+                                          {/* <td className="px-3 py-1 text-right tabular-nums font-semibold text-slate-700">{formatCurrency(route.revenue + route.cost)}</td> */}
+                                          {/* <td className="px-3 py-1 text-right tabular-nums">
+                                            <span className="font-semibold text-slate-700">
+                                              {routeGpMargin.toFixed(1)}%
+                                            </span>
+                                          </td> */}
+                                        </tr>
+                                      );
+                                    })
+                                  )}
+                                </Fragment>
+                              );
+                            })}
+                            {/* Grand Total Row */}
+                            <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-[13px]">
+                              <td className="px-3 py-1.5 text-slate-500" colSpan={2}>TOTAL</td>
+                              <td className="px-3 py-1.5 text-right text-blue-600 tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
+                              <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.masters)}</td>
+                              <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
+                              <td className="px-3 py-1.5 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
+                              {/* <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td> */}
+                              {/* <td className="px-3 py-1.5 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td> */}
+                              {/* <td className="px-3 py-1.5 text-right">
+                                <span className="font-bold text-slate-600 text-[12.5px]">
+                                  {grandTotal.revenue > 0 ? ((grandTotal.revenue + grandTotal.cost) / grandTotal.revenue * 100).toFixed(1) : "0.0"}%
+                                </span>
+                              </td> */}
+                            </tr>
+                          </>
+                        );
+                      })()
+                    ) : (
+                      data.slice(0, maxDataRows).map((row: any, i: number) => (
+                        <tr key={i} className="hover:bg-slate-50/50">
+                          <td className="px-3 py-1.5 font-semibold text-slate-500">{row.Company_Code ?? "—"}</td>
+                          <td className="px-3 py-1.5 font-semibold text-slate-800 truncate max-w-[150px]">{row.Airline ?? "—"}</td>
+                          <td className="px-3 py-1.5 text-slate-600 font-semibold truncate max-w-[150px]">
+                            {row.Origin_City ? `${row.Origin_City}, ` : ""}{row.Origin_Country ?? "—"}
+                          </td>
+                          <td className="px-3 py-1.5 text-slate-600 font-semibold truncate max-w-[150px]">
+                            {row.Destination_City ? `${row.Destination_City}, ` : ""}{row.Destination_Country ?? "—"}
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-semibold text-blue-600">
+                            {row.Total_Revenue != null ? formatCurrency(row.Total_Revenue) : "—"}
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-slate-700 font-semibold">
+                            {row.Total_Tonnage != null ? `${formatNumber(row.Total_Tonnage)} kg` : "—"}
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-slate-700 font-semibold">
+                            {row.Total_Shipments != null ? formatNumber(row.Total_Shipments) : "—"}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                    {data.length === 0 && (
+                      <tr>
+                        <td colSpan={10} className="text-center py-6 text-slate-400">No carrier ledger data available.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          {/* Print Footer */}
+          <div className="border-t border-slate-200 pt-2 mt-4 flex items-center justify-between text-[12.5px] text-slate-400">
+            <span></span>
+            <span>© 2026 Dart Global Logistics · {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Carrier Ledger"} Page</span>
           </div>
         </div>
       )}
