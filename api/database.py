@@ -559,45 +559,66 @@ def get_company_codes(start_date: str, end_date: str):
 
 def get_branches(company_code: str = None):
     """Returns distinct branches from DartBIDW.dbo.DimBranch, optionally filtered by company_code mapping."""
-    query = """
-    SELECT DISTINCT BranchCode AS code, BranchName AS name, City AS city
-    FROM [DartBIDW].[dbo].[DimBranch]
-    WHERE BranchCode IS NOT NULL AND BranchName IS NOT NULL
-    """
-    
-    if company_code and company_code != "all":
-        if company_code == "IND":
-            query += " AND CountryCode = 'IN' AND CompanyID = '6932A1DD-FA9D-49DE-AC38-07487B0EBFF3'"
-        elif company_code == "DSI":
-            query += " AND CountryCode = 'IN' AND CompanyID = 'A82AE419-5BC4-437B-974A-9B5607B81074'"
-        elif company_code == "DAC":
-            query += " AND CountryCode = 'BD'"
-        elif company_code == "CMB":
-            query += " AND CountryCode = 'LK' AND (CompanyID = 'B8496F43-AB96-4977-8778-1B935A58257D' OR BranchName LIKE '%DART GLOBAL%')"
-        elif company_code == "DSC":
-            query += " AND CountryCode = 'LK' AND (CompanyID = 'EA4C8F4C-6F9B-4E69-8101-24F42B4A94C6' OR BranchName LIKE '%DGL SUPPLY%')"
-        elif company_code == "PKI":
-            query += " AND CountryCode = 'PK'"
-        elif company_code == "SGP":
-            query += " AND CountryCode = 'SG'"
-        elif company_code == "VNM":
-            query += " AND CountryCode = 'VN'"
-        elif company_code == "IDN":
-            query += " AND CountryCode = 'ID'"
-        elif company_code in ("CHN", "CHI"):
-            query += " AND CountryCode = 'CN'"
-        elif company_code == "DXB":
-            query += " AND CountryCode = 'AE'"
-        elif company_code == "KEN":
-            query += " AND CountryCode = 'KE'"
-        elif company_code == "MDG":
-            query += " AND CountryCode = 'MG'"
-        elif company_code == "NYC":
-            query += " AND CountryCode = 'US'"
-            
-    query += " ORDER BY BranchCode"
-    df = run_query(query)
-    return to_clean_records(df)
+    DEFAULT_INDIA_BRANCHES = [
+        {"code": "BLR", "name": "Bengaluru (BLR)", "city": "Bengaluru"},
+        {"code": "MAA", "name": "Chennai (MAA)", "city": "Chennai"},
+        {"code": "HYD", "name": "Hyderabad (HYD)", "city": "Hyderabad"},
+        {"code": "AMD", "name": "Ahmedabad (AMD)", "city": "Ahmedabad"},
+        {"code": "BOM", "name": "Mumbai (BOM)", "city": "Mumbai"},
+        {"code": "PNQ", "name": "Pune (PNQ)", "city": "Pune"},
+        {"code": "DEL", "name": "Delhi (DEL)", "city": "New Delhi"},
+        {"code": "CCU", "name": "Kolkata (CCU)", "city": "Kolkata"},
+    ]
+
+    try:
+        query = """
+        SELECT DISTINCT BranchCode AS code, BranchName AS name, City AS city
+        FROM [DartBIDW].[dbo].[DimBranch]
+        WHERE BranchCode IS NOT NULL AND BranchName IS NOT NULL
+        """
+        
+        if company_code and company_code != "all":
+            if company_code == "IND":
+                query += " AND CountryCode = 'IN' AND CompanyID = '6932A1DD-FA9D-49DE-AC38-07487B0EBFF3'"
+            elif company_code == "DSI":
+                query += " AND CountryCode = 'IN' AND CompanyID = 'A82AE419-5BC4-437B-974A-9B5607B81074'"
+            elif company_code == "DAC":
+                query += " AND CountryCode = 'BD'"
+            elif company_code == "CMB":
+                query += " AND CountryCode = 'LK' AND (CompanyID = 'B8496F43-AB96-4977-8778-1B935A58257D' OR BranchName LIKE '%DART GLOBAL%')"
+            elif company_code == "DSC":
+                query += " AND CountryCode = 'LK' AND (CompanyID = 'EA4C8F4C-6F9B-4E69-8101-24F42B4A94C6' OR BranchName LIKE '%DGL SUPPLY%')"
+            elif company_code == "PKI":
+                query += " AND CountryCode = 'PK'"
+            elif company_code == "SGP":
+                query += " AND CountryCode = 'SG'"
+            elif company_code == "VNM":
+                query += " AND CountryCode = 'VN'"
+            elif company_code == "IDN":
+                query += " AND CountryCode = 'ID'"
+            elif company_code in ("CHN", "CHI"):
+                query += " AND CountryCode = 'CN'"
+            elif company_code == "DXB":
+                query += " AND CountryCode = 'AE'"
+            elif company_code == "KEN":
+                query += " AND CountryCode = 'KE'"
+            elif company_code == "MDG":
+                query += " AND CountryCode = 'MG'"
+            elif company_code == "NYC":
+                query += " AND CountryCode = 'US'"
+                
+        query += " ORDER BY BranchCode"
+        df = run_query(query)
+        records = to_clean_records(df)
+        if records:
+            return records
+    except Exception as e:
+        print(f"Error fetching branches: {e}")
+
+    if not company_code or company_code in ("IND", "DSI", "all"):
+        return DEFAULT_INDIA_BRANCHES
+
+    return []
 
 
 def get_origin_cities(start_date: str, end_date: str, country: str = None):

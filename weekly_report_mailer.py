@@ -111,8 +111,67 @@ def generate_pdf(station_code, country, station_name, start_date, end_date, outp
             
         base_url = os.getenv("FRONTEND_BASE_URL", f"http://localhost:{detected_port}")
         
-        # 1. Format the SQL query matching the exact default query of the weekly reports dashboard
-        sql_query = """
+        # 1. Format the SQL query (branch-wise if branch is set, station-wise otherwise)
+        branch_code = station.get("branch") if isinstance(station, dict) else None
+        if branch_code:
+            sql_query = f"""
+SELECT
+    vt.ConsoleNumber AS Console_Number,
+    vt.MasterBillNum AS Master_Airway_Bill,
+    vt.AirlineName1 AS Airline,
+    vt.ConsolTransportMode AS Transport_Mode,
+    vt.ETD,
+    COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
+    COALESCE(vt.RealLoadPortCity, 'N/A') AS Origin_City,
+    COALESCE(vt.RealDisChargePortCountryName, 'N/A') AS Destination_Country,
+    COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_City,
+    vs.Branch AS Branch_Code,
+    vs.BranchName AS Branch_Name,
+    vs.BranchCity AS Branch_City,
+    vs.Consignor AS Consigner,
+    vs.ConsignorName AS Consigner_Name,
+    vs.Consignee AS Consignee,
+    vs.ConsigneeName AS Consignee_Name,
+    vs.AgentCode AS Agent_Code,
+    vs.AgentName AS Agent_Name,
+    COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
+    COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
+    ROUND(MAX(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
+    ROUND(MAX(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
+    ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
+    ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
+    ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
+    ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent
+FROM dbo.ChatData_ViewShipConsolTransport vt
+LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc
+    ON vsc.Link_ConsolNumber = vt.ConsoleNumber
+LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs
+    ON vs.ShipmentNumber = vsc.Link_ShipmentNum
+WHERE vt.ConLoadPortCountryName = '{country}'
+    AND vt.ETD >= '{start_date}'
+    AND vt.ETD <= '{end_date}'
+    AND vt.TransportMode = 'AIR'
+    AND vs.Company = '{station_code}'
+    AND vs.Branch = '{branch_code}'
+GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
+         vt.ConsolTransportMode, vt.ETD, 
+         COALESCE(vt.RealLoadPortCountryName, 'N/A'),
+         COALESCE(vt.RealLoadPortCity, 'N/A'),
+         COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
+         COALESCE(vt.RealDisChargePortCity, 'N/A'),
+         vs.Branch,
+         vs.BranchName,
+         vs.BranchCity,
+         vs.Consignor,
+         vs.ConsignorName,
+         vs.Consignee,
+         vs.ConsigneeName,
+         vs.AgentCode,
+         vs.AgentName
+ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;
+""".strip()
+        else:
+            sql_query = f"""
 SELECT
     vt.ConsoleNumber AS Console_Number,
     vt.MasterBillNum AS Master_Airway_Bill,
@@ -140,7 +199,7 @@ WHERE vt.ConLoadPortCountryName = '{country}'
     AND vt.ETD >= '{start_date}'
     AND vt.ETD <= '{end_date}'
     AND vt.TransportMode = 'AIR'
-    AND vs.Company = '{company_code}'
+    AND vs.Company = '{station_code}'
 GROUP BY
     vt.ConsoleNumber,
     vt.MasterBillNum,
@@ -152,12 +211,7 @@ GROUP BY
     COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
     COALESCE(vt.RealDisChargePortCity, 'N/A')
 ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
-        """.strip().format(
-            country=country,
-            start_date=start_date,
-            end_date=end_date,
-            company_code=station_code
-        )
+""".strip()
         
         # 2. Cache the SQL query in the FastAPI server's memory to retrieve a query_id
         query_id = None
@@ -185,6 +239,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             "country": country,
             "company_code": station_code
         }
+        if branch_code:
+            params["branch"] = branch_code
         if query_id:
             params["query_id"] = query_id
         else:

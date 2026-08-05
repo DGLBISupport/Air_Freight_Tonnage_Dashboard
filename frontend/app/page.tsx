@@ -8,7 +8,8 @@ import {
 import {
   Calendar, Globe, Plane, RefreshCw, Send, X, ArrowUpRight, ArrowDownRight, Layers, FileText, Printer, CheckCircle,
   Users, Check, ChevronDown, Plus, Settings, Eye, Info, LayoutDashboard, BarChart2, ShieldCheck,
-  Mail, Clock, UserCheck, Trash2, Bell, Database, Lock, ChevronRight, Play, AlertTriangle, AlertCircle
+  Mail, Clock, UserCheck, Trash2, Bell, Database, Lock, ChevronRight, Play, AlertTriangle, AlertCircle,
+  Building2, MapPin
 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
@@ -47,6 +48,14 @@ const formatNumber = (val: number | null | undefined) => {
   return Number(val).toLocaleString("en-US", { maximumFractionDigits: 0 });
 };
 
+const cleanCountryName = (countryStr?: string): string => {
+  if (!countryStr) return "";
+  return countryStr
+    .replace(/^[A-Z]{2}\s*[-–:]?\s*/, "")
+    .replace(/^(LK|IN|VN|BD|PK|US)\s+/i, "")
+    .trim();
+};
+
 // Customized Pie Chart Colors matching user's image
 const PIE_COLORS = ["#4299E1", "#81E6D9", "#ED8936", "#5A67D8", "#ED64A6"];
 const TEN_COLORS = ["#4299E1", "#319795", "#ED64A6", "#5A67D8", "#81E6D9", "#ED8936", "#ECC94B", "#48BB78", "#9F7AEA", "#718096"];
@@ -80,12 +89,12 @@ interface StationInfo {
 }
 
 const STATIONS: StationInfo[] = [
-  { code: "CMB", country: "Sri Lanka", name: "Colombo (Sri Lanka)", envVar: "RECIPIENTS_CMB", matchCountries: ["sri lanka"], flag: "🇱🇰" },
-  { code: "IND", country: "India", name: "India", envVar: "RECIPIENTS_IND", matchCountries: ["india"], flag: "🇮🇳" },
-  { code: "VNM", country: "Viet Nam", name: "Viet Nam", envVar: "RECIPIENTS_VNM", matchCountries: ["viet nam", "vietnam"], flag: "🇻🇳" },
-  { code: "DAC", country: "Bangladesh", name: "Bangladesh", envVar: "RECIPIENTS_DAC", matchCountries: ["bangladesh"], flag: "🇧🇩" },
-  { code: "PKI", country: "Pakistan", name: "Pakistan", envVar: "RECIPIENTS_PKI", matchCountries: ["pakistan"], flag: "🇵🇰" },
-  { code: "NYC", country: "United States", name: "United States", envVar: "RECIPIENTS_NYC", matchCountries: ["united states", "usa", "us", "new york"], flag: "🇺🇸" },
+  { code: "CMB", country: "Sri Lanka", name: "Colombo (Sri Lanka)", envVar: "RECIPIENTS_CMB", matchCountries: ["sri lanka"], flag: "" },
+  { code: "IND", country: "India", name: "India", envVar: "RECIPIENTS_IND", matchCountries: ["india"], flag: "" },
+  { code: "VNM", country: "Viet Nam", name: "Viet Nam", envVar: "RECIPIENTS_VNM", matchCountries: ["viet nam", "vietnam"], flag: "" },
+  { code: "DAC", country: "Bangladesh", name: "Bangladesh", envVar: "RECIPIENTS_DAC", matchCountries: ["bangladesh"], flag: "" },
+  { code: "PKI", country: "Pakistan", name: "Pakistan", envVar: "RECIPIENTS_PKI", matchCountries: ["pakistan"], flag: "" },
+  { code: "NYC", country: "United States", name: "United States", envVar: "RECIPIENTS_NYC", matchCountries: ["united states", "usa", "us", "new york"], flag: "" },
 ];
 
 const getStationForUser = (user: any) => {
@@ -474,6 +483,17 @@ export default function Dashboard() {
 
   useEffect(() => { fetchRecipients(); }, [fetchRecipients]);
 
+  const DUMMY_EMAILS = [
+    "management@dartglobal.com",
+    "ops@dartglobal.com",
+    "sales@dartglobal.com",
+    "admin@dartglobal.com",
+    "test@dartglobal.com",
+    "demo@dartglobal.com",
+    "dummy@dartglobal.com",
+    "user@dartglobal.com",
+  ];
+
   // --- DB USERS FROM SUPABASE ---
   const [dbUsers, setDbUsers] = useState<any[]>([]);
   const [dbUsersLoading, setDbUsersLoading] = useState(false);
@@ -483,6 +503,18 @@ export default function Dashboard() {
     if (!supabaseClient) return;
     setDbUsersLoading(true);
     try {
+      // Purge dummy emails from Supabase users table if present
+      for (const dummyEmail of DUMMY_EMAILS) {
+        try {
+          await supabaseClient
+            .from("users")
+            .delete()
+            .ilike("email", dummyEmail);
+        } catch (e) {
+          // Silent catch
+        }
+      }
+
       const { data, error } = await supabaseClient
         .from("users")
         .select("*")
@@ -490,7 +522,10 @@ export default function Dashboard() {
       if (error) {
         console.error("Error fetching db users:", error);
       } else {
-        setDbUsers(data || []);
+        const cleanUsers = (data || []).filter(
+          (u: any) => !DUMMY_EMAILS.includes((u.email || "").toLowerCase().trim())
+        );
+        setDbUsers(cleanUsers);
       }
     } catch (err) {
       console.error("Failed to fetch db users:", err);
@@ -513,7 +548,7 @@ export default function Dashboard() {
   const [stationEmailStatus, setStationEmailStatus] = useState<Record<string, string>>({});
   const [stationEmailSuccess, setStationEmailSuccess] = useState<Record<string, boolean | null>>({});
   const [expandedStation, setExpandedStation] = useState<Record<string, boolean>>({});
-  const [adminTab, setAdminTab] = useState<"stations" | "global">("stations");
+  const [adminTab, setAdminTab] = useState<"stations" | "branches" | "global">("stations");
   const [stationCustomEmailInput, setStationCustomEmailInput] = useState<Record<string, string>>({});
   const [stationUserSearch, setStationUserSearch] = useState<Record<string, string>>({});
 
@@ -523,6 +558,9 @@ export default function Dashboard() {
       const updated = { ...prev };
       const stationGroups: Record<string, string[]> = {};
       dbUsers.forEach((u) => {
+        const cleanEmail = (u.email || "").toLowerCase().trim();
+        if (DUMMY_EMAILS.includes(cleanEmail)) return;
+
         if (u.station) {
           const stations = u.station.split(",").map((s: string) => s.trim()).filter(Boolean);
           stations.forEach((stationCode: string) => {
@@ -538,16 +576,24 @@ export default function Dashboard() {
 
       STATIONS.forEach((s) => {
         if (stationGroups[s.code]) {
-          updated[s.code] = stationGroups[s.code];
+          updated[s.code] = stationGroups[s.code].filter(e => !DUMMY_EMAILS.includes(e.toLowerCase().trim()));
         } else if (dbUsers.length > 0) {
           updated[s.code] = [];
         } else {
-          updated[s.code] = stationDefaultRecipients[s.code] || [];
+          updated[s.code] = (stationDefaultRecipients[s.code] || []).filter(e => !DUMMY_EMAILS.includes(e.toLowerCase().trim()));
+        }
+      });
+
+      BRANCH_OPTIONS.forEach((b) => {
+        if (stationGroups[b.code]) {
+          updated[b.code] = stationGroups[b.code].filter(e => !DUMMY_EMAILS.includes(e.toLowerCase().trim()));
+        } else {
+          updated[b.code] = (stationDefaultRecipients[b.code] || []).filter(e => !DUMMY_EMAILS.includes(e.toLowerCase().trim()));
         }
       });
 
       if (stationGroups["OTHER"]) {
-        updated["OTHER"] = stationGroups["OTHER"];
+        updated["OTHER"] = stationGroups["OTHER"].filter(e => !DUMMY_EMAILS.includes(e.toLowerCase().trim()));
       } else {
         updated["OTHER"] = [];
       }
@@ -613,7 +659,7 @@ export default function Dashboard() {
       return;
     }
 
-    // Map station name to filters
+    // Map station/branch to filters
     let filters: any = {
       mode: "standard",
       include_weekly_visual: true,
@@ -621,9 +667,14 @@ export default function Dashboard() {
       include_monthly_visual: true,
       include_monthly_ledger: true,
       max_data_rows: 100,
+      report_level: schedReportLevel,
     };
 
-    if (schedStation !== "Global") {
+    if (schedReportLevel === "branch") {
+      filters.branch = schedBranch;
+      filters.country = "India";
+      filters.company_code = "IND";
+    } else if (schedStation !== "Global") {
       const stationMap: Record<string, { code: string; country: string }> = {
         "CMB": { code: "CMB", country: "Sri Lanka" },
         "IND": { code: "IND", country: "India" },
@@ -837,11 +888,19 @@ export default function Dashboard() {
 
   const [showSectionSelector, setShowSectionSelector] = useState(false);
 
-  // --- SQL SANDBOX CONSOLE STATES ---
-  // Weekly SQL States
-  const [isWeeklySqlConsoleOpen, setIsWeeklySqlConsoleOpen] = useState(false);
-  const [weeklySqlText, setWeeklySqlText] = useState(`-- Write your own SQL query here!
--- Pre-populated default Vietnam - Turkish Airline Air Cargo report
+  // --- BRANCH OPTIONS & SQL QUERY GENERATORS ---
+  const BRANCH_OPTIONS = [
+    { code: "BLR", name: "Bengaluru (BLR)" },
+    { code: "MAA", name: "Chennai (MAA)" },
+    { code: "HYD", name: "Hyderabad (HYD)" },
+    { code: "AMD", name: "Ahmedabad (AMD)" },
+    { code: "BOM", name: "Mumbai (BOM)" },
+    { code: "PNQ", name: "Pune (PNQ)" },
+    { code: "DEL", name: "Delhi (DEL)" },
+    { code: "CCU", name: "Kolkata (CCU)" },
+  ];
+
+  const getStationwiseSqlTemplate = (country = "India", companyCode = "IND", sDate = "2026-06-01", eDate = "2026-06-07") => `-- Station-wise Report Query Template
 SELECT
     vt.ConsoleNumber AS Console_Number,
     vt.MasterBillNum AS Master_Airway_Bill,
@@ -865,18 +924,91 @@ LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc
     ON vsc.Link_ConsolNumber = vt.ConsoleNumber
 LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs
     ON vs.ShipmentNumber = vsc.Link_ShipmentNum
-WHERE vt.ConLoadPortCountryName = 'Viet Nam'
-    AND vt.ETD >= '2026-06-01'
-    AND vt.ETD <= '2026-06-07'
+WHERE vt.ConLoadPortCountryName = '${country}'
+    AND vt.ETD >= '${sDate}'
+    AND vt.ETD <= '${eDate}'
     AND vt.TransportMode = 'AIR'
-    AND vs.Company = 'VNM'
+    AND vs.Company = '${companyCode}'
 GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
          vt.ConsolTransportMode, vt.ETD, 
          COALESCE(vt.RealLoadPortCountryName, 'N/A'),
          COALESCE(vt.RealLoadPortCity, 'N/A'),
          COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
          COALESCE(vt.RealDisChargePortCity, 'N/A')
-ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
+ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
+
+  const getBranchwiseSqlTemplate = (country = "India", companyCode = "IND", branch = "BLR", sDate = "2026-06-01", eDate = "2026-06-07") => `-- Branch-wise Report Query Template (${branch})
+SELECT
+    vt.ConsoleNumber AS Console_Number,
+    vt.MasterBillNum AS Master_Airway_Bill,
+    vt.AirlineName1 AS Airline,
+    vt.ConsolTransportMode AS Transport_Mode,
+    vt.ETD,
+    COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
+    COALESCE(vt.RealLoadPortCity, 'N/A') AS Origin_City,
+    COALESCE(vt.RealDisChargePortCountryName, 'N/A') AS Destination_Country,
+    COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_City,
+    vs.Branch AS Branch_Code,
+    vs.BranchName AS Branch_Name,
+    vs.BranchCity AS Branch_City,
+    vs.Consignor AS Consigner,
+    vs.ConsignorName AS Consigner_Name,
+    vs.Consignee AS Consignee,
+    vs.ConsigneeName AS Consignee_Name,
+    vs.AgentCode AS Agent_Code,
+    vs.AgentName AS Agent_Name,
+    COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
+    COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
+    ROUND(MAX(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
+    ROUND(MAX(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
+    ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
+    ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
+    ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
+    ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent
+FROM dbo.ChatData_ViewShipConsolTransport vt
+LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc
+    ON vsc.Link_ConsolNumber = vt.ConsoleNumber
+LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs
+    ON vs.ShipmentNumber = vsc.Link_ShipmentNum
+WHERE vt.ConLoadPortCountryName = '${country}'
+    AND vt.ETD >= '${sDate}'
+    AND vt.ETD <= '${eDate}'
+    AND vt.TransportMode = 'AIR'
+    AND vs.Company = '${companyCode}'
+    AND vs.Branch = '${branch}'
+GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
+         vt.ConsolTransportMode, vt.ETD, 
+         COALESCE(vt.RealLoadPortCountryName, 'N/A'),
+         COALESCE(vt.RealLoadPortCity, 'N/A'),
+         COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
+         COALESCE(vt.RealDisChargePortCity, 'N/A'),
+         vs.Branch,
+         vs.BranchName,
+         vs.BranchCity,
+         vs.Consignor,
+         vs.ConsignorName,
+         vs.Consignee,
+         vs.ConsigneeName,
+         vs.AgentCode,
+         vs.AgentName
+ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
+
+  // Section level report types (Station-wise vs Branch-wise)
+  const [weeklyReportLevel, setWeeklyReportLevel] = useState<"station" | "branch">("station");
+  const [weeklyBranch, setWeeklyBranch] = useState("BLR");
+  const [weeklyStation, setWeeklyStation] = useState("IND");
+
+  const [monthlyReportLevel, setMonthlyReportLevel] = useState<"station" | "branch">("station");
+  const [monthlyBranch, setMonthlyBranch] = useState("BLR");
+  const [monthlyStation, setMonthlyStation] = useState("IND");
+
+  const [schedReportLevel, setSchedReportLevel] = useState<"station" | "branch">("station");
+  const [schedBranch, setSchedBranch] = useState("BLR");
+
+  // --- SQL SANDBOX CONSOLE STATES ---
+  // Weekly SQL States
+  const [isWeeklySqlConsoleOpen, setIsWeeklySqlConsoleOpen] = useState(false);
+  const [weeklySqlText, setWeeklySqlText] = useState(getStationwiseSqlTemplate("India", "IND", "2026-06-01", "2026-06-07"));
 
   const [weeklySqlRecords, setWeeklySqlRecords] = useState<any[]>([]);
   const [weeklySqlWeeklyData, setWeeklySqlWeeklyData] = useState<any[]>([]);
@@ -890,43 +1022,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
 
   // Monthly SQL States
   const [isMonthlySqlConsoleOpen, setIsMonthlySqlConsoleOpen] = useState(false);
-  const [monthlySqlText, setMonthlySqlText] = useState(`-- Write your own Monthly SQL query here!
--- Pre-populated default Vietnam - Cargo Monthly Performance Rollup
-SELECT
-    vt.ConsoleNumber AS Console_Number,
-    vt.MasterBillNum AS Master_Airway_Bill,
-    vt.AirlineName1 AS Airline,
-    vt.ConsolTransportMode AS Transport_Mode,
-    vt.ETD,
-    COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
-    COALESCE(vt.RealLoadPortCity, 'N/A') AS Origin_City,
-    COALESCE(vt.RealDisChargePortCountryName, 'N/A') AS Destination_Country,
-    COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_City,
-    COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
-    COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
-    ROUND(MAX(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
-    ROUND(MAX(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
-    ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
-    ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
-    ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
-    ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent
-FROM dbo.ChatData_ViewShipConsolTransport vt
-LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc
-    ON vsc.Link_ConsolNumber = vt.ConsoleNumber
-LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs
-    ON vs.ShipmentNumber = vsc.Link_ShipmentNum
-WHERE vt.ConLoadPortCountryName = 'Viet Nam'
-    AND vt.ETD >= '2026-05-01'
-    AND vt.ETD <= '2026-06-01'
-    AND vt.TransportMode = 'AIR'
-    AND vs.Company = 'VNM'
-GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
-         vt.ConsolTransportMode, vt.ETD, 
-         COALESCE(vt.RealLoadPortCountryName, 'N/A'),
-         COALESCE(vt.RealLoadPortCity, 'N/A'),
-         COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
-         COALESCE(vt.RealDisChargePortCity, 'N/A')
-ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
+  const [monthlySqlText, setMonthlySqlText] = useState(getStationwiseSqlTemplate("India", "IND", "2026-05-01", "2026-06-01"));
 
   const [monthlySqlRecords, setMonthlySqlRecords] = useState<any[]>([]);
   const [monthlySqlWeeklyData, setMonthlySqlWeeklyData] = useState<any[]>([]);
@@ -1625,6 +1721,52 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     setStationEmailLoading(prev => ({ ...prev, [stationCode]: false }));
   };
 
+  const handleSendBranchEmail = async (branchCode: string, branchName: string) => {
+    const emails = stationSelectedEmails[branchCode] || [];
+    if (emails.length === 0) {
+      setStationEmailStatus(prev => ({ ...prev, [branchCode]: "Please select at least one recipient." }));
+      setStationEmailSuccess(prev => ({ ...prev, [branchCode]: false }));
+      return;
+    }
+    setStationEmailLoading(prev => ({ ...prev, [branchCode]: true }));
+    setStationEmailStatus(prev => ({ ...prev, [branchCode]: `Generating & transmitting ${branchCode} Branch report...` }));
+    setStationEmailSuccess(prev => ({ ...prev, [branchCode]: null }));
+    try {
+      const emailString = emails.join(", ");
+      const formattedSql = getBranchwiseSqlTemplate("India", "IND", branchCode, startDate, endDate);
+
+      const requestBody = {
+        recipient_email: emailString,
+        mode: "custom-sql",
+        custom_sql: formattedSql,
+        include_weekly_visual: true,
+        include_weekly_ledger: true,
+        include_monthly_visual: true,
+        include_monthly_ledger: true,
+        max_data_rows: 100,
+        country: "India",
+        company_code: "IND",
+        branch: branchCode,
+        report_level: "branch",
+        start_date: startDate,
+        end_date: endDate,
+      };
+
+      const res = await fetch(`${API}/api/send-report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+      const result = await res.json();
+      setStationEmailStatus(prev => ({ ...prev, [branchCode]: result.message || `${branchCode} Branch report dispatch started.` }));
+      setStationEmailSuccess(prev => ({ ...prev, [branchCode]: true }));
+    } catch {
+      setStationEmailStatus(prev => ({ ...prev, [branchCode]: "Failed to send branch report." }));
+      setStationEmailSuccess(prev => ({ ...prev, [branchCode]: false }));
+    }
+    setStationEmailLoading(prev => ({ ...prev, [branchCode]: false }));
+  };
+
   const handleAddStationCustomEmail = (stationCode: string) => {
     const inputVal = (stationCustomEmailInput[stationCode] || "").trim();
     if (!inputVal) return;
@@ -1795,7 +1937,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
   // Sector Tonnage Distribution (dual-axis chart & table) data helpers
   const getSectorChartData = () => {
     let tEurope = 0, tUSA = 0, tSEAsia = 0, tAfrica = 0, tIndiaSub = 0, tMidEast = 0, tAustralia = 0, tOthers = 0;
-    
+
     sectorCarrierData.forEach((row: any) => {
       tEurope += Number(row.Europe || 0);
       tUSA += Number(row.USA || 0);
@@ -2669,7 +2811,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
           {/* ── FILTER UTILITIES STRIP ── */}
           {activeSection !== "admin" && activeSection !== "email-scheduling" && activeSection !== "users" && (
-            <div className="max-w-[1380px] mx-auto px-6 mt-6">
+            <div className="w-full px-4 sm:px-6 lg:px-8 mt-6">
               <div className="bg-white rounded-xl p-5 border border-[#E2E8F0] shadow-sm space-y-4">
 
                 {/* Section Header */}
@@ -2799,23 +2941,165 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                   </>
                 ) : (
                   <div className="space-y-4 animate-in fade-in duration-200">
-                    <div className="flex items-center justify-between">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setIsSqlConsoleOpen(!isSqlConsoleOpen)}
-                        className="h-7 text-xs text-[#3182CE] hover:bg-[#EBF8FF] font-semibold"
-                      >
-                        {isSqlConsoleOpen ? "Collapse Editor" : "Expand Editor"}
-                      </Button>
+                    {/* Sub-tab Navigation & Controls for Stationwise vs Branchwise */}
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (activeSection === "weekly-reports") {
+                              setWeeklyReportLevel("station");
+                              const stObj = STATIONS.find(s => s.code === weeklyStation) || { country: "India", code: "IND" };
+                              setWeeklySqlText(getStationwiseSqlTemplate(stObj.country, stObj.code, startDate, endDate));
+                            } else {
+                              setMonthlyReportLevel("station");
+                              const stObj = STATIONS.find(s => s.code === monthlyStation) || { country: "India", code: "IND" };
+                              setMonthlySqlText(getStationwiseSqlTemplate(stObj.country, stObj.code, startDate, endDate));
+                            }
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm ${(activeSection === "weekly-reports" ? weeklyReportLevel : monthlyReportLevel) === "station"
+                              ? "bg-[#3182CE] text-white"
+                              : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                            }`}
+                        >
+                          Stationwise Reports
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (activeSection === "weekly-reports") {
+                              setWeeklyReportLevel("branch");
+                              setWeeklySqlText(getBranchwiseSqlTemplate("India", "IND", weeklyBranch, startDate, endDate));
+                            } else {
+                              setMonthlyReportLevel("branch");
+                              setMonthlySqlText(getBranchwiseSqlTemplate("India", "IND", monthlyBranch, startDate, endDate));
+                            }
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm ${(activeSection === "weekly-reports" ? weeklyReportLevel : monthlyReportLevel) === "branch"
+                              ? "bg-[#3182CE] text-white"
+                              : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                            }`}
+                        >
+                          Branchwise Reports
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-3 flex-wrap">
+                        {/* Station Dropdown Selector (Active when Stationwise mode selected) */}
+                        {(activeSection === "weekly-reports" ? weeklyReportLevel : monthlyReportLevel) === "station" && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Station:</span>
+                            <select
+                              value={activeSection === "weekly-reports" ? weeklyStation : monthlyStation}
+                              onChange={(e) => {
+                                const stCode = e.target.value;
+                                const stObj = STATIONS.find(s => s.code === stCode) || { country: "India", code: "IND" };
+                                if (activeSection === "weekly-reports") {
+                                  setWeeklyStation(stCode);
+                                  setWeeklySqlText(getStationwiseSqlTemplate(stObj.country, stObj.code, startDate, endDate));
+                                } else {
+                                  setMonthlyStation(stCode);
+                                  setMonthlySqlText(getStationwiseSqlTemplate(stObj.country, stObj.code, startDate, endDate));
+                                }
+                              }}
+                              className="h-8 px-2.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-700 shadow-sm focus:outline-none focus:ring-1 focus:ring-[#3182CE]"
+                            >
+                              {STATIONS.map((st) => (
+                                <option key={st.code} value={st.code}>
+                                  {st.name} ({st.code})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        {/* Branch Dropdown Selector (Active when Branchwise mode selected) */}
+                        {(activeSection === "weekly-reports" ? weeklyReportLevel : monthlyReportLevel) === "branch" && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Branch:</span>
+                            <select
+                              value={activeSection === "weekly-reports" ? weeklyBranch : monthlyBranch}
+                              onChange={(e) => {
+                                const b = e.target.value;
+                                if (activeSection === "weekly-reports") {
+                                  setWeeklyBranch(b);
+                                  setWeeklySqlText(getBranchwiseSqlTemplate("India", "IND", b, startDate, endDate));
+                                } else {
+                                  setMonthlyBranch(b);
+                                  setMonthlySqlText(getBranchwiseSqlTemplate("India", "IND", b, startDate, endDate));
+                                }
+                              }}
+                              className="h-8 px-2.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-700 shadow-sm focus:outline-none focus:ring-1 focus:ring-[#3182CE]"
+                            >
+                              {BRANCH_OPTIONS.map((br) => (
+                                <option key={br.code} value={br.code}>{br.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        {/* Date Range Selectors */}
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Start:</span>
+                          <Input
+                            type="date"
+                            value={startDate}
+                            onChange={(e) => setStartDate(e.target.value)}
+                            className="h-8 w-36 text-xs bg-white border-slate-300 rounded-lg text-slate-700 [color-scheme:light]"
+                          />
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">End:</span>
+                          <Input
+                            type="date"
+                            value={endDate}
+                            onChange={(e) => setEndDate(e.target.value)}
+                            className="h-8 w-36 text-xs bg-white border-slate-300 rounded-lg text-slate-700 [color-scheme:light]"
+                          />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              const isBranch = (activeSection === "weekly-reports" ? weeklyReportLevel : monthlyReportLevel) === "branch";
+                              const b = activeSection === "weekly-reports" ? weeklyBranch : monthlyBranch;
+                              const stCode = activeSection === "weekly-reports" ? weeklyStation : monthlyStation;
+                              const stObj = STATIONS.find(s => s.code === stCode) || { country: "India", code: "IND" };
+                              const updatedSql = isBranch
+                                ? getBranchwiseSqlTemplate("India", "IND", b, startDate, endDate)
+                                : getStationwiseSqlTemplate(stObj.country, stObj.code, startDate, endDate);
+                              if (activeSection === "weekly-reports") setWeeklySqlText(updatedSql);
+                              else setMonthlySqlText(updatedSql);
+                            }}
+                            className="h-8 px-3 text-xs font-bold border-slate-300 text-slate-700 hover:bg-slate-50"
+                          >
+                            Update Query Parameters
+                          </Button>
+                        </div>
+
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            if (activeSection === "weekly-reports") {
+                              setIsWeeklySqlConsoleOpen(!isWeeklySqlConsoleOpen);
+                            } else {
+                              setIsMonthlySqlConsoleOpen(!isMonthlySqlConsoleOpen);
+                            }
+                          }}
+                          className="h-8 text-xs text-[#3182CE] hover:bg-[#EBF8FF] font-semibold ml-auto"
+                        >
+                          {(activeSection === "weekly-reports" ? isWeeklySqlConsoleOpen : isMonthlySqlConsoleOpen) ? "Collapse Editor" : "Expand Editor"}
+                        </Button>
+                      </div>
                     </div>
 
-                    {isSqlConsoleOpen && (
+                    {(activeSection === "weekly-reports" ? isWeeklySqlConsoleOpen : isMonthlySqlConsoleOpen) && (
                       <div className="space-y-3">
                         <div className="relative border border-[#CBD5E0] rounded-lg overflow-hidden shadow-inner">
                           <textarea
-                            value={customSqlText}
-                            onChange={(e) => setCustomSqlText(e.target.value)}
+                            value={activeSection === "weekly-reports" ? weeklySqlText : monthlySqlText}
+                            onChange={(e) => {
+                              if (activeSection === "weekly-reports") setWeeklySqlText(e.target.value);
+                              else setMonthlySqlText(e.target.value);
+                            }}
                             rows={12}
                             className="w-full p-4 bg-slate-900 text-slate-100 font-mono text-xs leading-relaxed focus:outline-none focus:ring-1 focus:ring-[#3182CE] resize-y"
                             placeholder="SELECT * FROM dbo.ChatData_ViewShipConsolTransport..."
@@ -2824,21 +3108,26 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
                         <div className="flex items-center gap-3">
                           <Button
-                            onClick={() => runCustomSqlQuery()}
-                            disabled={sqlIsRunning}
+                            onClick={() => {
+                              if (activeSection === "weekly-reports") runWeeklyCustomSqlQuery();
+                              else runMonthlyCustomSqlQuery();
+                            }}
+                            disabled={activeSection === "weekly-reports" ? weeklySqlIsRunning : monthlySqlIsRunning}
                             className="h-8 px-4 bg-[#3182CE] hover:bg-[#2B6CB0] disabled:opacity-60 text-white text-xs font-bold rounded-md flex items-center gap-1.5 transition-all shadow"
                           >
-                            {sqlIsRunning ? (
+                            {(activeSection === "weekly-reports" ? weeklySqlIsRunning : monthlySqlIsRunning) ? (
                               <><RefreshCw className="w-3.5 h-3.5 animate-spin" /><span>Running...</span></>
                             ) : (
                               "▶ Execute Custom SQL"
                             )}
                           </Button>
 
-                          {/* Stop Execution button — only shown while a query is running */}
-                          {sqlIsRunning && (
+                          {(activeSection === "weekly-reports" ? weeklySqlIsRunning : monthlySqlIsRunning) && (
                             <Button
-                              onClick={stopCustomSqlQuery}
+                              onClick={() => {
+                                if (activeSection === "weekly-reports") stopWeeklyCustomSqlQuery();
+                                else stopMonthlyCustomSqlQuery();
+                              }}
                               className="h-8 px-3.5 bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold rounded-md flex items-center gap-1.5 transition-all shadow animate-in fade-in duration-150"
                             >
                               <span className="w-3 h-3 rounded-sm bg-white inline-block shrink-0" />
@@ -2849,83 +3138,15 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             variant="outline"
                             size="sm"
                             onClick={() => {
-                              if (activeSection === "weekly-reports") {
-                                setCustomSqlText(`-- Write your own SQL query here!
--- Pre-populated default Vietnam - Turkish Airline Air Cargo report
-SELECT
-    vt.ConsoleNumber AS Console_Number,
-    vt.MasterBillNum AS Master_Airway_Bill,
-    vt.AirlineName1 AS Airline,
-    vt.ConsolTransportMode AS Transport_Mode,
-    vt.ETD,
-    COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
-    COALESCE(vt.RealLoadPortCity, 'N/A') AS Origin_City,
-    COALESCE(vt.RealDisChargePortCountryName, 'N/A') AS Destination_Country,
-    COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_City,
-    COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
-    COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
-    ROUND(MAX(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
-    ROUND(MAX(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
-    ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
-    ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
-    ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
-    ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent
-FROM dbo.ChatData_ViewShipConsolTransport vt
-LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc
-    ON vsc.Link_ConsolNumber = vt.ConsoleNumber
-LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs
-    ON vs.ShipmentNumber = vsc.Link_ShipmentNum
-WHERE vt.ConLoadPortCountryName = 'Viet Nam'
-    AND vt.ETD >= '2026-06-01'
-    AND vt.ETD <= '2026-06-07'
-    AND vt.TransportMode = 'AIR'
-    AND vs.Company = 'VNM'
-GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
-         vt.ConsolTransportMode, vt.ETD, 
-         COALESCE(vt.RealLoadPortCountryName, 'N/A'),
-         COALESCE(vt.RealLoadPortCity, 'N/A'),
-         COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
-         COALESCE(vt.RealDisChargePortCity, 'N/A')
-ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
-                              } else {
-                                setCustomSqlText(`-- Write your own Monthly SQL query here!
--- Pre-populated default Vietnam - Cargo Monthly Performance Rollup
-SELECT
-    vt.ConsoleNumber AS Console_Number,
-    vt.MasterBillNum AS Master_Airway_Bill,
-    vt.AirlineName1 AS Airline,
-    vt.ConsolTransportMode AS Transport_Mode,
-    vt.ETD,
-    COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
-    COALESCE(vt.RealLoadPortCity, 'N/A') AS Origin_City,
-    COALESCE(vt.RealDisChargePortCountryName, 'N/A') AS Destination_Country,
-    COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_City,
-    COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
-    COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
-    ROUND(MAX(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
-    ROUND(MAX(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
-    ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
-    ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
-    ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
-    ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent
-FROM dbo.ChatData_ViewShipConsolTransport vt
-LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc
-    ON vsc.Link_ConsolNumber = vt.ConsoleNumber
-LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs
-    ON vs.ShipmentNumber = vsc.Link_ShipmentNum
-WHERE vt.ConLoadPortCountryName = 'Viet Nam'
-    AND vt.ETD >= '2025-06-01'
-    AND vt.ETD <= '2026-05-21'
-    AND vt.TransportMode = 'AIR'
-    AND vs.Company = 'VNM'
-GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
-         vt.ConsolTransportMode, vt.ETD, 
-         COALESCE(vt.RealLoadPortCountryName, 'N/A'),
-         COALESCE(vt.RealLoadPortCity, 'N/A'),
-         COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
-         COALESCE(vt.RealDisChargePortCity, 'N/A')
-ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
-                              }
+                              const isBranch = (activeSection === "weekly-reports" ? weeklyReportLevel : monthlyReportLevel) === "branch";
+                              const b = activeSection === "weekly-reports" ? weeklyBranch : monthlyBranch;
+                              const stCode = activeSection === "weekly-reports" ? weeklyStation : monthlyStation;
+                              const stObj = STATIONS.find(s => s.code === stCode) || { country: "India", code: "IND" };
+                              const defaultSql = isBranch
+                                ? getBranchwiseSqlTemplate("India", "IND", b, startDate, endDate)
+                                : getStationwiseSqlTemplate(stObj.country, stObj.code, startDate, endDate);
+                              if (activeSection === "weekly-reports") setWeeklySqlText(defaultSql);
+                              else setMonthlySqlText(defaultSql);
                             }}
                             className="h-8 px-3 border-[#CBD5E0] text-slate-650 hover:bg-slate-50 text-xs font-medium rounded-md"
                           >
@@ -2936,20 +3157,20 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                     )}
 
                     {/* Console logs & feedback */}
-                    {sqlExecutionStatus && (
+                    {(activeSection === "weekly-reports" ? weeklySqlExecutionStatus : monthlySqlExecutionStatus) && (
                       <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600 font-medium flex items-center gap-2">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping shrink-0" />
-                        <span>{sqlExecutionStatus}</span>
+                        <span>{activeSection === "weekly-reports" ? weeklySqlExecutionStatus : monthlySqlExecutionStatus}</span>
                       </div>
                     )}
 
-                    {sqlError && (
+                    {(activeSection === "weekly-reports" ? weeklySqlError : monthlySqlError) && (
                       <div className="bg-rose-50 border border-rose-200 rounded-lg p-3.5 text-xs text-rose-700 space-y-1">
                         <p className="font-bold flex items-center gap-1.5">
                           <span>⚠️ Database Query Error</span>
                         </p>
                         <p className="font-mono text-[10.5px] leading-relaxed break-all bg-white/70 p-2 rounded border border-rose-100">
-                          {sqlError}
+                          {activeSection === "weekly-reports" ? weeklySqlError : monthlySqlError}
                         </p>
                       </div>
                     )}
@@ -2962,7 +3183,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
 
           {/* ── SELECTED RECIPIENTS STRIP (Dashboard only) ── */}
           {activeSection !== "admin" && activeSection !== "email-scheduling" && activeSection !== "users" && selectedEmails.length > 0 && (
-            <div className="max-w-[1380px] mx-auto px-6 mt-3 animate-in fade-in-0 duration-200">
+            <div className="w-full px-4 sm:px-6 lg:px-8 mt-3 animate-in fade-in-0 duration-200">
               <div className="flex flex-wrap items-center gap-2 p-2 bg-[#EBF8FF]/50 border border-[#BEE3F8]/60 rounded-lg shadow-sm">
                 <span className="text-[10px] font-bold text-[#2B6CB0] uppercase tracking-wider px-1">Selected Recipients:</span>
                 {selectedEmails.map((emailOption) => (
@@ -2982,7 +3203,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
           )}
           {/* Inline Feedback Alerts */}
           {activeSection !== "admin" && activeSection !== "email-scheduling" && activeSection !== "users" && emailStatus && (
-            <div className="max-w-[1380px] mx-auto px-6 mt-4">
+            <div className="w-full px-4 sm:px-6 lg:px-8 mt-4">
               <div className={`p-3 rounded-lg border text-xs flex items-center justify-between ${emailSuccess === true ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-blue-50 border-blue-200 text-blue-700"}`}>
                 <span>{emailStatus}</span>
                 <button onClick={() => setEmailStatus("")} className="hover:opacity-70"><X className="w-3.5 h-3.5" /></button>
@@ -2992,7 +3213,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
 
           {/* ── ADMIN PANEL SECTION ── */}
           {activeSection === "admin" && (
-            <div className="max-w-[1380px] mx-auto px-6 py-8 space-y-8 animate-in fade-in-0 duration-200">
+            <div className="w-full px-4 sm:px-6 lg:px-8 py-8 space-y-8 animate-in fade-in-0 duration-200">
 
               {/* Admin Header */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4 mb-6">
@@ -3042,6 +3263,13 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                       Station-wise Mailers
                     </button>
                     <button
+                      onClick={() => setAdminTab("branches")}
+                      className={`pb-2.5 px-4 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${adminTab === "branches" ? "border-[#3182CE] text-[#3182CE] font-extrabold" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+                    >
+                      <Building2 className="w-3.5 h-3.5" />
+                      Branch-wise Mailers
+                    </button>
+                    <button
                       onClick={() => setAdminTab("global")}
                       className={`pb-2.5 px-4 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${adminTab === "global" ? "border-[#3182CE] text-[#3182CE]" : "border-transparent text-slate-400 hover:text-slate-600"}`}
                     >
@@ -3066,7 +3294,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                             <div>
                               <div className="flex items-center justify-between pb-3 border-b border-[#EDF2F7] mb-3">
                                 <div className="flex items-center gap-2">
-                                  <span className="text-xl">{station.flag}</span>
+                                  <Globe className="w-4 h-4 text-[#3182CE]" />
                                   <div>
                                     <h4 className="text-xs font-bold text-[#1A202C]">{station.name}</h4>
                                     <span className="text-[9px] font-extrabold text-[#3182CE] bg-[#EBF8FF] px-1.5 py-0.5 rounded uppercase">{station.code}</span>
@@ -3325,6 +3553,168 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                         );
                       })()}
                     </div>
+                  ) : adminTab === "branches" ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {BRANCH_OPTIONS.map((branch) => {
+                        const selectedEmailsForBranch = stationSelectedEmails[branch.code] || [];
+                        const isSending = stationEmailLoading[branch.code] || false;
+                        const statusMessage = stationEmailStatus[branch.code] || "";
+                        const sendSuccess = stationEmailSuccess[branch.code];
+                        const customInput = stationCustomEmailInput[branch.code] || "";
+
+                        return (
+                          <div key={branch.code} className="admin-card p-5 flex flex-col justify-between border border-slate-200 bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200">
+                            <div>
+                              <div className="flex items-center justify-between pb-3 border-b border-[#EDF2F7] mb-3">
+                                <div className="flex items-center gap-2">
+                                  <Building2 className="w-4 h-4 text-[#3182CE]" />
+                                  <div>
+                                    <h4 className="text-xs font-bold text-[#1A202C]">{branch.name}</h4>
+                                    <span className="text-[9px] font-extrabold text-[#3182CE] bg-[#EBF8FF] px-1.5 py-0.5 rounded uppercase border border-[#BEE3F8]">{branch.code} Branch</span>
+                                  </div>
+                                </div>
+                                <span className="text-[10px] text-[#3182CE] font-semibold bg-[#EBF8FF]/60 px-2 py-0.5 rounded border border-[#BEE3F8]">
+                                  {selectedEmailsForBranch.length} Recipient(s)
+                                </span>
+                              </div>
+
+                              {/* Search AD Users to Add */}
+                              <div className="relative mb-3">
+                                <Input
+                                  placeholder="Search users to add..."
+                                  value={stationUserSearch[branch.code] || ""}
+                                  onChange={(e) => setStationUserSearch(prev => ({ ...prev, [branch.code]: e.target.value }))}
+                                  className="h-8 text-[10px] bg-slate-50 border-slate-200 rounded-lg text-slate-700 placeholder:text-slate-400 focus:border-[#3182CE]"
+                                />
+                                {(stationUserSearch[branch.code] || "").trim() && (
+                                  <div className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg z-10 divide-y divide-slate-100">
+                                    {orgUsers
+                                      .filter((u) => {
+                                        const query = (stationUserSearch[branch.code] || "").toLowerCase().trim();
+                                        return (u.displayName || "").toLowerCase().includes(query) || (u.email || "").toLowerCase().includes(query);
+                                      })
+                                      .slice(0, 5)
+                                      .map((u) => {
+                                        const isSelected = selectedEmailsForBranch.includes(u.email);
+                                        return (
+                                          <div
+                                            key={u.email}
+                                            onClick={() => {
+                                              if (!isSelected) {
+                                                setStationSelectedEmails(prev => ({
+                                                  ...prev,
+                                                  [branch.code]: [...(prev[branch.code] || []), u.email]
+                                                }));
+                                              }
+                                              setStationUserSearch(prev => ({ ...prev, [branch.code]: "" }));
+                                            }}
+                                            className="p-2 text-[10px] hover:bg-[#EBF8FF] cursor-pointer flex justify-between items-center"
+                                          >
+                                            <div className="truncate pr-2">
+                                              <p className="font-semibold text-slate-700 truncate">{u.displayName}</p>
+                                              <p className="text-[8px] text-slate-400 truncate">{u.email}</p>
+                                            </div>
+                                            {isSelected && <span className="text-[8px] text-[#3182CE] font-bold">Added</span>}
+                                          </div>
+                                        );
+                                      })}
+                                    {orgUsers.filter((u) => {
+                                      const query = (stationUserSearch[branch.code] || "").toLowerCase().trim();
+                                      return (u.displayName || "").toLowerCase().includes(query) || (u.email || "").toLowerCase().includes(query);
+                                    }).length === 0 && (
+                                        <p className="p-2 text-[9px] text-slate-400 italic">No matching users found</p>
+                                      )}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Recipient summary / badge cloud */}
+                              {selectedEmailsForBranch.length > 0 && (
+                                <div className="mb-4">
+                                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Recipients List</p>
+                                  <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto p-1.5 border border-dashed border-slate-200 rounded-lg bg-slate-50">
+                                    {selectedEmailsForBranch.map((email) => (
+                                      <Badge
+                                        key={email}
+                                        className="bg-white hover:bg-slate-50 text-slate-750 border border-[#CBD5E0] font-semibold text-[8px] px-1.5 py-0.5 rounded-full flex items-center gap-1 shadow-sm"
+                                      >
+                                        <span className="truncate max-w-[110px]">{email}</span>
+                                        <X
+                                          className="w-2 h-2 text-slate-400 hover:text-slate-600 cursor-pointer shrink-0"
+                                          onClick={() => setStationSelectedEmails(prev => ({
+                                            ...prev,
+                                            [branch.code]: (prev[branch.code] || []).filter(x => x !== email)
+                                          }))}
+                                        />
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Add Custom Email Input */}
+                              <div className="mb-3">
+                                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Add Custom Email</p>
+                                <div className="flex gap-1.5">
+                                  <Input
+                                    placeholder="Enter recipient email..."
+                                    value={customInput}
+                                    onChange={(e) => setStationCustomEmailInput(prev => ({ ...prev, [branch.code]: e.target.value }))}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        e.preventDefault();
+                                        handleAddStationCustomEmail(branch.code);
+                                      }
+                                    }}
+                                    className="h-8 text-[10px] bg-slate-50 border-slate-200 rounded-lg text-slate-700"
+                                  />
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleAddStationCustomEmail(branch.code)}
+                                    className="h-8 px-2.5 bg-[#3182CE] hover:bg-[#2B6CB0] text-white text-[10px] font-bold rounded-lg shrink-0"
+                                  >
+                                    Add
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Card Bottom / Sending controls */}
+                            <div className="border-t border-[#EDF2F7] pt-3 mt-auto">
+                              <div className="flex gap-2 mb-2">
+                                <Button
+                                  onClick={() => handleSaveStationRecipients(branch.code)}
+                                  disabled={isSending}
+                                  className="flex-1 h-8 bg-emerald-600 hover:bg-emerald-700 text-white text-[10.5px] font-bold rounded-lg flex items-center justify-center gap-1.5 shadow"
+                                >
+                                  Save Recipients
+                                </Button>
+                              </div>
+                              <Button
+                                onClick={() => handleSendBranchEmail(branch.code, branch.name)}
+                                disabled={selectedEmailsForBranch.length === 0 || isSending}
+                                className="w-full h-8 bg-[#3182CE] hover:bg-[#2B6CB0] disabled:opacity-50 text-white text-[10.5px] font-bold rounded-lg flex items-center justify-center gap-1.5 shadow"
+                              >
+                                {isSending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                                Send {branch.code} Branch Report
+                              </Button>
+
+                              {statusMessage && (
+                                <div className={`mt-2 p-1.5 rounded text-[9.5px] leading-snug flex items-center justify-between ${sendSuccess === true ? "bg-emerald-50 text-emerald-800 border border-emerald-100" : "bg-blue-50 text-blue-800 border border-blue-100"}`}>
+                                  <span className="truncate pr-1">{statusMessage}</span>
+                                  <button
+                                    onClick={() => setStationEmailStatus(prev => ({ ...prev, [branch.code]: "" }))}
+                                    className="hover:opacity-70 text-slate-400 shrink-0"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   ) : (
                     <>
                       {/* Recipients List Card (Original Global) */}
@@ -3537,7 +3927,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
 
           {/* ── EMAIL SCHEDULING SECTION ── */}
           {activeSection === "email-scheduling" && (
-            <div className="max-w-[1380px] mx-auto px-6 py-8 space-y-6 animate-in fade-in-0 duration-200">
+            <div className="w-full px-4 sm:px-6 lg:px-8 py-8 space-y-6 animate-in fade-in-0 duration-200">
 
               {/* Email Scheduling Header */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4 mb-4">
@@ -3584,23 +3974,58 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                       </div>
 
                       <div className="space-y-4 text-xs">
-                        {/* Station filter mapping */}
+                        {/* Report Level: Stationwise vs Branchwise */}
                         <div>
-                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Target Station</label>
-                          <select
-                            value={schedStation}
-                            onChange={(e) => setSchedStation(e.target.value)}
-                            className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
-                          >
-                            <option value="Global">Global (All Stations)</option>
-                            <option value="CMB">Sri Lanka (CMB)</option>
-                            <option value="IND">India (IND)</option>
-                            <option value="VNM">Viet Nam (VNM)</option>
-                            <option value="DAC">Bangladesh (DAC)</option>
-                            <option value="PKI">Pakistan (PKI)</option>
-                            <option value="NYC">United States (NYC)</option>
-                          </select>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Report Level</label>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setSchedReportLevel("station")}
+                              className={`flex-1 py-1.5 rounded-lg border text-center font-bold text-xs transition-colors ${schedReportLevel === "station" ? "bg-[#3182CE]/10 border-[#3182CE] text-[#3182CE]" : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"}`}
+                            >
+                              🏢 Stationwise
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSchedReportLevel("branch")}
+                              className={`flex-1 py-1.5 rounded-lg border text-center font-bold text-xs transition-colors ${schedReportLevel === "branch" ? "bg-purple-50 border-purple-300 text-purple-700" : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"}`}
+                            >
+                              📍 Branchwise
+                            </button>
+                          </div>
                         </div>
+
+                        {schedReportLevel === "branch" ? (
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Target Branch</label>
+                            <select
+                              value={schedBranch}
+                              onChange={(e) => setSchedBranch(e.target.value)}
+                              className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-purple-500"
+                            >
+                              {BRANCH_OPTIONS.map((br) => (
+                                <option key={br.code} value={br.code}>{br.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : (
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Target Station</label>
+                            <select
+                              value={schedStation}
+                              onChange={(e) => setSchedStation(e.target.value)}
+                              className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
+                            >
+                              <option value="Global">Global (All Stations)</option>
+                              <option value="CMB">Sri Lanka (CMB)</option>
+                              <option value="IND">India (IND)</option>
+                              <option value="VNM">Viet Nam (VNM)</option>
+                              <option value="DAC">Bangladesh (DAC)</option>
+                              <option value="PKI">Pakistan (PKI)</option>
+                              <option value="NYC">United States (NYC)</option>
+                            </select>
+                          </div>
+                        )}
 
                         {/* Frequency */}
                         <div>
@@ -3809,7 +4234,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                           ) : (
                             schedules.map((s) => {
                               const filters = s.filters || {};
-                              const stationLabel = filters.company_code ? `${filters.country} (${filters.company_code})` : "Global (All)";
+                              const countryClean = cleanCountryName(filters.country);
+                              const stationLabel = filters.company_code ? `${countryClean} (${filters.company_code})` : "Global (All)";
 
                               let triggerDesc = "";
                               if (s.frequency === "weekly") {
@@ -3882,7 +4308,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
 
           {/* ── USERS SECTION ── */}
           {activeSection === "users" && (
-            <div className="max-w-[1380px] mx-auto px-6 py-8 space-y-8 animate-in fade-in-0 duration-200">
+            <div className="w-full px-4 sm:px-6 lg:px-8 py-8 space-y-8 animate-in fade-in-0 duration-200">
               {/* Header */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4 mb-6">
                 <div>
@@ -4028,7 +4454,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
 
           {/* ── FOUR FINANCIAL & OPERATIONAL KPI CARDS ROW (Dashboard + Weekly/Monthly Reports) ── */}
           {activeSection !== "admin" && activeSection !== "email-scheduling" && activeSection !== "users" && (
-            <div className="max-w-[1380px] mx-auto px-6 mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="w-full px-4 sm:px-6 lg:px-8 mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
 
               {/* Card 1: Revenue */}
               <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
@@ -4083,7 +4509,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
 
           {/* ── MAIN DASHBOARD CANVAS (DIVIDED SEPARATELY FOR WEEKLY & MONTHLY) ── */}
           {activeSection !== "admin" && activeSection !== "email-scheduling" && activeSection !== "users" && (
-            <div className="max-w-[1380px] mx-auto px-6 mt-6 space-y-12">
+            <div className="w-full px-4 sm:px-6 lg:px-8 mt-6 space-y-12">
 
               {/* ── CHAPTER 1: WEEKLY OPERATIONAL PERFORMANCE ── */}
               <div className="space-y-4">
@@ -5455,7 +5881,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
                         <h2 className="text-lg font-bold text-[#1A202C] mt-0.5">Top Sectors</h2>
                       </div>
                     </div>
-                    
+
                     <div className="flex-1 flex flex-col justify-center space-y-4">
                       {sectorCarrierData.length === 0 ? (
                         <div className="text-center text-slate-400 text-sm">
@@ -5842,81 +6268,89 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC`);
 
       {/* ── DELETE SCHEDULE CONFIRMATION MODAL ── */}
       {scheduleToDelete && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in-0 duration-200">
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xl max-w-md w-full p-6 text-slate-800 animate-in zoom-in-95 duration-200 relative overflow-hidden">
-            {/* Top Accent Bar */}
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/65 backdrop-blur-md animate-in fade-in-0 duration-200">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-lg w-full p-6 sm:p-8 text-slate-800 animate-in zoom-in-95 duration-200 relative overflow-hidden">
+            {/* Top Warning Accent Bar */}
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-rose-500 via-red-500 to-amber-500" />
-            
-            <div className="flex items-start gap-4">
-              <div className="w-11 h-11 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center shrink-0 text-rose-600 shadow-inner">
-                <AlertTriangle className="w-5 h-5" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-base font-extrabold text-slate-900 tracking-tight">Delete Automated Schedule?</h3>
-                  <button
-                    type="button"
-                    onClick={() => { setScheduleToDelete(null); setScheduleDeleteError(null); }}
-                    className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+
+            {/* Header & Close */}
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center shrink-0 text-rose-600 shadow-sm">
+                  <AlertTriangle className="w-6 h-6" />
                 </div>
-                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                  Are you sure you want to delete this schedule? Automated report emails will stop being sent for this configuration.
-                </p>
-
-                {scheduleToDelete.stationLabel && (
-                  <div className="mt-3.5 p-3 bg-slate-50 border border-slate-200/80 rounded-xl text-xs space-y-1">
-                    <div className="flex items-center justify-between font-bold text-slate-800">
-                      <span>📍 {scheduleToDelete.stationLabel}</span>
-                      <span className="text-[10px] bg-rose-100 text-rose-700 px-2 py-0.5 rounded-md font-bold uppercase">To be deleted</span>
-                    </div>
-                    {scheduleToDelete.triggerDesc && (
-                      <div className="text-[11px] font-medium text-slate-500 flex items-center gap-1 mt-0.5">
-                        <Clock className="w-3 h-3 text-slate-400 shrink-0" />
-                        <span>{scheduleToDelete.triggerDesc}</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {scheduleDeleteError && (
-                  <div className="mt-3 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-semibold text-rose-600 flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span>{scheduleDeleteError}</span>
-                  </div>
-                )}
-
-                <div className="mt-6 flex items-center justify-end gap-2.5">
-                  <button
-                    type="button"
-                    disabled={isDeletingSchedule}
-                    onClick={() => { setScheduleToDelete(null); setScheduleDeleteError(null); }}
-                    className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200/70 border border-slate-200 rounded-xl transition-all disabled:opacity-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isDeletingSchedule}
-                    onClick={handleConfirmDeleteSchedule}
-                    className="px-4.5 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 active:bg-rose-800 rounded-xl shadow-md shadow-rose-600/20 hover:shadow-lg transition-all flex items-center gap-2 disabled:opacity-50"
-                  >
-                    {isDeletingSchedule ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        <span>Deleting...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Yes, Delete Schedule</span>
-                      </>
-                    )}
-                  </button>
+                <div>
+                  <h3 className="text-lg font-extrabold text-slate-900 tracking-tight">Delete Automated Schedule?</h3>
+                  <p className="text-xs text-slate-400 font-medium mt-0.5">Permanent action for email subscription</p>
                 </div>
               </div>
+              <button
+                type="button"
+                onClick={() => { setScheduleToDelete(null); setScheduleDeleteError(null); }}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600 mt-4 leading-relaxed bg-slate-50/70 p-3.5 rounded-xl border border-slate-100">
+              Are you sure you want to delete this schedule? Automated tonnage report emails will no longer be dispatched for this configuration.
+            </p>
+
+            {scheduleToDelete.stationLabel && (
+              <div className="mt-4 p-4 bg-rose-50/40 border border-rose-100 rounded-xl text-xs space-y-2">
+                <div className="flex items-center justify-between font-bold text-slate-800">
+                  <span className="flex items-center gap-1.5 text-slate-900 font-extrabold">
+                    <span>📍</span> {cleanCountryName(scheduleToDelete.stationLabel)}
+                  </span>
+                  <span className="text-[9.5px] bg-rose-100 text-rose-700 px-2.5 py-0.5 rounded-full font-extrabold uppercase border border-rose-200">
+                    To Be Deleted
+                  </span>
+                </div>
+                {scheduleToDelete.triggerDesc && (
+                  <div className="text-[11.5px] font-medium text-slate-600 flex items-center gap-1.5 pt-1 border-t border-rose-100/60">
+                    <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span>{scheduleToDelete.triggerDesc}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {scheduleDeleteError && (
+              <div className="mt-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-semibold text-rose-700 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>{scheduleDeleteError}</span>
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div className="mt-7 flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isDeletingSchedule}
+                onClick={() => { setScheduleToDelete(null); setScheduleDeleteError(null); }}
+                className="px-5 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200/80 border border-slate-200 rounded-xl transition-all disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingSchedule}
+                onClick={handleConfirmDeleteSchedule}
+                className="px-5 py-2.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 active:bg-rose-800 rounded-xl shadow-md shadow-rose-600/20 hover:shadow-lg transition-all flex items-center gap-2 disabled:opacity-50"
+              >
+                {isDeletingSchedule ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Yes, Delete Schedule</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

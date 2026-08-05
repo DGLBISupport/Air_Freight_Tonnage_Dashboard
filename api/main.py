@@ -84,6 +84,80 @@ def extract_station_info_from_sql(custom_sql: str) -> tuple[Optional[str], Optio
     return company_code, country
 
 
+def extract_branch_info_from_sql(custom_sql: str) -> Optional[str]:
+    """
+    Extracts branch code from a SQL query string (e.g. vs.Branch = 'BLR').
+    """
+    if not custom_sql:
+        return None
+    import re
+    branch_match = re.search(r"(?:[a-zA-Z0-9_]+\.)?Branch\s*=\s*'([^']+)'", custom_sql, re.IGNORECASE)
+    if branch_match:
+        return branch_match.group(1)
+    return None
+
+
+def generate_branchwise_sql(country: str, company_code: str, branch: str, start_date: str, end_date: str) -> str:
+    """Generates the standard Branch-wise SQL query."""
+    return f"""
+SELECT
+    vt.ConsoleNumber AS Console_Number,
+    vt.MasterBillNum AS Master_Airway_Bill,
+    vt.AirlineName1 AS Airline,
+    vt.ConsolTransportMode AS Transport_Mode,
+    vt.ETD,
+    COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
+    COALESCE(vt.RealLoadPortCity, 'N/A') AS Origin_City,
+    COALESCE(vt.RealDisChargePortCountryName, 'N/A') AS Destination_Country,
+    COALESCE(vt.RealDisChargePortCity, 'N/A') AS Destination_City,
+    vs.Branch AS Branch_Code,
+    vs.BranchName AS Branch_Name,
+    vs.BranchCity AS Branch_City,
+    vs.Consignor AS Consigner,
+    vs.ConsignorName AS Consigner_Name,
+    vs.Consignee AS Consignee,
+    vs.ConsigneeName AS Consignee_Name,
+    vs.AgentCode AS Agent_Code,
+    vs.AgentName AS Agent_Name,
+    COALESCE(MAX(vs.Company), 'Unlinked') AS Company_Code,
+    COUNT(DISTINCT vs.ShipmentNumber) AS Total_Shipments,
+    ROUND(MAX(vt.Air_ChargebleWeight), 2) AS Tonnage_Chargeable,
+    ROUND(MAX(vt.Air_ActualWeight), 2) AS Tonnage_Actual,
+    ROUND(SUM(vs.Revenue_USD), 2) AS Revenue_USD,
+    ROUND(SUM(vs.Cost_USD), 2) AS Cost_USD,
+    ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD,
+    ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent
+FROM dbo.ChatData_ViewShipConsolTransport vt
+LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc
+    ON vsc.Link_ConsolNumber = vt.ConsoleNumber
+LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs
+    ON vs.ShipmentNumber = vsc.Link_ShipmentNum
+WHERE vt.ConLoadPortCountryName = '{country}'
+    AND vt.ETD >= '{start_date}'
+    AND vt.ETD <= '{end_date}'
+    AND vt.TransportMode = 'AIR'
+    AND vs.Company = '{company_code}'
+    AND vs.Branch = '{branch}'
+GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
+         vt.ConsolTransportMode, vt.ETD, 
+         COALESCE(vt.RealLoadPortCountryName, 'N/A'),
+         COALESCE(vt.RealLoadPortCity, 'N/A'),
+         COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
+         COALESCE(vt.RealDisChargePortCity, 'N/A'),
+         vs.Branch,
+         vs.BranchName,
+         vs.BranchCity,
+         vs.Consignor,
+         vs.ConsignorName,
+         vs.Consignee,
+         vs.ConsigneeName,
+         vs.AgentCode,
+         vs.AgentName
+ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;
+""".strip()
+
+
+
 def extract_dates_from_sql(custom_sql: str) -> tuple[Optional[str], Optional[str]]:
     """
     Extracts start_date and end_date from ETD comparisons in the query.
@@ -444,6 +518,92 @@ def fetch_branches(company_code: str = None):
 query_cache = {}
 
 
+BRANCH_FULL_NAMES = {
+    "BLR": "Bengaluru (BLR)",
+    "MAA": "Chennai (MAA)",
+    "HYD": "Hyderabad (HYD)",
+    "AMD": "Ahmedabad (AMD)",
+    "BOM": "Mumbai (BOM)",
+    "PNQ": "Pune (PNQ)",
+    "DEL": "Delhi (DEL)",
+    "CCU": "Kolkata (CCU)",
+}
+
+STATION_NAMES = {
+    "CMB": "Colombo (Sri Lanka)",
+    "IND": "India",
+    "VNM": "Viet Nam",
+    "DAC": "Bangladesh",
+    "PKI": "Pakistan",
+    "NYC": "United States",
+    "OTHER": "Corporate / Other"
+}
+
+def build_email_metadata(
+    start_date: str,
+    end_date: str,
+    country: Optional[str] = None,
+    company_code: Optional[str] = None,
+    branch: Optional[str] = None,
+    report_type: str = "weekly"
+) -> tuple[str, str, str]:
+    """
+    Constructs email Subject, Body, and PDF Attachment Filename.
+    Includes Station, Branch (with Station if Branch is present), Date Range, and PDF Filename in Body.
+    """
+    import re
+    rep_title = "Monthly" if (report_type and str(report_type).lower() == "monthly") else "Weekly"
+
+    # Resolve station / country name
+    station_str = country or ""
+    if not station_str and company_code:
+        station_str = STATION_NAMES.get(company_code, company_code)
+    if not station_str:
+        station_str = "Global"
+
+    # Clean country name (strip 2-letter codes like LK, IN, etc.)
+    station_clean = re.sub(r'^[A-Z]{2}\s*[-–:]?\s*', '', station_str).strip()
+    station_clean = re.sub(r'^(LK|IN|VN|BD|PK|US)\s+', '', station_clean, flags=re.IGNORECASE).strip()
+
+    # Resolve branch name if present
+    branch_str = ""
+    if branch:
+        codes = [b.strip() for b in branch.split(",") if b.strip()]
+        names = [BRANCH_FULL_NAMES.get(c, c) for c in codes]
+        branch_str = ", ".join(names)
+
+    # Build target label
+    if branch_str:
+        # If branch is present, include station as well!
+        target_label = f"Station: {station_clean} - {branch_str} Branch"
+    elif station_clean != "Global":
+        target_label = f"Station: {station_clean}"
+    else:
+        target_label = "Global (All Stations)"
+
+    date_range_str = f"{start_date} to {end_date}" if (start_date and end_date) else "N/A"
+
+    # Construct PDF attachment filename including station, branch, and date range
+    clean_target_filename = re.sub(r'[^a-zA-Z0-9_\-]', '_', target_label.replace("Station: ", "")).strip('_')
+    clean_date_filename = re.sub(r'[^a-zA-Z0-9_\-]', '_', date_range_str)
+    attachment_name = f"{rep_title}_Tonnage_Report_{clean_target_filename}_{clean_date_filename}.pdf"
+
+    # Subject line
+    subject = f"{rep_title} Air Freight Tonnage Dashboard - {target_label} ({date_range_str})"
+
+    # Construct body as two paragraphs without bullet points
+    body = (
+        f"Dear Recipient,\n\n"
+        f"Please find attached the {rep_title} Air Freight Tonnage and Revenue Performance Dashboard "
+        f"for {station_clean} Station"
+        + (f" ({branch_str} Branch)" if branch_str else "")
+        + f" covering the period from {start_date} to {end_date}.\n\n"
+        f"Best regards,\n"
+        f"BI Support Team"
+    )
+    return subject, body, attachment_name
+
+
 # --- HELPER: Background Task for PDF & Email ---
 def process_pdf_and_email(req: ReportRequest):
     """Runs in the background so the frontend doesn't hang waiting for Playwright."""
@@ -488,41 +648,15 @@ def process_pdf_and_email(req: ReportRequest):
             query_id=query_id,
             report_type=req.report_type or "weekly",
         )
-        # Format a meaningful subject and body based on request filters
-        station_label = "Global"
-        STATION_NAMES = {
-            "CMB": "Colombo (Sri Lanka)",
-            "IND": "India",
-            "VNM": "Viet Nam",
-            "DAC": "Bangladesh",
-            "PKI": "Pakistan",
-            "NYC": "United States",
-            "OTHER": "Corporate / Other"
-        }
-        if country_val and company_val:
-            codes = [c.strip() for c in company_val.split(",") if c.strip()]
-            resolved_names = [STATION_NAMES.get(c, c) for c in codes]
-            station_label = f"{country_val} ({', '.join(resolved_names)})"
-        elif country_val:
-            station_label = country_val
-        elif company_val:
-            codes = [c.strip() for c in company_val.split(",") if c.strip()]
-            resolved_names = [STATION_NAMES.get(c, c) for c in codes]
-            station_label = ", ".join(resolved_names)
-
-        date_range_label = ""
-        if req.start_date and req.end_date:
-            date_range_label = f" ({req.start_date} to {req.end_date})"
-
-        subject = f"Weekly Air Freight Tonnage Dashboard - {station_label}{date_range_label}"
-        body = (
-            f"Dear Recipient,\n\n"
-            f"Please find attached the Weekly Air Freight Tonnage and Revenue Performance Dashboard for {station_label} "
-            f"covering the period from {req.start_date or 'N/A'} to {req.end_date or 'N/A'}.\n\n"
-            f"Best Regards,\n"
-            f"BI Support Team"
+        
+        subject, body, attachment_name = build_email_metadata(
+            start_date=req.start_date,
+            end_date=req.end_date,
+            country=country_val or req.country,
+            company_code=company_val or req.company_code,
+            branch=req.branch,
+            report_type=req.report_type or "weekly"
         )
-        attachment_name = f"Weekly_Tonnage_Report_{company_val or 'Global'}.pdf"
 
         send_pdf_via_graph(
             pdf_path=temp_pdf_path,
@@ -565,13 +699,26 @@ def fetch_recipients():
 # --- ENDPOINT 5.5.1: Station-specific recipients from .env ---
 @app.get("/api/station-recipients")
 def fetch_station_recipients():
-    """Returns the configured recipients for each station from .env config."""
+    """Returns the configured recipients for each station and branch from .env config."""
     try:
-        stations = ["CMB", "IND", "VNM", "DAC", "PKI", "NYC"]
+        dummy_emails = {
+            "management@dartglobal.com",
+            "ops@dartglobal.com",
+            "sales@dartglobal.com",
+            "admin@dartglobal.com",
+            "test@dartglobal.com",
+            "demo@dartglobal.com",
+            "dummy@dartglobal.com",
+            "user@dartglobal.com",
+        }
+        stations = ["CMB", "IND", "VNM", "DAC", "PKI", "NYC", "BLR", "MAA", "HYD", "AMD", "BOM", "PNQ", "DEL", "CCU"]
         result = {}
         for code in stations:
             emails_str = os.getenv(f"RECIPIENTS_{code}") or os.getenv("RECIPIENT_EMAILS", "")
-            emails = [email.strip() for email in emails_str.split(",") if email.strip()]
+            emails = [
+                email.strip() for email in emails_str.split(",")
+                if email.strip() and email.strip().lower() not in dummy_emails
+            ]
             result[code] = emails
         return {"status": "success", "data": result}
     except Exception as e:
@@ -974,40 +1121,14 @@ def send_report(req: ReportRequest):
             report_type=req.report_type or "weekly",
         )
         
-        station_label = "Global"
-        STATION_NAMES = {
-            "CMB": "Colombo (Sri Lanka)",
-            "IND": "India",
-            "VNM": "Viet Nam",
-            "DAC": "Bangladesh",
-            "PKI": "Pakistan",
-            "NYC": "United States",
-            "OTHER": "Corporate / Other"
-        }
-        if country_val and company_val:
-            codes = [c.strip() for c in company_val.split(",") if c.strip()]
-            resolved_names = [STATION_NAMES.get(c, c) for c in codes]
-            station_label = f"{country_val} ({', '.join(resolved_names)})"
-        elif country_val:
-            station_label = country_val
-        elif company_val:
-            codes = [c.strip() for c in company_val.split(",") if c.strip()]
-            resolved_names = [STATION_NAMES.get(c, c) for c in codes]
-            station_label = ", ".join(resolved_names)
-
-        date_range_label = ""
-        if req.start_date and req.end_date:
-            date_range_label = f" ({req.start_date} to {req.end_date})"
-
-        subject = f"Weekly Air Freight Tonnage Dashboard - {station_label}{date_range_label}"
-        body = (
-            f"Dear Recipient,\n\n"
-            f"Please find attached the Weekly Air Freight Tonnage and Revenue Performance Dashboard for {station_label} "
-            f"covering the period from {req.start_date or 'N/A'} to {req.end_date or 'N/A'}.\n\n"
-            f"Best Regards,\n"
-            f"BI Support Team"
+        subject, body, attachment_name = build_email_metadata(
+            start_date=req.start_date,
+            end_date=req.end_date,
+            country=country_val or req.country,
+            company_code=company_val or req.company_code,
+            branch=req.branch,
+            report_type=req.report_type or "weekly"
         )
-        attachment_name = f"Weekly_Tonnage_Report_{company_val or 'Global'}.pdf"
 
         send_pdf_via_graph(
             pdf_path=temp_pdf_path,
@@ -1130,10 +1251,19 @@ def execute_scheduled_report_job(schedule_id: str):
     # Process mode and cache custom SQL query if needed
     company_val = filters.get("company_code")
     country_val = filters.get("country")
+    branch_val = filters.get("branch")
     
-    if company_val and company_val != "all":
+    if (company_val and company_val != "all") or branch_val:
         mode = "custom-sql"
-        if company_val == "OTHER":
+        if branch_val or filters.get("report_level") == "branch":
+            custom_sql = generate_branchwise_sql(
+                country=country_val or "India",
+                company_code=company_val or "IND",
+                branch=branch_val or "BLR",
+                start_date=start_date,
+                end_date=end_date
+            )
+        elif company_val == "OTHER":
             custom_sql = f"""
 SELECT
     vt.ConsoleNumber AS Console_Number,
@@ -1257,36 +1387,14 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             report_type="monthly" if frequency == "monthly" else "weekly",
         )
         
-        station_label = "Global"
-        STATION_NAMES = {
-            "CMB": "Colombo (Sri Lanka)",
-            "IND": "India",
-            "VNM": "Viet Nam",
-            "DAC": "Bangladesh",
-            "PKI": "Pakistan",
-            "NYC": "United States",
-            "OTHER": "Corporate / Other"
-        }
-        if country_val and company_val:
-            codes = [c.strip() for c in company_val.split(",") if c.strip()]
-            resolved_names = [STATION_NAMES.get(c, c) for c in codes]
-            station_label = f"{country_val} ({', '.join(resolved_names)})"
-        elif country_val:
-            station_label = country_val
-        elif company_val:
-            codes = [c.strip() for c in company_val.split(",") if c.strip()]
-            resolved_names = [STATION_NAMES.get(c, c) for c in codes]
-            station_label = ", ".join(resolved_names)
-                
-        subject = f"Scheduled Air Freight Tonnage Dashboard - {station_label} ({start_date} to {end_date})"
-        body = (
-            f"Dear Recipient,\n\n"
-            f"Please find attached the scheduled Air Freight Tonnage and Revenue Performance Dashboard for {station_label} "
-            f"covering the period from {start_date} to {end_date}.\n\n"
-            f"Best Regards,\n"
-            f"BI Support Team"
+        subject, body, attachment_name = build_email_metadata(
+            start_date=start_date,
+            end_date=end_date,
+            country=country_val or filters.get("country"),
+            company_code=company_val or filters.get("company_code"),
+            branch=filters.get("branch"),
+            report_type="monthly" if frequency == "monthly" else "weekly"
         )
-        attachment_name = f"Scheduled_Tonnage_Report_{company_val or 'Global'}.pdf"
         
         send_pdf_via_graph(
             pdf_path=temp_pdf_path,

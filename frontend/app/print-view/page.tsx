@@ -253,26 +253,20 @@ function PrintViewContent() {
     fetchBranches();
   }, []);
 
+  const cleanCountryName = (str?: string): string => {
+    if (!str) return "";
+    return str
+      .replace(/^[A-Z]{2}\s*[-–:]?\s*/, "")
+      .replace(/^(LK|IN|VN|BD|PK|US)\s+/i, "")
+      .trim();
+  };
+
   const getStationLabel = () => {
-    if (branch) {
-      const branchCodes = branch.split(",");
-      const branchNames = branchCodes.map(code => {
-        const trimmed = code.trim();
-        const name = branchMap[trimmed] || trimmed;
-        return name
-          .replace("Dart Global Logistics", "DGL")
-          .replace("DGL SUPPLY CHAIN SOLUTIONS", "DGL SCS")
-          .replace(" (PVT) LTD", "")
-          .replace(" PVT LTD", "")
-          .replace(" LTD", "");
-      });
-      return branchNames.join(", ");
-    }
-
-    // Resolve from custom SQL if present
     let resolvedCompanyCode = companyCode;
-    let resolvedCountry = country;
+    let resolvedCountry = cleanCountryName(country);
+    let resolvedBranch = branch;
 
+    // Extract from custom SQL if present
     if (mode === "custom-sql" && sqlQuery) {
       const companyMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?Company\s*=\s*['"]([^'"]+)['"]/i);
       if (companyMatch && !resolvedCompanyCode) {
@@ -280,9 +274,24 @@ function PrintViewContent() {
       }
       const countryMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?ConLoadPortCountryName\s*=\s*['"]([^'"]+)['"]/i);
       if (countryMatch && !resolvedCountry) {
-        resolvedCountry = countryMatch[1];
+        resolvedCountry = cleanCountryName(countryMatch[1]);
+      }
+      const branchMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?Branch\s*=\s*['"]([^'"]+)['"]/i);
+      if (branchMatch && !resolvedBranch) {
+        resolvedBranch = branchMatch[1];
       }
     }
+
+    const BRANCH_FULL_NAMES: Record<string, string> = {
+      "BLR": "Bengaluru (BLR)",
+      "MAA": "Chennai (MAA)",
+      "HYD": "Hyderabad (HYD)",
+      "AMD": "Ahmedabad (AMD)",
+      "BOM": "Mumbai (BOM)",
+      "PNQ": "Pune (PNQ)",
+      "DEL": "Delhi (DEL)",
+      "CCU": "Kolkata (CCU)",
+    };
 
     const STATION_NAMES: Record<string, string> = {
       "CMB": "Colombo (Sri Lanka)",
@@ -294,8 +303,34 @@ function PrintViewContent() {
       "OTHER": "Corporate / Other"
     };
 
+    let branchStr = "";
+    if (resolvedBranch) {
+      const branchCodes = resolvedBranch.split(",");
+      const formattedBranches = branchCodes.map(code => {
+        const trimmed = code.trim();
+        const full = BRANCH_FULL_NAMES[trimmed] || branchMap[trimmed] || trimmed;
+        return full
+          .replace("Dart Global Logistics", "DGL")
+          .replace("DGL SUPPLY CHAIN SOLUTIONS", "DGL SCS")
+          .replace(" (PVT) LTD", "")
+          .replace(" PVT LTD", "")
+          .replace(" LTD", "");
+      });
+      branchStr = formattedBranches.join(", ");
+    }
+
+    if (branchStr) {
+      if (resolvedCountry) {
+        return `${resolvedCountry} - ${branchStr} Branch`;
+      }
+      return `${branchStr} Branch`;
+    }
+
     if (resolvedCompanyCode && resolvedCountry) {
       const resolvedCompany = STATION_NAMES[resolvedCompanyCode] || resolvedCompanyCode;
+      if (resolvedCompany.toLowerCase() === resolvedCountry.toLowerCase()) {
+        return resolvedCountry;
+      }
       return `${resolvedCountry} (${resolvedCompany})`;
     } else if (resolvedCompanyCode) {
       return STATION_NAMES[resolvedCompanyCode] || resolvedCompanyCode;
@@ -1367,11 +1402,6 @@ function PrintViewContent() {
                     <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
                   </div>
                   <div className="flex gap-1 justify-end items-center">
-                    {branch && (
-                      <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
-                        🏢 Branch: {branch}
-                      </span>
-                    )}
                     {destinationCountry && (
                       <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                         📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
@@ -1588,11 +1618,6 @@ function PrintViewContent() {
                     <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
                   </div>
                   <div className="flex gap-1 justify-end items-center">
-                    {branch && (
-                      <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
-                        🏢 Branch: {branch}
-                      </span>
-                    )}
                     {destinationCountry && (
                       <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                         📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
@@ -1704,11 +1729,6 @@ function PrintViewContent() {
                     <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
                   </div>
                   <div className="flex gap-1 justify-end items-center">
-                    {branch && (
-                      <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
-                        🏢 Branch: {branch}
-                      </span>
-                    )}
                     {destinationCountry && (
                       <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                         📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
@@ -1809,11 +1829,6 @@ function PrintViewContent() {
                   <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
                 </div>
                 <div className="flex gap-1 justify-end items-center">
-                  {branch && (
-                    <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
-                      🏢 Branch: {branch}
-                    </span>
-                  )}
                   {destinationCountry && (
                     <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                       📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
@@ -1946,11 +1961,6 @@ function PrintViewContent() {
                   <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
                 </div>
                 <div className="flex gap-1 justify-end items-center">
-                  {branch && (
-                    <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
-                      🏢 Branch: {branch}
-                    </span>
-                  )}
                   {destinationCountry && (
                     <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                       📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
@@ -2309,11 +2319,6 @@ function PrintViewContent() {
                 <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
               </div>
               <div className="flex gap-1 justify-end items-center">
-                {branch && (
-                  <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
-                    🏢 Branch: {branch}
-                  </span>
-                )}
                 {destinationCountry && (
                   <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                     📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
@@ -2688,11 +2693,6 @@ function PrintViewContent() {
                   <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
                 </div>
                 <div className="flex gap-1 justify-end items-center">
-                  {branch && (
-                    <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
-                      🏢 Branch: {branch}
-                    </span>
-                  )}
                   {destinationCountry && (
                     <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
                       📍 To: {destinationCity ? `${destinationCity}, ` : ""}{destinationCountry}
@@ -2826,11 +2826,6 @@ function PrintViewContent() {
                 <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
               </div>
               <div className="flex gap-1 justify-end items-center">
-                {branch && (
-                  <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
-                    🏢 Branch: {branch}
-                  </span>
-                )}
               </div>
             </div>
 
@@ -2889,11 +2884,6 @@ function PrintViewContent() {
                 <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
               </div>
               <div className="flex gap-1 justify-end items-center">
-                {branch && (
-                  <span className="text-[9px] uppercase font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded leading-none">
-                    🏢 Branch: {branch}
-                  </span>
-                )}
               </div>
             </div>
 
