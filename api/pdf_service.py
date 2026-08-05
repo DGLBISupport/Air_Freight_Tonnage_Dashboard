@@ -12,6 +12,39 @@ def is_port_open(port: int) -> bool:
         s.settimeout(0.3)
         return s.connect_ex(('127.0.0.1', port)) == 0
 
+import urllib.request
+
+def get_tonnage_base_url() -> str:
+    """
+    Detects which port the Tonnage Analysis frontend server is running on.
+    Probes candidate ports (3001, 3000, 3002, 8000, 8080) to ensure we connect
+    to the correct application even if another project is running on port 3000.
+    """
+    if os.environ.get("K_SERVICE"):
+        cloud_run_port = int(os.environ.get("PORT", 8080))
+        return f"http://127.0.0.1:{cloud_run_port}"
+
+    custom_url = os.getenv("FRONTEND_BASE_URL")
+    if custom_url:
+        return custom_url
+
+    # Check candidate ports in local dev
+    candidate_ports = [3001, 3000, 3002, 8000, 8080]
+    for port in candidate_ports:
+        if is_port_open(port):
+            try:
+                req = urllib.request.Request(f"http://127.0.0.1:{port}/print-view/", headers={"User-Agent": "HealthCheck"})
+                with urllib.request.urlopen(req, timeout=1.0) as resp:
+                    if resp.status == 200:
+                        print(f"Detected Tonnage Analysis print view on port {port}")
+                        return f"http://127.0.0.1:{port}"
+            except Exception:
+                pass
+
+    if is_port_open(3001):
+        return "http://127.0.0.1:3001"
+    return "http://127.0.0.1:3000"
+
 def generate_dashboard_pdf(
     output_path: str,
     start_date: str = None,
@@ -38,21 +71,7 @@ def generate_dashboard_pdf(
     Directs a headless browser to the frontend print view and captures a PDF.
     Supports both standard mode (with filters) and custom-sql mode (with SQL query).
     """
-    # On Cloud Run, Google sets the K_SERVICE env var automatically.
-    # FastAPI serves the static frontend on $PORT (default 8080) — no separate Next.js server.
-    # On local dev, the Next.js dev server runs on port 3000 or 3001.
-    if os.environ.get("K_SERVICE"):
-        # Running on Cloud Run — FastAPI serves both API and frontend
-        cloud_run_port = int(os.environ.get("PORT", 8080))
-        default_base_url = f"http://localhost:{cloud_run_port}"
-    else:
-        # Local development — detect which port Next.js is on
-        detected_port = 3000
-        if is_port_open(3001) and not is_port_open(3000):
-            detected_port = 3001
-        default_base_url = f"http://localhost:{detected_port}"
-
-    base_url = os.getenv("FRONTEND_BASE_URL", default_base_url)
+    base_url = get_tonnage_base_url()
     
     # Construct the print-optimized frontend URL with filter parameters
     params = {}
@@ -90,7 +109,7 @@ def generate_dashboard_pdf(
     params["report_type"] = report_type
     
     query_string = urllib.parse.urlencode(params)
-    target_url = f"{base_url}/print-view?{query_string}"
+    target_url = f"{base_url.rstrip('/')}/print-view/?{query_string}"
     
     import sys
     import asyncio
@@ -105,7 +124,10 @@ def generate_dashboard_pdf(
             # Navigate to the frontend UI with increased timeout for data loading
             # Use "load" instead of "networkidle" for faster response
             # Timeout set to 120 seconds (120000ms) for complex SQL queries
-            page.goto(target_url, wait_until="load", timeout=120000)
+            response = page.goto(target_url, wait_until="load", timeout=120000)
+            if response and response.status >= 400:
+                print(f"Playwright error: {target_url} returned HTTP {response.status}")
+                raise RuntimeError(f"Print view page returned HTTP {response.status} for URL: {target_url}")
             
             # Wait for the pdf-ready indicator to ensure data is loaded
             try:

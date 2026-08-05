@@ -264,9 +264,12 @@ def serve_root():
 @app.get("/print-view/", include_in_schema=False)
 def serve_print_view():
     """Serves the print-view page."""
-    page = os.path.join(_FRONTEND_BUILD, "print-view", "index.html")
-    if os.path.exists(page):
-        return FileResponse(page)
+    page1 = os.path.join(_FRONTEND_BUILD, "print-view", "index.html")
+    page2 = os.path.join(_FRONTEND_BUILD, "print-view.html")
+    if os.path.exists(page1):
+        return FileResponse(page1)
+    elif os.path.exists(page2):
+        return FileResponse(page2)
     return JSONResponse({"error": "print-view not found"}, status_code=404)
 
 

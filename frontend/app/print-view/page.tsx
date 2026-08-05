@@ -12,11 +12,9 @@ import { Badge } from "@/components/ui/badge";
 // In production: frontend & backend share the same Cloud Run host → use relative URLs.
 // In local dev: Next.js runs on :3000, backend on :8000 → use absolute localhost URL.
 const API = process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== "undefined" && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1"
-    ? ""   // Empty string = relative URL (same host as the page)
-    : (typeof window !== "undefined" && (window.location.port === "3000" || window.location.port === "3001")
-      ? "http://localhost:8000"
-      : ""));
+  (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+    ? (window.location.port !== "8000" ? "http://localhost:8000" : "")
+    : "");
 
 
 const formatCurrency = (val: number | null | undefined) => {
@@ -1175,12 +1173,24 @@ function PrintViewContent() {
       <style dangerouslySetInnerHTML={{
         __html: `
         @media print {
+          @page {
+            size: A4 landscape;
+            margin: 0;
+          }
+          body {
+            margin: 0;
+            padding: 0;
+          }
           * {
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
           span.rounded-full {
             display: inline-block !important;
+          }
+          .print-page-container {
+            break-inside: avoid !important;
+            page-break-inside: avoid !important;
           }
           .print-page-container:last-child {
             page-break-after: avoid !important;
@@ -1949,7 +1959,7 @@ function PrintViewContent() {
 
       {/* ── SECTION 3: MONTHLY VISUAL DASHBOARD / Trade Route Performance Summary (Page 3) ── */}
       {selectedSections.monthlyVisual && (
-        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
 
           {/* Print Header */}
           <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
@@ -2458,7 +2468,7 @@ function PrintViewContent() {
 
       {/* ── SECTION 5A: SECTOR TONNAGE DISTRIBUTION — CHART (Page at the end of the report) ── */}
       {selectedSections.sectorDistribution && (
-        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakBefore: "always", breakAfter: "page" }}>
+        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
           {/* Print Header */}
           <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
             <div className="flex items-center justify-between">
@@ -2516,7 +2526,7 @@ function PrintViewContent() {
 
       {/* ── SECTION 5B: SECTOR TONNAGE DISTRIBUTION — DETAIL TABLE (Page at the end of the report) ── */}
       {selectedSections.sectorDistribution && (
-        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakBefore: "always", breakAfter: "page" }}>
+        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
           {/* Print Header */}
           <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
             <div className="flex items-center justify-between">
