@@ -189,8 +189,25 @@ function PrintViewContent() {
     if (val == null || val === 0) return "-";
     return val.toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
   };
-  const startDate = searchParams?.get("start_date") || "2025-06-01";
-  const endDate = searchParams?.get("end_date") || "2026-05-21";
+  const getDefaultDateRange = () => {
+    const now = new Date();
+    const currentDay = now.getDay();
+    const daysToPrevMonday = (currentDay === 0 ? 6 : currentDay - 1) + 7;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - daysToPrevMonday);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const format = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    return {
+      start: format(monday),
+      end: format(sunday),
+    };
+  };
+
+  const defaultDates = getDefaultDateRange();
+  const startDate = searchParams?.get("start_date") || defaultDates.start;
+  const endDate = searchParams?.get("end_date") || defaultDates.end;
   const country = searchParams?.get("country") || "";
   const airline = searchParams?.get("airline") || "";
   const companyCode = searchParams?.get("company_code") || "";
@@ -203,6 +220,14 @@ function PrintViewContent() {
   const reportType = searchParams?.get("report_type") || "weekly";
 
   const getSqlDateRange = () => {
+    // 1. If explicit start_date and end_date were provided via query parameters, use them
+    const paramStart = searchParams?.get("start_date");
+    const paramEnd = searchParams?.get("end_date");
+    if (paramStart && paramEnd) {
+      return `${paramStart} to ${paramEnd}`;
+    }
+
+    // 2. If SQL query is available, extract date range from ETD filters in SQL
     if (sqlQuery) {
       const startMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*>\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
       const endMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*<\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
@@ -216,18 +241,23 @@ function PrintViewContent() {
       }
     }
 
-    if (data.length === 0) return "";
-    const dates = data.map(r => {
-      const etdVal = r.ETD ?? r.etd ?? r.etd_date;
-      if (!etdVal) return null;
-      const d = new Date(etdVal);
-      return isNaN(d.getTime()) ? null : d;
-    }).filter(Boolean) as Date[];
-    if (dates.length === 0) return "";
-    const minD = new Date(Math.min(...dates.map(d => d.getTime())));
-    const maxD = new Date(Math.max(...dates.map(d => d.getTime())));
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${minD.getFullYear()}-${pad(minD.getMonth() + 1)}-${pad(minD.getDate())} to ${maxD.getFullYear()}-${pad(maxD.getMonth() + 1)}-${pad(maxD.getDate())}`;
+    // 3. Fallback to min and max date from data rows if available
+    if (data.length > 0) {
+      const dates = data.map(r => {
+        const etdVal = r.ETD ?? r.etd ?? r.etd_date;
+        if (!etdVal) return null;
+        const d = new Date(etdVal);
+        return isNaN(d.getTime()) ? null : d;
+      }).filter(Boolean) as Date[];
+      if (dates.length > 0) {
+        const minD = new Date(Math.min(...dates.map(d => d.getTime())));
+        const maxD = new Date(Math.max(...dates.map(d => d.getTime())));
+        const pad = (n: number) => String(n).padStart(2, '0');
+        return `${minD.getFullYear()}-${pad(minD.getMonth() + 1)}-${pad(minD.getDate())} to ${maxD.getFullYear()}-${pad(maxD.getMonth() + 1)}-${pad(maxD.getDate())}`;
+      }
+    }
+
+    return startDate && endDate ? `${startDate} to ${endDate}` : "";
   };
 
   const [branchMap, setBranchMap] = useState<Record<string, string>>({});

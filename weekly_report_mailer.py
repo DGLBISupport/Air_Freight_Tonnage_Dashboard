@@ -230,6 +230,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         # 3. Construct parameters with custom-sql mode and query ID
         params = {
             "mode": "custom-sql",
+            "start_date": start_date,
+            "end_date": end_date,
             "include_weekly_visual": "true",
             "include_weekly_ledger": "true",
             "include_monthly_visual": "true",

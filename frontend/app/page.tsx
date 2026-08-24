@@ -406,9 +406,28 @@ export default function Dashboard() {
   // Derived dashboardMode from active section
   const dashboardMode = (activeSection === "weekly-reports" || activeSection === "monthly-reports") ? "custom-sql" : "standard";
 
+  // Dynamic default weekly date range (previous complete Monday - Sunday)
+  const getDefaultDateRange = () => {
+    const now = new Date();
+    const currentDay = now.getDay();
+    const daysToPrevMonday = (currentDay === 0 ? 6 : currentDay - 1) + 7;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - daysToPrevMonday);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const format = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    return {
+      start: format(monday),
+      end: format(sunday),
+    };
+  };
+
+  const defaultDateRange = getDefaultDateRange();
+
   // Filter States
-  const [startDate, setStartDate] = useState("2026-06-01");
-  const [endDate, setEndDate] = useState("2026-06-07");
+  const [startDate, setStartDate] = useState(defaultDateRange.start);
+  const [endDate, setEndDate] = useState(defaultDateRange.end);
 
   // Multi-Select filter selections
   const [selectedCompanies, setSelectedCompanies] = useState<string[]>([]);
@@ -1006,7 +1025,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
   // --- SQL SANDBOX CONSOLE STATES ---
   // Weekly SQL States
   const [isWeeklySqlConsoleOpen, setIsWeeklySqlConsoleOpen] = useState(false);
-  const [weeklySqlText, setWeeklySqlText] = useState(getStationwiseSqlTemplate("India", "IND", "2026-06-01", "2026-06-07"));
+  const [weeklySqlText, setWeeklySqlText] = useState(getStationwiseSqlTemplate("India", "IND", defaultDateRange.start, defaultDateRange.end));
 
   const [weeklySqlRecords, setWeeklySqlRecords] = useState<any[]>([]);
   const [weeklySqlWeeklyData, setWeeklySqlWeeklyData] = useState<any[]>([]);
@@ -1020,7 +1039,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
 
   // Monthly SQL States
   const [isMonthlySqlConsoleOpen, setIsMonthlySqlConsoleOpen] = useState(false);
-  const [monthlySqlText, setMonthlySqlText] = useState(getStationwiseSqlTemplate("India", "IND", "2026-05-01", "2026-06-01"));
+  const [monthlySqlText, setMonthlySqlText] = useState(getStationwiseSqlTemplate("India", "IND", defaultDateRange.start, defaultDateRange.end));
 
   const [monthlySqlRecords, setMonthlySqlRecords] = useState<any[]>([]);
   const [monthlySqlWeeklyData, setMonthlySqlWeeklyData] = useState<any[]>([]);

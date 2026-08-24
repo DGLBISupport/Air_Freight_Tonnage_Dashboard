@@ -367,7 +367,8 @@ def fetch_sector_carrier_distribution(
         data = get_sector_carrier_distribution(start_date, end_date, country, company_code)
         return {"status": "success", "data": data}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Warning in sector-carrier distribution: {e}")
+        return {"status": "success", "data": [], "warning": str(e)}
 
 
 # --- ENDPOINT 2: KPI Summary cards ---
@@ -705,14 +706,7 @@ def fetch_station_recipients():
     """Returns the configured recipients for each station and branch from .env config."""
     try:
         dummy_emails = {
-            "management@dartglobal.com",
-            "ops@dartglobal.com",
-            "sales@dartglobal.com",
-            "admin@dartglobal.com",
-            "test@dartglobal.com",
-            "demo@dartglobal.com",
-            "dummy@dartglobal.com",
-            "user@dartglobal.com",
+            "shashini.hq@dartglobal.com",
         }
         stations = ["CMB", "IND", "VNM", "DAC", "PKI", "NYC", "BLR", "MAA", "HYD", "AMD", "BOM", "PNQ", "DEL", "CCU"]
         result = {}
@@ -745,7 +739,14 @@ def fetch_org_users():
         client_secret = os.getenv("FETCH_AZURE_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET")
 
         if not all([tenant_id, client_id, client_secret]):
-            raise HTTPException(status_code=500, detail="Azure FETCH credentials not configured in .env")
+            return {
+                "status": "not_configured",
+                "total": 0,
+                "users": [],
+                "byDepartment": {},
+                "byJobTitle": {},
+                "detail": "Azure FETCH credentials not configured in environment."
+            }
 
         # Authenticate with MSAL
         msal_app = ConfidentialClientApplication(
@@ -1242,12 +1243,15 @@ def execute_scheduled_report_job(schedule_id: str):
     frequency = config["frequency"]
     filters = config["filters"]
     
-    # Check if custom dates are specified in filters, otherwise calculate relative dates
-    if filters.get("start_date") and filters.get("end_date"):
+    # For automated recurring reports (weekly, monthly, daily), dynamically calculate the current relative dates
+    # so every scheduled run executes with the latest timeframe instead of stale frozen dates.
+    start_date, end_date = get_report_dates_by_frequency(frequency)
+    
+    # Only use fixed dates if explicitly configured with use_fixed_dates flag
+    if filters.get("use_fixed_dates") and filters.get("start_date") and filters.get("end_date"):
         start_date = filters["start_date"]
         end_date = filters["end_date"]
-    else:
-        start_date, end_date = get_report_dates_by_frequency(frequency)
+        
     temp_pdf_path = f"outputs/scheduled_report_{uuid.uuid4().hex}.pdf"
     os.makedirs("outputs", exist_ok=True)
     
@@ -1352,6 +1356,20 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     else:
         mode = filters.get("mode", "standard")
         custom_sql = filters.get("custom_sql")
+        # Ensure any saved custom_sql has its ETD date range synchronized to current dynamic start_date & end_date
+        if custom_sql:
+            custom_sql = re.sub(
+                r"(?:[a-zA-Z0-9_]+\.)?ETD\s*>=\s*'[^']+'",
+                f"vt.ETD >= '{start_date}'",
+                custom_sql,
+                flags=re.IGNORECASE
+            )
+            custom_sql = re.sub(
+                r"(?:[a-zA-Z0-9_]+\.)?ETD\s*<=\s*'[^']+'",
+                f"vt.ETD <= '{end_date}'",
+                custom_sql,
+                flags=re.IGNORECASE
+            )
         
     query_id = None
     if mode == "custom-sql" and custom_sql:
@@ -1377,7 +1395,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             origin_city=filters.get("origin_city"),
             destination_country=filters.get("destination_country"),
             destination_city=filters.get("destination_city"),
-            branch=filters.get("branch"),
+            branch=branch_val or filters.get("branch"),
             include_weekly_visual=filters.get("include_weekly_visual", True),
             include_weekly_ledger=filters.get("include_weekly_ledger", True),
             include_monthly_visual=filters.get("include_monthly_visual", True),
@@ -1395,7 +1413,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             end_date=end_date,
             country=country_val or filters.get("country"),
             company_code=company_val or filters.get("company_code"),
-            branch=filters.get("branch"),
+            branch=branch_val or filters.get("branch"),
             report_type="monthly" if frequency == "monthly" else "weekly"
         )
         
