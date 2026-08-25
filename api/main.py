@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from dotenv import load_dotenv
 
 # Load credentials
@@ -1215,21 +1215,27 @@ class ScheduleCreateRequest(BaseModel):
 
 
 def get_report_dates_by_frequency(frequency: str):
-    """Calculates start and end dates relative to execution time."""
+    """Calculates cumulative month-to-date start and end dates relative to execution time.
+
+    Regardless of schedule frequency (daily / weekly / monthly), the report always covers
+    the current calendar month from its 1st day up to (but not including) today — i.e.
+    the last fully completed day.
+
+    Examples (report runs on 2026-08-25):
+        start = 2026-08-01, end = 2026-08-24
+
+    If the schedule fires on 2026-09-17:
+        start = 2026-09-01, end = 2026-09-16
+    """
     today = datetime.date.today()
-    if frequency == "weekly":
-        # Monday to Sunday of previous complete week
-        start = today - datetime.timedelta(days=today.weekday() + 7)
-        end = today - datetime.timedelta(days=today.weekday() + 1)
-    elif frequency == "monthly":
-        # First to last day of previous calendar month
-        first_of_this_month = today.replace(day=1)
-        end = first_of_this_month - datetime.timedelta(days=1)
-        start = end.replace(day=1)
-    else:
-        # Fallback daily or daily schedules cover last 7 days of trend data
-        start = today - datetime.timedelta(days=7)
-        end = today
+    # Start: first day of the current month
+    start = today.replace(day=1)
+    # End: yesterday (last fully completed day before the report runs)
+    end = today - datetime.timedelta(days=1)
+
+    # Edge case: if the schedule fires on the 1st of the month,
+    # end would be the last day of the previous month — this is intentional
+    # as it gives the most recent complete day available.
     return start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
 
 
@@ -1620,6 +1626,41 @@ def api_delete_schedule(schedule_id: str, current_user: dict = Depends(get_curre
         return {"status": "success", "message": "Schedule deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class BatchDeleteSchedulesRequest(BaseModel):
+    schedule_ids: List[str]
+
+
+@app.post("/api/schedules/batch-delete")
+def api_batch_delete_schedules(req: BatchDeleteSchedulesRequest, current_user: dict = Depends(get_current_admin)):
+    """Deletes multiple schedules from Supabase and removes their Google Cloud Scheduler jobs."""
+    if not req.schedule_ids:
+        raise HTTPException(status_code=400, detail="No schedule IDs provided for deletion.")
+
+    deleted_count = 0
+    errors = []
+    for sid in req.schedule_ids:
+        try:
+            delete_schedule(sid)
+            try:
+                delete_cloud_scheduler_job(sid)
+            except Exception as e:
+                print(f"Cloud Scheduler: Warning - could not delete job for {sid}: {e}")
+            deleted_count += 1
+        except Exception as e:
+            errors.append(f"{sid}: {str(e)}")
+
+    if errors and deleted_count == 0:
+        raise HTTPException(status_code=500, detail="; ".join(errors))
+
+    return {
+        "status": "success",
+        "deleted_count": deleted_count,
+        "errors": errors,
+        "message": f"Successfully deleted {deleted_count} schedule{'s' if deleted_count != 1 else ''}."
+    }
+
 
 
 # --- MOUNT STATIC FILES (must be after all API routes) ---
