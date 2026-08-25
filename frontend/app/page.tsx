@@ -9,7 +9,7 @@ import {
   Calendar, Globe, Plane, RefreshCw, Send, X, ArrowUpRight, ArrowDownRight, Layers, FileText, Printer, CheckCircle,
   Users, Check, ChevronDown, Plus, Settings, Eye, Info, LayoutDashboard, BarChart2, ShieldCheck,
   Mail, Clock, UserCheck, Trash2, Bell, Database, Lock, ChevronRight, Play, AlertTriangle, AlertCircle,
-  Building2, MapPin
+  Building2, MapPin, Search, Sparkles, SlidersHorizontal, Filter, PlusCircle, CheckSquare, SendHorizontal, AtSign, Zap, CheckCheck
 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
@@ -22,11 +22,11 @@ import {
 } from "@/components/ui/select";
 import { createClient } from "@supabase/supabase-js";
 
-// In production: frontend & backend share the same Cloud Run host → use relative URLs.
-// In local dev: Next.js runs on :3000, backend on :8000 → use absolute localhost URL.
+// In production / Cloud Run / Playwright container: frontend & backend share the same host/port → use relative URLs ("").
+// In local development: Next.js dev server runs on :3000/:3001/:3002, backend on :8000 → use absolute localhost URL.
 const API = process.env.NEXT_PUBLIC_API_URL ||
   (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
-    ? (window.location.port !== "8000" ? "http://localhost:8000" : "")
+    ? (window.location.port.startsWith("300") ? "http://localhost:8000" : "")
     : "");
 
 
@@ -83,33 +83,53 @@ interface StationInfo {
   name: string;
   envVar: string;
   matchCountries: string[];
-  flag: string;
+  isCustom?: boolean;
 }
 
-const STATIONS: StationInfo[] = [
-  { code: "CMB", country: "Sri Lanka", name: "Colombo (Sri Lanka)", envVar: "RECIPIENTS_CMB", matchCountries: ["sri lanka"], flag: "" },
-  { code: "IND", country: "India", name: "India", envVar: "RECIPIENTS_IND", matchCountries: ["india"], flag: "" },
-  { code: "VNM", country: "Viet Nam", name: "Viet Nam", envVar: "RECIPIENTS_VNM", matchCountries: ["viet nam", "vietnam"], flag: "" },
-  { code: "DAC", country: "Bangladesh", name: "Bangladesh", envVar: "RECIPIENTS_DAC", matchCountries: ["bangladesh"], flag: "" },
-  { code: "PKI", country: "Pakistan", name: "Pakistan", envVar: "RECIPIENTS_PKI", matchCountries: ["pakistan"], flag: "" },
-  { code: "NYC", country: "United States", name: "United States", envVar: "RECIPIENTS_NYC", matchCountries: ["united states", "usa", "us", "new york"], flag: "" },
+interface BranchInfo {
+  code: string;
+  name: string;
+  city?: string;
+  isCustom?: boolean;
+}
+
+const DEFAULT_STATIONS: StationInfo[] = [
+  { code: "CMB", country: "Sri Lanka", name: "Colombo (Sri Lanka)", envVar: "RECIPIENTS_CMB", matchCountries: ["sri lanka", "colombo"] },
+  { code: "IND", country: "India", name: "India (National)", envVar: "RECIPIENTS_IND", matchCountries: ["india"] },
+  { code: "VNM", country: "Viet Nam", name: "Viet Nam", envVar: "RECIPIENTS_VNM", matchCountries: ["viet nam", "vietnam", "hanoi", "hcm"] },
+  { code: "DAC", country: "Bangladesh", name: "Bangladesh", envVar: "RECIPIENTS_DAC", matchCountries: ["bangladesh", "dhaka"] },
+  { code: "PKI", country: "Pakistan", name: "Pakistan", envVar: "RECIPIENTS_PKI", matchCountries: ["pakistan", "karachi", "lahore"] },
+  { code: "NYC", country: "United States", name: "United States (NYC)", envVar: "RECIPIENTS_NYC", matchCountries: ["united states", "usa", "us", "new york", "nyc"] },
 ];
 
-const getStationForUser = (user: any) => {
+const STATIONS: StationInfo[] = DEFAULT_STATIONS;
+
+const DEFAULT_BRANCH_OPTIONS: BranchInfo[] = [
+  { code: "BLR", name: "Bengaluru (BLR)", city: "Bengaluru" },
+  { code: "MAA", name: "Chennai (MAA)", city: "Chennai" },
+  { code: "HYD", name: "Hyderabad (HYD)", city: "Hyderabad" },
+  { code: "AMD", name: "Ahmedabad (AMD)", city: "Ahmedabad" },
+  { code: "BOM", name: "Mumbai (BOM)", city: "Mumbai" },
+  { code: "PNQ", name: "Pune (PNQ)", city: "Pune" },
+  { code: "DEL", name: "Delhi (DEL)", city: "Delhi" },
+  { code: "CCU", name: "Kolkata (CCU)", city: "Kolkata" },
+];
+
+const getStationForUser = (user: any, activeStations: StationInfo[] = DEFAULT_STATIONS) => {
   const userCountry = (user.country || "").toLowerCase().trim();
   const userOffice = (user.officeLocation || "").toLowerCase().trim();
   const userEmail = (user.email || "").toLowerCase().trim();
 
   // Try country first
-  for (const station of STATIONS) {
-    if (station.matchCountries.some(c => userCountry.includes(c))) {
+  for (const station of activeStations) {
+    if (station.matchCountries && station.matchCountries.some(c => userCountry.includes(c))) {
       return station.code;
     }
   }
 
   // Try officeLocation
-  for (const station of STATIONS) {
-    if (station.matchCountries.some(c => userOffice.includes(c)) || userOffice.includes(station.code.toLowerCase())) {
+  for (const station of activeStations) {
+    if ((station.matchCountries && station.matchCountries.some(c => userOffice.includes(c))) || userOffice.includes(station.code.toLowerCase())) {
       return station.code;
     }
   }
@@ -550,6 +570,130 @@ export default function Dashboard() {
       setDbUsersLoading(false);
     }
   }, [supabase]);
+
+  // --- DYNAMIC STATIONS, BRANCHES & RECIPIENTS FROM SUPABASE ---
+  const [stationsLoading, setStationsLoading] = useState(false);
+  const [stationsList, setStationsList] = useState<StationInfo[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("dgl_custom_stations");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          const merged = [...DEFAULT_STATIONS];
+          parsed.forEach((p: StationInfo) => {
+            if (!merged.some(m => m.code === p.code)) merged.push(p);
+          });
+          return merged;
+        }
+      } catch (e) { }
+    }
+    return DEFAULT_STATIONS;
+  });
+
+  const [branchesList, setBranchesList] = useState<BranchInfo[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("dgl_custom_branches");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          const merged = [...DEFAULT_BRANCH_OPTIONS];
+          parsed.forEach((p: BranchInfo) => {
+            if (!merged.some(m => m.code === p.code)) merged.push(p);
+          });
+          return merged;
+        }
+      } catch (e) { }
+    }
+    return DEFAULT_BRANCH_OPTIONS;
+  });
+
+  const fetchStationsAndBranches = useCallback(async (client?: any) => {
+    const supabaseClient = client || supabase;
+    if (!supabaseClient) return;
+    setStationsLoading(true);
+    try {
+      // 1. Fetch Stations Table
+      const { data: dbStations, error: sErr } = await supabaseClient
+        .from("stations")
+        .select("*")
+        .eq("is_active", true)
+        .order("code", { ascending: true });
+
+      if (!sErr && dbStations && dbStations.length > 0) {
+        const formattedStations: StationInfo[] = dbStations.map((s: any) => ({
+          code: s.code,
+          name: s.name,
+          country: s.country || s.name,
+          envVar: s.env_var || `RECIPIENTS_${s.code}`,
+          matchCountries: Array.isArray(s.match_countries) ? s.match_countries : (s.country ? [s.country.toLowerCase()] : []),
+          isCustom: false,
+        }));
+        setStationsList(formattedStations);
+      }
+
+      // 2. Fetch Branches Table
+      const { data: dbBranches, error: bErr } = await supabaseClient
+        .from("branches")
+        .select("*")
+        .eq("is_active", true)
+        .order("name", { ascending: true });
+
+      if (!bErr && dbBranches && dbBranches.length > 0) {
+        const formattedBranches: BranchInfo[] = dbBranches.map((b: any) => ({
+          code: b.code,
+          name: b.name,
+          city: b.city || b.name,
+          isCustom: false,
+        }));
+        setBranchesList(formattedBranches);
+      }
+
+      // 3. Fetch Station and Branch Recipients directly
+      const [stationRecRes, branchRecRes] = await Promise.allSettled([
+        supabaseClient.from("station_recipients").select("station_code, email"),
+        supabaseClient.from("branch_recipients").select("branch_code, email"),
+      ]);
+
+      const recipientMap: Record<string, string[]> = {};
+
+      if (stationRecRes.status === "fulfilled" && stationRecRes.value.data) {
+        stationRecRes.value.data.forEach((r: any) => {
+          const code = r.station_code;
+          const email = (r.email || "").toLowerCase().trim();
+          if (!email || DUMMY_EMAILS.includes(email)) return;
+          if (!recipientMap[code]) recipientMap[code] = [];
+          if (!recipientMap[code].includes(email)) recipientMap[code].push(email);
+        });
+      }
+
+      if (branchRecRes.status === "fulfilled" && branchRecRes.value.data) {
+        branchRecRes.value.data.forEach((r: any) => {
+          const code = r.branch_code;
+          const email = (r.email || "").toLowerCase().trim();
+          if (!email || DUMMY_EMAILS.includes(email)) return;
+          if (!recipientMap[code]) recipientMap[code] = [];
+          if (!recipientMap[code].includes(email)) recipientMap[code].push(email);
+        });
+      }
+
+      if (Object.keys(recipientMap).length > 0) {
+        setStationSelectedEmails(prev => ({ ...prev, ...recipientMap }));
+      }
+    } catch (err) {
+      console.warn("Could not dynamically load stations/branches (fallback active):", err);
+    } finally {
+      setStationsLoading(false);
+    }
+  }, [supabase]);
+
+  // Initial load when Supabase client becomes ready
+  useEffect(() => {
+    if (supabase) {
+      fetchDbUsers(supabase);
+      fetchStationsAndBranches(supabase);
+    }
+  }, [supabase, fetchDbUsers, fetchStationsAndBranches]);
+
   // --- ORG USERS FROM AZURE AD ---
   const [orgUsers, setOrgUsers] = useState<any[]>([]);
   const [orgUsersByDept, setOrgUsersByDept] = useState<Record<string, any[]>>({});
@@ -557,6 +701,24 @@ export default function Dashboard() {
   const [orgUsersError, setOrgUsersError] = useState("");
   const [deptFilter, setDeptFilter] = useState("__all__");
   const [userSearch, setUserSearch] = useState("");
+
+  const [stationFilterSearch, setStationFilterSearch] = useState("");
+  const [stationFilterStatus, setStationFilterStatus] = useState<"all" | "configured" | "unconfigured">("all");
+  const [branchFilterSearch, setBranchFilterSearch] = useState("");
+  const [branchFilterStatus, setBranchFilterStatus] = useState<"all" | "configured" | "unconfigured">("all");
+
+  // Add Station Modal state
+  const [isAddStationModalOpen, setIsAddStationModalOpen] = useState(false);
+  const [newStationCode, setNewStationCode] = useState("");
+  const [newStationName, setNewStationName] = useState("");
+  const [newStationCountry, setNewStationCountry] = useState("");
+  const [newStationKeywords, setNewStationKeywords] = useState("");
+
+  // Add Branch Modal state
+  const [isAddBranchModalOpen, setIsAddBranchModalOpen] = useState(false);
+  const [newBranchCode, setNewBranchCode] = useState("");
+  const [newBranchName, setNewBranchName] = useState("");
+  const [newBranchCity, setNewBranchCity] = useState("");
 
   // Station-wise state
   const [stationSelectedEmails, setStationSelectedEmails] = useState<Record<string, string[]>>({});
@@ -591,7 +753,7 @@ export default function Dashboard() {
         }
       });
 
-      STATIONS.forEach((s) => {
+      stationsList.forEach((s) => {
         if (stationGroups[s.code]) {
           updated[s.code] = stationGroups[s.code].filter(e => !DUMMY_EMAILS.includes(e.toLowerCase().trim()));
         } else if (dbUsers.length > 0) {
@@ -601,7 +763,7 @@ export default function Dashboard() {
         }
       });
 
-      BRANCH_OPTIONS.forEach((b) => {
+      branchesList.forEach((b) => {
         if (stationGroups[b.code]) {
           updated[b.code] = stationGroups[b.code].filter(e => !DUMMY_EMAILS.includes(e.toLowerCase().trim()));
         } else {
@@ -617,7 +779,7 @@ export default function Dashboard() {
 
       return updated;
     });
-  }, [dbUsers, stationDefaultRecipients]);
+  }, [dbUsers, stationDefaultRecipients, stationsList, branchesList]);
 
   // --- SCHEDULER STATES ---
   const [schedules, setSchedules] = useState<any[]>([]);
@@ -1815,6 +1977,30 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     setStationEmailSuccess(prev => ({ ...prev, [stationCode]: null }));
 
     try {
+      const isBranch = branchesList.some(b => b.code === stationCode);
+
+      // Save directly into relational recipient tables
+      try {
+        if (isBranch) {
+          await supabase.from("branch_recipients").delete().eq("branch_code", stationCode);
+          if (emails.length > 0) {
+            await supabase.from("branch_recipients").insert(
+              emails.map(e => ({ branch_code: stationCode, email: e }))
+            );
+          }
+        } else {
+          await supabase.from("station_recipients").delete().eq("station_code", stationCode);
+          if (emails.length > 0) {
+            await supabase.from("station_recipients").insert(
+              emails.map(e => ({ station_code: stationCode, email: e }))
+            );
+          }
+        }
+      } catch (recErr) {
+        console.warn("Relational recipient save note (table may not exist yet):", recErr);
+      }
+
+      // Maintain user table sync for backward compatibility
       const currentDbUsers = dbUsers.filter(u => {
         if (!u.station) return false;
         const stations = u.station.split(",").map((s: string) => s.trim()).filter(Boolean);
@@ -1828,31 +2014,25 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
       const getNewStationValue = (email: string, targetStation: string, removing: boolean) => {
         const stations: string[] = [];
 
-        STATIONS.forEach(s => {
+        stationsList.forEach(s => {
           const isTarget = s.code === targetStation;
           const isSelected = (stationSelectedEmails[s.code] || []).includes(email);
           if (isTarget) {
-            if (!removing) {
-              stations.push(s.code);
-            }
-          } else {
-            if (isSelected) {
-              stations.push(s.code);
-            }
+            if (!removing) stations.push(s.code);
+          } else if (isSelected) {
+            stations.push(s.code);
           }
         });
 
-        const isTargetOther = targetStation === "OTHER";
-        const isSelectedOther = (stationSelectedEmails["OTHER"] || []).includes(email);
-        if (isTargetOther) {
-          if (!removing) {
-            stations.push("OTHER");
+        branchesList.forEach(b => {
+          const isTarget = b.code === targetStation;
+          const isSelected = (stationSelectedEmails[b.code] || []).includes(email);
+          if (isTarget) {
+            if (!removing) stations.push(b.code);
+          } else if (isSelected) {
+            stations.push(b.code);
           }
-        } else {
-          if (isSelectedOther) {
-            stations.push("OTHER");
-          }
-        }
+        });
 
         return stations.length > 0 ? stations.join(", ") : "Global";
       };
@@ -1901,12 +2081,157 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
       }, 3000);
 
       fetchDbUsers(supabase);
+      fetchStationsAndBranches(supabase);
     } catch (err: any) {
       console.error("Failed to save station recipients", err);
       setStationEmailStatus(prev => ({ ...prev, [stationCode]: `Error: ${err.message || "Failed to save"}` }));
       setStationEmailSuccess(prev => ({ ...prev, [stationCode]: false }));
     } finally {
       setStationEmailLoading(prev => ({ ...prev, [stationCode]: false }));
+    }
+  };
+
+  const handleAddNewStation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = newStationCode.trim().toUpperCase();
+    const name = newStationName.trim();
+    const country = newStationCountry.trim();
+    if (!code || !name) {
+      alert("Please enter both a Station Code and Station Name.");
+      return;
+    }
+    if (stationsList.some(s => s.code.toUpperCase() === code)) {
+      alert(`Station with code "${code}" already exists.`);
+      return;
+    }
+    const keywords = (newStationKeywords || country || name).toLowerCase().split(",").map(k => k.trim()).filter(Boolean);
+    const newStation: StationInfo = {
+      code,
+      name,
+      country: country || name,
+      envVar: `RECIPIENTS_${code}`,
+      matchCountries: keywords.length > 0 ? keywords : [country.toLowerCase()],
+      isCustom: true,
+    };
+    const updated = [...stationsList, newStation];
+    setStationsList(updated);
+
+    if (supabase) {
+      try {
+        await supabase.from("stations").insert({
+          code,
+          name,
+          country: country || name,
+          env_var: `RECIPIENTS_${code}`,
+          match_countries: keywords.length > 0 ? keywords : [country.toLowerCase()],
+          is_active: true,
+        });
+      } catch (err) {
+        console.warn("Could not insert station into Supabase table:", err);
+      }
+    }
+
+    if (typeof window !== "undefined") {
+      try {
+        const customOnly = updated.filter(s => s.isCustom);
+        localStorage.setItem("dgl_custom_stations", JSON.stringify(customOnly));
+      } catch (e) { }
+    }
+    setNewStationCode("");
+    setNewStationName("");
+    setNewStationCountry("");
+    setNewStationKeywords("");
+    setIsAddStationModalOpen(false);
+  };
+
+  const handleRemoveStation = async (code: string) => {
+    if (!confirm(`Are you sure you want to remove the station "${code}"?`)) return;
+    const updated = stationsList.filter(s => s.code !== code);
+    setStationsList(updated);
+
+    if (supabase) {
+      try {
+        await supabase.from("stations").delete().eq("code", code);
+        await supabase.from("station_recipients").delete().eq("station_code", code);
+      } catch (err) {
+        console.warn("Could not delete station from Supabase table:", err);
+      }
+    }
+
+    if (typeof window !== "undefined") {
+      try {
+        const customOnly = updated.filter(s => s.isCustom);
+        localStorage.setItem("dgl_custom_stations", JSON.stringify(customOnly));
+      } catch (e) { }
+    }
+  };
+
+  const handleAddNewBranch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = newBranchCode.trim().toUpperCase();
+    const name = newBranchName.trim();
+    const city = newBranchCity.trim();
+    if (!code || !name) {
+      alert("Please enter both a Branch Code and Branch Name.");
+      return;
+    }
+    if (branchesList.some(b => b.code.toUpperCase() === code)) {
+      alert(`Branch with code "${code}" already exists.`);
+      return;
+    }
+    const newBranch: BranchInfo = {
+      code,
+      name,
+      city: city || name,
+      isCustom: true,
+    };
+    const updated = [...branchesList, newBranch];
+    setBranchesList(updated);
+
+    if (supabase) {
+      try {
+        await supabase.from("branches").insert({
+          code,
+          name,
+          city: city || name,
+          is_active: true,
+        });
+      } catch (err) {
+        console.warn("Could not insert branch into Supabase table:", err);
+      }
+    }
+
+    if (typeof window !== "undefined") {
+      try {
+        const customOnly = updated.filter(b => b.isCustom);
+        localStorage.setItem("dgl_custom_branches", JSON.stringify(customOnly));
+      } catch (e) { }
+    }
+    setNewBranchCode("");
+    setNewBranchName("");
+    setNewBranchCity("");
+    setIsAddBranchModalOpen(false);
+  };
+
+  const handleRemoveBranch = async (code: string) => {
+    if (!confirm(`Are you sure you want to remove the branch "${code}"?`)) return;
+    const updated = branchesList.filter(b => b.code !== code);
+    setBranchesList(updated);
+
+    if (supabase) {
+      try {
+        await supabase.from("branches").delete().eq("code", code);
+        await supabase.from("branch_recipients").delete().eq("branch_code", code);
+      } catch (err) {
+        console.warn("Could not delete branch from Supabase table:", err);
+      }
+    }
+
+    if (typeof window !== "undefined") {
+      try {
+        const customOnly = updated.filter(b => b.isCustom);
+        localStorage.setItem("dgl_custom_branches", JSON.stringify(customOnly));
+      } catch (e) { }
     }
   };
 
@@ -2975,8 +3300,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             }
                           }}
                           className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm ${(activeSection === "weekly-reports" ? weeklyReportLevel : monthlyReportLevel) === "station"
-                              ? "bg-[#3182CE] text-white"
-                              : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                            ? "bg-[#3182CE] text-white"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                             }`}
                         >
                           Stationwise Reports
@@ -2993,8 +3318,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             }
                           }}
                           className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm ${(activeSection === "weekly-reports" ? weeklyReportLevel : monthlyReportLevel) === "branch"
-                              ? "bg-[#3182CE] text-white"
-                              : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                            ? "bg-[#3182CE] text-white"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                             }`}
                         >
                           Branchwise Reports
@@ -3268,469 +3593,597 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
               <div className="grid grid-cols-12 gap-6">
 
                 {/* ── LEFT COL: Recipients Management ── */}
-                <div className="col-span-12 space-y-6">
+                <div className="col-span-12 space-y-5">
 
                   {/* Admin Sub-Tabs */}
-                  <div className="flex border-b border-slate-200 mb-4">
-                    <button
-                      onClick={() => setAdminTab("stations")}
-                      className={`pb-2.5 px-4 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${adminTab === "stations" ? "border-[#3182CE] text-[#3182CE]" : "border-transparent text-slate-400 hover:text-slate-600"}`}
-                    >
-                      <Globe className="w-3.5 h-3.5" />
-                      Station-wise Mailers
-                    </button>
-                    <button
-                      onClick={() => setAdminTab("branches")}
-                      className={`pb-2.5 px-4 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${adminTab === "branches" ? "border-[#3182CE] text-[#3182CE] font-extrabold" : "border-transparent text-slate-400 hover:text-slate-600"}`}
-                    >
-                      <Building2 className="w-3.5 h-3.5" />
-                      Branch-wise Mailers
-                    </button>
-                    <button
-                      onClick={() => setAdminTab("global")}
-                      className={`pb-2.5 px-4 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${adminTab === "global" ? "border-[#3182CE] text-[#3182CE]" : "border-transparent text-slate-400 hover:text-slate-600"}`}
-                    >
-                      <Users className="w-3.5 h-3.5" />
-                      Global Mailer
-                    </button>
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-2.5 mb-5">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setAdminTab("stations")}
+                        className={`pb-2 px-3 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${adminTab === "stations" ? "border-sky-500 text-sky-700 bg-sky-50/50 rounded-t-lg" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+                      >
+                        <Globe className="w-3.5 h-3.5 text-sky-500" />
+                        <span>Station-wise Mailers</span>
+                        <span className={`text-[9.5px] px-1.5 py-0.2 rounded-full font-extrabold ${adminTab === "stations" ? "bg-amber-100 text-amber-800 border border-amber-200" : "bg-slate-100 text-slate-500"}`}>
+                          {stationsList.length}
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => setAdminTab("branches")}
+                        className={`pb-2 px-3 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${adminTab === "branches" ? "border-sky-500 text-sky-700 bg-sky-50/50 rounded-t-lg" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+                      >
+                        <Building2 className="w-3.5 h-3.5 text-sky-500" />
+                        <span>Branch-wise Mailers</span>
+                        <span className={`text-[9.5px] px-1.5 py-0.2 rounded-full font-extrabold ${adminTab === "branches" ? "bg-amber-100 text-amber-800 border border-amber-200" : "bg-slate-100 text-slate-500"}`}>
+                          {branchesList.length}
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => setAdminTab("global")}
+                        className={`pb-2 px-3 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${adminTab === "global" ? "border-sky-500 text-sky-700 bg-sky-50/50 rounded-t-lg" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+                      >
+                        <Users className="w-3.5 h-3.5 text-sky-500" />
+                        <span>Global Mailer</span>
+                      </button>
+                    </div>
+
+                    {/* Action on the right */}
+                    <div className="flex items-center gap-2">
+                      {adminTab === "stations" && (
+                        <Button
+                          onClick={() => setIsAddStationModalOpen(true)}
+                          className="h-7.5 px-3 bg-sky-500 hover:bg-sky-600 text-white text-[11px] font-bold rounded-lg shadow-xs flex items-center gap-1 transition-all"
+                        >
+                          <PlusCircle className="w-3 h-3" />
+                          <span>Add Station</span>
+                        </Button>
+                      )}
+                      {adminTab === "branches" && (
+                        <Button
+                          onClick={() => setIsAddBranchModalOpen(true)}
+                          className="h-7.5 px-3 bg-sky-500 hover:bg-sky-600 text-white text-[11px] font-bold rounded-lg shadow-xs flex items-center gap-1 transition-all"
+                        >
+                          <PlusCircle className="w-3 h-3" />
+                          <span>+ Add Branch</span>
+                        </Button>
+                      )}
+                    </div>
                   </div>
 
                   {adminTab === "stations" ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {STATIONS.map((station) => {
-                        const stationUsers = orgUsers.filter(u => getStationForUser(u) === station.code);
-                        const selectedEmailsForStation = stationSelectedEmails[station.code] || [];
-                        const isSending = stationEmailLoading[station.code] || false;
-                        const statusMessage = stationEmailStatus[station.code] || "";
-                        const sendSuccess = stationEmailSuccess[station.code];
-                        const showUsers = expandedStation[station.code] || false;
-                        const customInput = stationCustomEmailInput[station.code] || "";
+                    <div className="space-y-4">
+                      {/* Station Filter & Search Toolbar */}
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 bg-white p-2.5 rounded-xl border border-sky-100 shadow-2xs">
+                        <div className="relative flex-1 min-w-[220px]">
+                          <Search className="w-3.5 h-3.5 text-sky-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                          <Input
+                            placeholder="Search station by name, country, or code (e.g. CMB, IND, NYC)..."
+                            value={stationFilterSearch}
+                            onChange={(e) => setStationFilterSearch(e.target.value)}
+                            className="pl-8 pr-3 h-8 bg-slate-50/80 border-slate-200 rounded-lg text-[11px] text-slate-700 placeholder:text-slate-400 focus:bg-white focus:border-sky-400"
+                          />
+                          {stationFilterSearch && (
+                            <button
+                              onClick={() => setStationFilterSearch("")}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
 
-                        return (
-                          <div key={station.code} className="admin-card p-5 flex flex-col justify-between border border-slate-200 bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200">
-                            <div>
-                              <div className="flex items-center justify-between pb-3 border-b border-[#EDF2F7] mb-3">
-                                <div className="flex items-center gap-2">
-                                  <Globe className="w-4 h-4 text-[#3182CE]" />
-                                  <div>
-                                    <h4 className="text-xs font-bold text-[#1A202C]">{station.name}</h4>
-                                    <span className="text-[9px] font-extrabold text-[#3182CE] bg-[#EBF8FF] px-1.5 py-0.5 rounded uppercase">{station.code}</span>
-                                  </div>
-                                </div>
-                                <span className="text-[10px] text-slate-400 font-semibold bg-slate-50 px-2 py-0.5 rounded border">
-                                  {selectedEmailsForStation.length} Recipient(s)
-                                </span>
-                              </div>
+                        <div className="flex items-center gap-1 shrink-0 overflow-x-auto pb-0.5 sm:pb-0">
+                          <button
+                            onClick={() => setStationFilterStatus("all")}
+                            className={`text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all ${stationFilterStatus === "all" ? "bg-sky-500 text-white shadow-2xs" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                          >
+                            All ({stationsList.length})
+                          </button>
+                          <button
+                            onClick={() => setStationFilterStatus("configured")}
+                            className={`text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all ${stationFilterStatus === "configured" ? "bg-amber-400 text-slate-900 shadow-2xs font-extrabold" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                          >
+                            Configured ({stationsList.filter(s => (stationSelectedEmails[s.code] || []).length > 0).length})
+                          </button>
+                          <button
+                            onClick={() => setStationFilterStatus("unconfigured")}
+                            className={`text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all ${stationFilterStatus === "unconfigured" ? "bg-slate-700 text-white shadow-2xs" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                          >
+                            Pending ({stationsList.filter(s => (stationSelectedEmails[s.code] || []).length === 0).length})
+                          </button>
+                        </div>
+                      </div>
 
-                              {/* Search AD Users to Add */}
-                              <div className="relative mb-3">
-                                <Input
-                                  placeholder="Search users to add..."
-                                  value={stationUserSearch[station.code] || ""}
-                                  onChange={(e) => setStationUserSearch(prev => ({ ...prev, [station.code]: e.target.value }))}
-                                  className="h-8 text-[10px] bg-slate-50 border-slate-200 rounded-lg text-slate-700 placeholder:text-slate-400"
-                                />
-                                {(stationUserSearch[station.code] || "").trim() && (
-                                  <div className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg z-10 divide-y divide-slate-100">
-                                    {orgUsers
-                                      .filter((u) => {
-                                        const query = (stationUserSearch[station.code] || "").toLowerCase().trim();
-                                        return (u.displayName || "").toLowerCase().includes(query) || (u.email || "").toLowerCase().includes(query);
-                                      })
-                                      .slice(0, 5)
-                                      .map((u) => {
-                                        const isSelected = selectedEmailsForStation.includes(u.email);
-                                        return (
-                                          <div
-                                            key={u.email}
-                                            onClick={() => {
-                                              if (!isSelected) {
-                                                setStationSelectedEmails(prev => ({
-                                                  ...prev,
-                                                  [station.code]: [...(prev[station.code] || []), u.email]
-                                                }));
-                                              }
-                                              setStationUserSearch(prev => ({ ...prev, [station.code]: "" }));
-                                            }}
-                                            className="p-2 text-[10px] hover:bg-slate-50 cursor-pointer flex justify-between items-center"
-                                          >
-                                            <div className="truncate pr-2">
-                                              <p className="font-semibold text-slate-700 truncate">{u.displayName}</p>
-                                              <p className="text-[8px] text-slate-400 truncate">{u.email}</p>
-                                            </div>
-                                            {isSelected && <span className="text-[8px] text-[#3182CE] font-bold">Added</span>}
-                                          </div>
-                                        );
-                                      })}
-                                    {orgUsers.filter((u) => {
-                                      const query = (stationUserSearch[station.code] || "").toLowerCase().trim();
-                                      return (u.displayName || "").toLowerCase().includes(query) || (u.email || "").toLowerCase().includes(query);
-                                    }).length === 0 && (
-                                        <p className="p-2 text-[9px] text-slate-400 italic">No matching users found</p>
-                                      )}
-                                  </div>
-                                )}
-                              </div>
+                      {/* 4 to 5 Boxes per Row Grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
 
-                              {/* Recipient summary / badge cloud */}
-                              {selectedEmailsForStation.length > 0 && (
-                                <div className="mb-4">
-                                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Recipients List</p>
-                                  <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto p-1.5 border border-dashed border-slate-200 rounded-lg bg-slate-50">
-                                    {selectedEmailsForStation.map((email) => (
-                                      <Badge
-                                        key={email}
-                                        className="bg-white hover:bg-slate-50 text-slate-750 border border-[#CBD5E0] font-semibold text-[8px] px-1.5 py-0.5 rounded-full flex items-center gap-1 shadow-sm"
-                                      >
-                                        <span className="truncate max-w-[100px]">{email}</span>
-                                        <X
-                                          className="w-2 h-2 text-slate-400 hover:text-slate-605 cursor-pointer shrink-0"
-                                          onClick={() => setStationSelectedEmails(prev => ({
-                                            ...prev,
-                                            [station.code]: (prev[station.code] || []).filter(x => x !== email)
-                                          }))}
-                                        />
-                                      </Badge>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
+                        {/* ── STATION CARDS ── */}
+                        {stationsList
+                          .filter((station) => {
+                            const q = stationFilterSearch.toLowerCase().trim();
+                            const matchesSearch = !q ||
+                              station.name.toLowerCase().includes(q) ||
+                              station.code.toLowerCase().includes(q) ||
+                              station.country.toLowerCase().includes(q);
 
-                            {/* Card Bottom / Sending controls */}
-                            <div className="border-t border-[#EDF2F7] pt-3 mt-auto">
-                              <div className="flex gap-2 mb-2">
-                                <Button
-                                  onClick={() => handleSaveStationRecipients(station.code)}
-                                  disabled={isSending}
-                                  className="flex-1 h-8 bg-emerald-600 hover:bg-emerald-700 text-white text-[10.5px] font-bold rounded-lg flex items-center justify-center gap-1.5 shadow"
-                                >
-                                  Save Recipients
-                                </Button>
-                              </div>
-                              <Button
-                                onClick={() => handleSendStationEmail(station.code, station.country)}
-                                disabled={selectedEmailsForStation.length === 0 || isSending}
-                                className="w-full h-8 bg-[#3182CE] hover:bg-[#2B6CB0] disabled:opacity-50 text-white text-[10.5px] font-bold rounded-lg flex items-center justify-center gap-1.5 shadow"
+                            const recipientCount = (stationSelectedEmails[station.code] || []).length;
+                            if (stationFilterStatus === "configured") return matchesSearch && recipientCount > 0;
+                            if (stationFilterStatus === "unconfigured") return matchesSearch && recipientCount === 0;
+                            return matchesSearch;
+                          })
+                          .map((station) => {
+                            const selectedEmailsForStation = stationSelectedEmails[station.code] || [];
+                            const isSending = stationEmailLoading[station.code] || false;
+                            const statusMessage = stationEmailStatus[station.code] || "";
+                            const sendSuccess = stationEmailSuccess[station.code];
+                            const customInput = stationCustomEmailInput[station.code] || "";
+
+                            const matchingOrgUsers = orgUsers.filter(u => getStationForUser(u, stationsList) === station.code);
+                            const unaddedOrgUsers = matchingOrgUsers.filter(u => !selectedEmailsForStation.includes(u.email));
+
+                            return (
+                              <div
+                                key={station.code}
+                                className="bg-white rounded-2xl border border-sky-100/90 hover:border-sky-300 hover:shadow-md transition-all duration-200 p-3.5 flex flex-col justify-between relative overflow-hidden group shadow-2xs"
                               >
-                                {isSending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                                Send {station.code} Report
-                              </Button>
+                                <div>
+                                  {/* Card Header */}
+                                  <div className="flex items-start justify-between pb-2.5 border-b border-slate-100 mb-2.5">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <div className="w-7 h-7 rounded-xl bg-sky-50 border border-sky-100 flex items-center justify-center text-sky-600 shrink-0">
+                                        <Globe className="w-3.5 h-3.5" />
+                                      </div>
+                                      <div className="min-w-0">
+                                        <h4 className="text-xs font-bold text-slate-800 truncate leading-snug">
+                                          {station.name}
+                                        </h4>
+                                        <div className="flex items-center gap-1 mt-0.5">
+                                          <span className="text-[8.5px] font-extrabold text-sky-700 bg-sky-50 border border-sky-200/80 px-1.5 py-0.2 rounded uppercase">
+                                            {station.code}
+                                          </span>
+                                          <span className="text-[9px] text-slate-400 truncate">
+                                            {station.country}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
 
-                              {statusMessage && (
-                                <div className={`mt-2 p-1.5 rounded text-[9.5px] leading-snug flex items-center justify-between ${sendSuccess === true ? "bg-emerald-50 text-emerald-800 border border-emerald-100" : "bg-blue-50 text-blue-800 border border-blue-100"}`}>
-                                  <span className="truncate pr-1">{statusMessage}</span>
-                                  <button
-                                    onClick={() => setStationEmailStatus(prev => ({ ...prev, [station.code]: "" }))}
-                                    className="hover:opacity-70 text-slate-400 shrink-0"
-                                  >
-                                    <X className="w-3 h-3" />
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-
-                      {/* Other / Corporate card */}
-                      {(() => {
-                        const otherUsers = orgUsers.filter(u => getStationForUser(u) === "OTHER");
-                        const stationCode = "OTHER";
-                        const selectedEmailsForStation = stationSelectedEmails[stationCode] || [];
-                        const showUsers = expandedStation[stationCode] || false;
-                        const customInput = stationCustomEmailInput[stationCode] || "";
-                        const isSending = stationEmailLoading[stationCode] || false;
-                        const statusMessage = stationEmailStatus[stationCode] || "";
-                        const sendSuccess = stationEmailSuccess[stationCode];
-
-                        return (
-                          <div className="admin-card p-5 flex flex-col justify-between border border-slate-200 bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200">
-                            <div>
-                              <div className="flex items-center justify-between pb-3 border-b border-[#EDF2F7] mb-3">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xl">🏢</span>
-                                  <div>
-                                    <h4 className="text-xs font-bold text-[#1A202C]">Other / Corporate</h4>
-                                    <span className="text-[9px] font-extrabold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded uppercase">OTHER</span>
-                                  </div>
-                                </div>
-                                <span className="text-[10px] text-slate-400 font-semibold bg-slate-50 px-2 py-0.5 rounded border">
-                                  {selectedEmailsForStation.length} Recipient(s)
-                                </span>
-                              </div>
-
-                              {/* Search AD Users to Add */}
-                              <div className="relative mb-3">
-                                <Input
-                                  placeholder="Search users to add..."
-                                  value={stationUserSearch[stationCode] || ""}
-                                  onChange={(e) => setStationUserSearch(prev => ({ ...prev, [stationCode]: e.target.value }))}
-                                  className="h-8 text-[10px] bg-slate-50 border-slate-200 rounded-lg text-slate-700 placeholder:text-slate-400"
-                                />
-                                {(stationUserSearch[stationCode] || "").trim() && (
-                                  <div className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg z-10 divide-y divide-slate-100">
-                                    {orgUsers
-                                      .filter((u) => {
-                                        const query = (stationUserSearch[stationCode] || "").toLowerCase().trim();
-                                        return (u.displayName || "").toLowerCase().includes(query) || (u.email || "").toLowerCase().includes(query);
-                                      })
-                                      .slice(0, 5)
-                                      .map((u) => {
-                                        const isSelected = selectedEmailsForStation.includes(u.email);
-                                        return (
-                                          <div
-                                            key={u.email}
-                                            onClick={() => {
-                                              if (!isSelected) {
-                                                setStationSelectedEmails(prev => ({
-                                                  ...prev,
-                                                  [stationCode]: [...(prev[stationCode] || []), u.email]
-                                                }));
-                                              }
-                                              setStationUserSearch(prev => ({ ...prev, [stationCode]: "" }));
-                                            }}
-                                            className="p-2 text-[10px] hover:bg-slate-50 cursor-pointer flex justify-between items-center"
-                                          >
-                                            <div className="truncate pr-2">
-                                              <p className="font-semibold text-slate-700 truncate">{u.displayName}</p>
-                                              <p className="text-[8px] text-slate-400 truncate">{u.email}</p>
-                                            </div>
-                                            {isSelected && <span className="text-[8px] text-[#3182CE] font-bold">Added</span>}
-                                          </div>
-                                        );
-                                      })}
-                                    {orgUsers.filter((u) => {
-                                      const query = (stationUserSearch[stationCode] || "").toLowerCase().trim();
-                                      return (u.displayName || "").toLowerCase().includes(query) || (u.email || "").toLowerCase().includes(query);
-                                    }).length === 0 && (
-                                        <p className="p-2 text-[9px] text-slate-400 italic">No matching users found</p>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      {selectedEmailsForStation.length > 0 ? (
+                                        <span className="inline-flex items-center gap-1 text-[8.5px] font-bold text-amber-900 bg-amber-50 border border-amber-200/90 px-2 py-0.5 rounded-full shadow-2xs">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                                          {selectedEmailsForStation.length} Active
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-0.5 text-[8.5px] font-medium text-slate-400 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded-full">
+                                          0 Recipient
+                                        </span>
                                       )}
+                                      {station.isCustom && (
+                                        <button
+                                          onClick={() => handleRemoveStation(station.code)}
+                                          title="Remove custom station"
+                                          className="text-slate-300 hover:text-rose-500 p-0.5 transition-colors"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
-                                )}
-                              </div>
 
-                              {selectedEmailsForStation.length > 0 && (
-                                <div className="mb-4">
-                                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Recipients List</p>
-                                  <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto p-1.5 border border-dashed border-slate-200 rounded-lg bg-slate-50">
-                                    {selectedEmailsForStation.map((email) => (
-                                      <Badge
-                                        key={email}
-                                        className="bg-white hover:bg-slate-50 text-slate-750 border border-[#CBD5E0] font-semibold text-[8px] px-1.5 py-0.5 rounded-full flex items-center gap-1 shadow-sm"
-                                      >
-                                        <span className="truncate max-w-[100px]">{email}</span>
-                                        <X
-                                          className="w-2 h-2 text-slate-400 hover:text-slate-600 cursor-pointer shrink-0"
-                                          onClick={() => setStationSelectedEmails(prev => ({
-                                            ...prev,
-                                            [stationCode]: (prev[stationCode] || []).filter(x => x !== email)
-                                          }))}
+                                  {/* Search Active Directory Users */}
+                                  <div className="relative mb-2">
+                                    <Search className="w-2.5 h-2.5 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" />
+                                    <Input
+                                      placeholder={`Search AD for ${station.code}...`}
+                                      value={stationUserSearch[station.code] || ""}
+                                      onChange={(e) => setStationUserSearch(prev => ({ ...prev, [station.code]: e.target.value }))}
+                                      className="h-7 pl-6 text-[10px] bg-slate-50/80 border-slate-200 rounded-lg text-slate-700 placeholder:text-slate-400 focus:bg-white focus:border-sky-400"
+                                    />
+                                    {(stationUserSearch[station.code] || "").trim() && (
+                                      <div className="absolute left-0 right-0 mt-1 max-h-40 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-20 divide-y divide-slate-100">
+                                        {orgUsers
+                                          .filter((u) => {
+                                            const query = (stationUserSearch[station.code] || "").toLowerCase().trim();
+                                            return (u.displayName || "").toLowerCase().includes(query) || (u.email || "").toLowerCase().includes(query);
+                                          })
+                                          .slice(0, 4)
+                                          .map((u) => {
+                                            const isSelected = selectedEmailsForStation.includes(u.email);
+                                            return (
+                                              <div
+                                                key={u.email}
+                                                onClick={() => {
+                                                  if (!isSelected) {
+                                                    setStationSelectedEmails(prev => ({
+                                                      ...prev,
+                                                      [station.code]: [...(prev[station.code] || []), u.email]
+                                                    }));
+                                                  }
+                                                  setStationUserSearch(prev => ({ ...prev, [station.code]: "" }));
+                                                }}
+                                                className="p-1.5 text-[9.5px] hover:bg-sky-50 cursor-pointer flex justify-between items-center transition-colors"
+                                              >
+                                                <div className="truncate pr-1">
+                                                  <p className="font-bold text-slate-700 truncate">{u.displayName}</p>
+                                                  <p className="text-[8px] text-slate-400 truncate">{u.email}</p>
+                                                </div>
+                                                {isSelected ? (
+                                                  <span className="text-[8px] text-emerald-600 font-bold">Added</span>
+                                                ) : (
+                                                  <span className="text-[8px] text-sky-600 font-bold bg-sky-50 px-1 py-0.2 rounded">+ Add</span>
+                                                )}
+                                              </div>
+                                            );
+                                          })}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Custom Email Input */}
+                                  <div className="mb-2.5">
+                                    <div className="flex gap-1">
+                                      <div className="relative flex-1">
+                                        <AtSign className="w-2.5 h-2.5 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" />
+                                        <Input
+                                          placeholder="Enter email..."
+                                          value={customInput}
+                                          onChange={(e) => setStationCustomEmailInput(prev => ({ ...prev, [station.code]: e.target.value }))}
+                                          onKeyDown={(e) => {
+                                            if (e.key === "Enter") {
+                                              e.preventDefault();
+                                              handleAddStationCustomEmail(station.code);
+                                            }
+                                          }}
+                                          className="h-7 pl-6 text-[10px] bg-slate-50/80 border-slate-200 rounded-lg text-slate-700 focus:bg-white focus:border-sky-400"
                                         />
-                                      </Badge>
-                                    ))}
+                                      </div>
+                                      <Button
+                                        size="sm"
+                                        onClick={() => handleAddStationCustomEmail(station.code)}
+                                        className="h-7 px-2.5 bg-sky-500 hover:bg-sky-600 text-white text-[10px] font-bold rounded-lg shrink-0"
+                                      >
+                                        + Add
+                                      </Button>
+                                    </div>
                                   </div>
+
+                                  {/* Recipient Chips */}
+                                  {selectedEmailsForStation.length > 0 ? (
+                                    <div className="mb-3">
+                                      <div className="flex items-center justify-between mb-1">
+                                        <p className="text-[8.5px] font-bold text-slate-400 uppercase tracking-wider">
+                                          Recipients ({selectedEmailsForStation.length})
+                                        </p>
+                                        <button
+                                          onClick={() => setStationSelectedEmails(prev => ({ ...prev, [station.code]: [] }))}
+                                          className="text-[8px] text-slate-400 hover:text-rose-500"
+                                        >
+                                          Clear
+                                        </button>
+                                      </div>
+                                      <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto p-1.5 border border-dashed border-sky-200/80 rounded-lg bg-sky-50/30">
+                                        {selectedEmailsForStation.map((email) => (
+                                          <Badge
+                                            key={email}
+                                            className="bg-white hover:bg-sky-50 text-slate-700 border border-sky-200 font-semibold text-[8px] px-1.5 py-0.2 rounded-md flex items-center gap-1 shadow-2xs"
+                                          >
+                                            <span className="truncate max-w-[95px]">{email}</span>
+                                            <X
+                                              className="w-2 h-2 text-slate-400 hover:text-rose-500 cursor-pointer shrink-0"
+                                              onClick={() => setStationSelectedEmails(prev => ({
+                                                ...prev,
+                                                [station.code]: (prev[station.code] || []).filter(x => x !== email)
+                                              }))}
+                                            />
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="mb-3 p-1.5 border border-dashed border-slate-200 rounded-lg bg-slate-50/50 text-center">
+                                      <p className="text-[8.5px] text-slate-400 italic">No recipients added</p>
+                                      {unaddedOrgUsers.length > 0 && (
+                                        <button
+                                          onClick={() => {
+                                            setStationSelectedEmails(prev => ({
+                                              ...prev,
+                                              [station.code]: [...(prev[station.code] || []), ...unaddedOrgUsers.map(u => u.email)]
+                                            }));
+                                          }}
+                                          className="mt-0.5 text-[8px] font-bold text-sky-600 hover:underline"
+                                        >
+                                          + Add {unaddedOrgUsers.length} AD users
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
-                              )}
-                            </div>
 
-                            <div className="border-t border-[#EDF2F7] pt-3 mt-auto">
-                              <p className="text-[8.5px] text-slate-400 italic mb-2">Note: Corporate reports are generated without country/station filters.</p>
-                              <div className="flex gap-2 mb-2">
-                                <Button
-                                  onClick={() => handleSaveStationRecipients("OTHER")}
-                                  disabled={isSending}
-                                  className="flex-1 h-8 bg-emerald-600 hover:bg-emerald-700 text-white text-[10.5px] font-bold rounded-lg flex items-center justify-center gap-1.5 shadow"
-                                >
-                                  Save Recipients
-                                </Button>
-                              </div>
-                              <Button
-                                onClick={() => handleSendStationEmail("OTHER", "")}
-                                disabled={selectedEmailsForStation.length === 0 || isSending}
-                                className="w-full h-8 bg-slate-500 hover:bg-slate-600 disabled:opacity-50 text-white text-[10.5px] font-bold rounded-lg flex items-center justify-center gap-1.5 shadow"
-                              >
-                                {isSending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                                Send Corporate Report
-                              </Button>
-
-                              {statusMessage && (
-                                <div className={`mt-2 p-1.5 rounded text-[9.5px] leading-snug flex items-center justify-between ${sendSuccess === true ? "bg-emerald-50 text-emerald-800 border border-emerald-100" : "bg-blue-50 text-blue-800 border border-blue-100"}`}>
-                                  <span className="truncate pr-1">{statusMessage}</span>
-                                  <button
-                                    onClick={() => setStationEmailStatus(prev => ({ ...prev, [stationCode]: "" }))}
-                                    className="hover:opacity-70 text-slate-400 shrink-0"
+                                {/* Card Bottom / Actions: Light Yellow & Light Blue */}
+                                <div className="border-t border-slate-100 pt-2.5 mt-auto space-y-1.5">
+                                  <Button
+                                    onClick={() => handleSaveStationRecipients(station.code)}
+                                    disabled={isSending}
+                                    className="w-full h-7 bg-amber-300 hover:bg-amber-400 text-slate-900 font-bold text-[10px] rounded-lg flex items-center justify-center gap-1 shadow-2xs transition-all"
                                   >
-                                    <X className="w-3 h-3" />
-                                  </button>
+                                    <Check className="w-2.5 h-2.5 text-slate-900" />
+                                    Save Recipients
+                                  </Button>
+                                  <Button
+                                    onClick={() => handleSendStationEmail(station.code, station.country)}
+                                    disabled={selectedEmailsForStation.length === 0 || isSending}
+                                    className="w-full h-7.5 bg-sky-500 hover:bg-sky-600 disabled:opacity-50 text-white text-[10.5px] font-bold rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition-all"
+                                  >
+                                    {isSending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <SendHorizontal className="w-3 h-3" />}
+                                    Send {station.code} Report
+                                  </Button>
+
+                                  {statusMessage && (
+                                    <div className={`p-1.5 rounded-lg text-[9px] leading-snug flex items-center justify-between ${sendSuccess === true ? "bg-amber-50 text-amber-900 border border-amber-200" : "bg-sky-50 text-sky-900 border border-sky-200"}`}>
+                                      <span className="truncate pr-1">{statusMessage}</span>
+                                      <button
+                                        onClick={() => setStationEmailStatus(prev => ({ ...prev, [station.code]: "" }))}
+                                        className="hover:opacity-70 text-slate-400 shrink-0"
+                                      >
+                                        <X className="w-2.5 h-2.5" />
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })()}
+                              </div>
+                            );
+                          })}
+
+                      </div>
                     </div>
                   ) : adminTab === "branches" ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {BRANCH_OPTIONS.map((branch) => {
-                        const selectedEmailsForBranch = stationSelectedEmails[branch.code] || [];
-                        const isSending = stationEmailLoading[branch.code] || false;
-                        const statusMessage = stationEmailStatus[branch.code] || "";
-                        const sendSuccess = stationEmailSuccess[branch.code];
-                        const customInput = stationCustomEmailInput[branch.code] || "";
+                    <div className="space-y-4">
+                      {/* Branch Filter & Search Toolbar */}
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 bg-white p-2.5 rounded-xl border border-sky-100 shadow-2xs">
+                        <div className="relative flex-1 min-w-[220px]">
+                          <Search className="w-3.5 h-3.5 text-sky-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                          <Input
+                            placeholder="Search branch by name, code, or city (e.g. BLR, Chennai, BOM)..."
+                            value={branchFilterSearch}
+                            onChange={(e) => setBranchFilterSearch(e.target.value)}
+                            className="pl-8 pr-3 h-8 bg-slate-50/80 border-slate-200 rounded-lg text-[11px] text-slate-700 placeholder:text-slate-400 focus:bg-white focus:border-sky-400"
+                          />
+                          {branchFilterSearch && (
+                            <button
+                              onClick={() => setBranchFilterSearch("")}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
 
-                        return (
-                          <div key={branch.code} className="admin-card p-5 flex flex-col justify-between border border-slate-200 bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200">
-                            <div>
-                              <div className="flex items-center justify-between pb-3 border-b border-[#EDF2F7] mb-3">
-                                <div className="flex items-center gap-2">
-                                  <Building2 className="w-4 h-4 text-[#3182CE]" />
-                                  <div>
-                                    <h4 className="text-xs font-bold text-[#1A202C]">{branch.name}</h4>
-                                    <span className="text-[9px] font-extrabold text-[#3182CE] bg-[#EBF8FF] px-1.5 py-0.5 rounded uppercase border border-[#BEE3F8]">{branch.code} Branch</span>
-                                  </div>
-                                </div>
-                                <span className="text-[10px] text-[#3182CE] font-semibold bg-[#EBF8FF]/60 px-2 py-0.5 rounded border border-[#BEE3F8]">
-                                  {selectedEmailsForBranch.length} Recipient(s)
-                                </span>
-                              </div>
+                        <div className="flex items-center gap-1 shrink-0 overflow-x-auto pb-0.5 sm:pb-0">
+                          <button
+                            onClick={() => setBranchFilterStatus("all")}
+                            className={`text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all ${branchFilterStatus === "all" ? "bg-sky-500 text-white shadow-2xs" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                          >
+                            All ({branchesList.length})
+                          </button>
+                          <button
+                            onClick={() => setBranchFilterStatus("configured")}
+                            className={`text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all ${branchFilterStatus === "configured" ? "bg-amber-400 text-slate-900 shadow-2xs font-extrabold" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                          >
+                            Configured ({branchesList.filter(b => (stationSelectedEmails[b.code] || []).length > 0).length})
+                          </button>
+                          <button
+                            onClick={() => setBranchFilterStatus("unconfigured")}
+                            className={`text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all ${branchFilterStatus === "unconfigured" ? "bg-slate-700 text-white shadow-2xs" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                          >
+                            Pending ({branchesList.filter(b => (stationSelectedEmails[b.code] || []).length === 0).length})
+                          </button>
+                        </div>
+                      </div>
 
-                              {/* Search AD Users to Add */}
-                              <div className="relative mb-3">
-                                <Input
-                                  placeholder="Search users to add..."
-                                  value={stationUserSearch[branch.code] || ""}
-                                  onChange={(e) => setStationUserSearch(prev => ({ ...prev, [branch.code]: e.target.value }))}
-                                  className="h-8 text-[10px] bg-slate-50 border-slate-200 rounded-lg text-slate-700 placeholder:text-slate-400 focus:border-[#3182CE]"
-                                />
-                                {(stationUserSearch[branch.code] || "").trim() && (
-                                  <div className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg z-10 divide-y divide-slate-100">
-                                    {orgUsers
-                                      .filter((u) => {
-                                        const query = (stationUserSearch[branch.code] || "").toLowerCase().trim();
-                                        return (u.displayName || "").toLowerCase().includes(query) || (u.email || "").toLowerCase().includes(query);
-                                      })
-                                      .slice(0, 5)
-                                      .map((u) => {
-                                        const isSelected = selectedEmailsForBranch.includes(u.email);
-                                        return (
-                                          <div
-                                            key={u.email}
-                                            onClick={() => {
-                                              if (!isSelected) {
-                                                setStationSelectedEmails(prev => ({
-                                                  ...prev,
-                                                  [branch.code]: [...(prev[branch.code] || []), u.email]
-                                                }));
-                                              }
-                                              setStationUserSearch(prev => ({ ...prev, [branch.code]: "" }));
-                                            }}
-                                            className="p-2 text-[10px] hover:bg-[#EBF8FF] cursor-pointer flex justify-between items-center"
-                                          >
-                                            <div className="truncate pr-2">
-                                              <p className="font-semibold text-slate-700 truncate">{u.displayName}</p>
-                                              <p className="text-[8px] text-slate-400 truncate">{u.email}</p>
-                                            </div>
-                                            {isSelected && <span className="text-[8px] text-[#3182CE] font-bold">Added</span>}
-                                          </div>
-                                        );
-                                      })}
-                                    {orgUsers.filter((u) => {
-                                      const query = (stationUserSearch[branch.code] || "").toLowerCase().trim();
-                                      return (u.displayName || "").toLowerCase().includes(query) || (u.email || "").toLowerCase().includes(query);
-                                    }).length === 0 && (
-                                        <p className="p-2 text-[9px] text-slate-400 italic">No matching users found</p>
-                                      )}
-                                  </div>
-                                )}
-                              </div>
+                      {/* 4 to 5 Boxes per Row Branch Cards Grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
+                        {branchesList
+                          .filter((branch) => {
+                            const q = branchFilterSearch.toLowerCase().trim();
+                            const matchesSearch = !q ||
+                              branch.name.toLowerCase().includes(q) ||
+                              branch.code.toLowerCase().includes(q) ||
+                              (branch.city || "").toLowerCase().includes(q);
 
-                              {/* Recipient summary / badge cloud */}
-                              {selectedEmailsForBranch.length > 0 && (
-                                <div className="mb-4">
-                                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Recipients List</p>
-                                  <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto p-1.5 border border-dashed border-slate-200 rounded-lg bg-slate-50">
-                                    {selectedEmailsForBranch.map((email) => (
-                                      <Badge
-                                        key={email}
-                                        className="bg-white hover:bg-slate-50 text-slate-750 border border-[#CBD5E0] font-semibold text-[8px] px-1.5 py-0.5 rounded-full flex items-center gap-1 shadow-sm"
-                                      >
-                                        <span className="truncate max-w-[110px]">{email}</span>
-                                        <X
-                                          className="w-2 h-2 text-slate-400 hover:text-slate-600 cursor-pointer shrink-0"
-                                          onClick={() => setStationSelectedEmails(prev => ({
-                                            ...prev,
-                                            [branch.code]: (prev[branch.code] || []).filter(x => x !== email)
-                                          }))}
-                                        />
-                                      </Badge>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
+                            const recipientCount = (stationSelectedEmails[branch.code] || []).length;
+                            if (branchFilterStatus === "configured") return matchesSearch && recipientCount > 0;
+                            if (branchFilterStatus === "unconfigured") return matchesSearch && recipientCount === 0;
+                            return matchesSearch;
+                          })
+                          .map((branch) => {
+                            const selectedEmailsForBranch = stationSelectedEmails[branch.code] || [];
+                            const isSending = stationEmailLoading[branch.code] || false;
+                            const statusMessage = stationEmailStatus[branch.code] || "";
+                            const sendSuccess = stationEmailSuccess[branch.code];
+                            const customInput = stationCustomEmailInput[branch.code] || "";
 
-                              {/* Add Custom Email Input */}
-                              <div className="mb-3">
-                                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Add Custom Email</p>
-                                <div className="flex gap-1.5">
-                                  <Input
-                                    placeholder="Enter recipient email..."
-                                    value={customInput}
-                                    onChange={(e) => setStationCustomEmailInput(prev => ({ ...prev, [branch.code]: e.target.value }))}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") {
-                                        e.preventDefault();
-                                        handleAddStationCustomEmail(branch.code);
-                                      }
-                                    }}
-                                    className="h-8 text-[10px] bg-slate-50 border-slate-200 rounded-lg text-slate-700"
-                                  />
-                                  <Button
-                                    size="sm"
-                                    onClick={() => handleAddStationCustomEmail(branch.code)}
-                                    className="h-8 px-2.5 bg-[#3182CE] hover:bg-[#2B6CB0] text-white text-[10px] font-bold rounded-lg shrink-0"
-                                  >
-                                    Add
-                                  </Button>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Card Bottom / Sending controls */}
-                            <div className="border-t border-[#EDF2F7] pt-3 mt-auto">
-                              <div className="flex gap-2 mb-2">
-                                <Button
-                                  onClick={() => handleSaveStationRecipients(branch.code)}
-                                  disabled={isSending}
-                                  className="flex-1 h-8 bg-emerald-600 hover:bg-emerald-700 text-white text-[10.5px] font-bold rounded-lg flex items-center justify-center gap-1.5 shadow"
-                                >
-                                  Save Recipients
-                                </Button>
-                              </div>
-                              <Button
-                                onClick={() => handleSendBranchEmail(branch.code, branch.name)}
-                                disabled={selectedEmailsForBranch.length === 0 || isSending}
-                                className="w-full h-8 bg-[#3182CE] hover:bg-[#2B6CB0] disabled:opacity-50 text-white text-[10.5px] font-bold rounded-lg flex items-center justify-center gap-1.5 shadow"
+                            return (
+                              <div
+                                key={branch.code}
+                                className="bg-white rounded-2xl border border-sky-100/90 hover:border-sky-300 hover:shadow-md transition-all duration-200 p-3.5 flex flex-col justify-between relative overflow-hidden group shadow-2xs"
                               >
-                                {isSending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                                Send {branch.code} Branch Report
-                              </Button>
+                                <div>
+                                  {/* Branch Card Header */}
+                                  <div className="flex items-start justify-between pb-2.5 border-b border-slate-100 mb-2.5">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <div className="w-7 h-7 rounded-xl bg-sky-50 border border-sky-100 flex items-center justify-center text-sky-600 shrink-0">
+                                        <Building2 className="w-3.5 h-3.5" />
+                                      </div>
+                                      <div className="min-w-0">
+                                        <h4 className="text-xs font-bold text-slate-800 truncate leading-snug">
+                                          {branch.name}
+                                        </h4>
+                                        <span className="text-[8.5px] font-extrabold text-sky-700 bg-sky-50 border border-sky-200/80 px-1.5 py-0.2 rounded uppercase">
+                                          {branch.code} Branch
+                                        </span>
+                                      </div>
+                                    </div>
 
-                              {statusMessage && (
-                                <div className={`mt-2 p-1.5 rounded text-[9.5px] leading-snug flex items-center justify-between ${sendSuccess === true ? "bg-emerald-50 text-emerald-800 border border-emerald-100" : "bg-blue-50 text-blue-800 border border-blue-100"}`}>
-                                  <span className="truncate pr-1">{statusMessage}</span>
-                                  <button
-                                    onClick={() => setStationEmailStatus(prev => ({ ...prev, [branch.code]: "" }))}
-                                    className="hover:opacity-70 text-slate-400 shrink-0"
-                                  >
-                                    <X className="w-3 h-3" />
-                                  </button>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      {selectedEmailsForBranch.length > 0 ? (
+                                        <span className="inline-flex items-center gap-1 text-[8.5px] font-bold text-amber-900 bg-amber-50 border border-amber-200/90 px-2 py-0.5 rounded-full shadow-2xs">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                                          {selectedEmailsForBranch.length} Active
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center text-[8.5px] font-medium text-slate-400 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded-full">
+                                          0 Recipient
+                                        </span>
+                                      )}
+                                      {branch.isCustom && (
+                                        <button
+                                          onClick={() => handleRemoveBranch(branch.code)}
+                                          title="Remove custom branch"
+                                          className="text-slate-300 hover:text-rose-500 p-0.5 transition-colors"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Search AD Users */}
+                                  <div className="relative mb-2">
+                                    <Search className="w-2.5 h-2.5 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" />
+                                    <Input
+                                      placeholder={`Search AD for ${branch.code}...`}
+                                      value={stationUserSearch[branch.code] || ""}
+                                      onChange={(e) => setStationUserSearch(prev => ({ ...prev, [branch.code]: e.target.value }))}
+                                      className="h-7 pl-6 text-[10px] bg-slate-50/80 border-slate-200 rounded-lg text-slate-700 placeholder:text-slate-400 focus:bg-white focus:border-sky-400"
+                                    />
+                                    {(stationUserSearch[branch.code] || "").trim() && (
+                                      <div className="absolute left-0 right-0 mt-1 max-h-40 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-20 divide-y divide-slate-100">
+                                        {orgUsers
+                                          .filter((u) => {
+                                            const query = (stationUserSearch[branch.code] || "").toLowerCase().trim();
+                                            return (u.displayName || "").toLowerCase().includes(query) || (u.email || "").toLowerCase().includes(query);
+                                          })
+                                          .slice(0, 4)
+                                          .map((u) => {
+                                            const isSelected = selectedEmailsForBranch.includes(u.email);
+                                            return (
+                                              <div
+                                                key={u.email}
+                                                onClick={() => {
+                                                  if (!isSelected) {
+                                                    setStationSelectedEmails(prev => ({
+                                                      ...prev,
+                                                      [branch.code]: [...(prev[branch.code] || []), u.email]
+                                                    }));
+                                                  }
+                                                  setStationUserSearch(prev => ({ ...prev, [branch.code]: "" }));
+                                                }}
+                                                className="p-1.5 text-[9.5px] hover:bg-sky-50 cursor-pointer flex justify-between items-center transition-colors"
+                                              >
+                                                <div className="truncate pr-1">
+                                                  <p className="font-bold text-slate-700 truncate">{u.displayName}</p>
+                                                  <p className="text-[8px] text-slate-400 truncate">{u.email}</p>
+                                                </div>
+                                                {isSelected ? (
+                                                  <span className="text-[8px] text-emerald-600 font-bold">Added</span>
+                                                ) : (
+                                                  <span className="text-[8px] text-sky-600 font-bold bg-sky-50 px-1 py-0.2 rounded">+ Add</span>
+                                                )}
+                                              </div>
+                                            );
+                                          })}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Custom Email Input */}
+                                  <div className="mb-2.5">
+                                    <div className="flex gap-1">
+                                      <div className="relative flex-1">
+                                        <AtSign className="w-2.5 h-2.5 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" />
+                                        <Input
+                                          placeholder="Enter email..."
+                                          value={customInput}
+                                          onChange={(e) => setStationCustomEmailInput(prev => ({ ...prev, [branch.code]: e.target.value }))}
+                                          onKeyDown={(e) => {
+                                            if (e.key === "Enter") {
+                                              e.preventDefault();
+                                              handleAddStationCustomEmail(branch.code);
+                                            }
+                                          }}
+                                          className="h-7 pl-6 text-[10px] bg-slate-50/80 border-slate-200 rounded-lg text-slate-700 focus:bg-white focus:border-sky-400"
+                                        />
+                                      </div>
+                                      <Button
+                                        size="sm"
+                                        onClick={() => handleAddStationCustomEmail(branch.code)}
+                                        className="h-7 px-2.5 bg-sky-500 hover:bg-sky-600 text-white text-[10px] font-bold rounded-lg shrink-0"
+                                      >
+                                        + Add
+                                      </Button>
+                                    </div>
+                                  </div>
+
+                                  {/* Recipients Badges */}
+                                  {selectedEmailsForBranch.length > 0 && (
+                                    <div className="mb-3">
+                                      <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto p-1.5 border border-dashed border-sky-200/80 rounded-lg bg-sky-50/30">
+                                        {selectedEmailsForBranch.map((email) => (
+                                          <Badge
+                                            key={email}
+                                            className="bg-white hover:bg-sky-50 text-slate-700 border border-sky-200 font-semibold text-[8px] px-1.5 py-0.2 rounded-md flex items-center gap-1 shadow-2xs"
+                                          >
+                                            <span className="truncate max-w-[95px]">{email}</span>
+                                            <X
+                                              className="w-2 h-2 text-slate-400 hover:text-rose-500 cursor-pointer shrink-0"
+                                              onClick={() => setStationSelectedEmails(prev => ({
+                                                ...prev,
+                                                [branch.code]: (prev[branch.code] || []).filter(x => x !== email)
+                                              }))}
+                                            />
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
+
+                                {/* Branch Card Footer */}
+                                <div className="border-t border-slate-100 pt-2.5 mt-auto space-y-1.5">
+                                  <Button
+                                    onClick={() => handleSaveStationRecipients(branch.code)}
+                                    disabled={isSending}
+                                    className="w-full h-7 bg-amber-300 hover:bg-amber-400 text-slate-900 font-bold text-[10px] rounded-lg flex items-center justify-center gap-1 shadow-2xs transition-all"
+                                  >
+                                    <Check className="w-2.5 h-2.5 text-slate-900" />
+                                    Save Recipients
+                                  </Button>
+                                  <Button
+                                    onClick={() => handleSendBranchEmail(branch.code, branch.name)}
+                                    disabled={selectedEmailsForBranch.length === 0 || isSending}
+                                    className="w-full h-7.5 bg-sky-500 hover:bg-sky-600 disabled:opacity-50 text-white text-[10.5px] font-bold rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition-all"
+                                  >
+                                    {isSending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <SendHorizontal className="w-3 h-3" />}
+                                    Send {branch.code} Report
+                                  </Button>
+
+                                  {statusMessage && (
+                                    <div className={`p-1.5 rounded-lg text-[9px] leading-snug flex items-center justify-between ${sendSuccess === true ? "bg-amber-50 text-amber-900 border border-amber-200" : "bg-sky-50 text-sky-900 border border-sky-200"}`}>
+                                      <span className="truncate pr-1">{statusMessage}</span>
+                                      <button
+                                        onClick={() => setStationEmailStatus(prev => ({ ...prev, [branch.code]: "" }))}
+                                        className="hover:opacity-70 text-slate-400 shrink-0"
+                                      >
+                                        <X className="w-2.5 h-2.5" />
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
                     </div>
                   ) : (
                     <>
@@ -5729,285 +6182,469 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                   </div>
                 </div>
               </div>
-                <div className="saas-card bg-white p-6">
-                  {/* Full-width: Top 10 Airlines Summary Table */}
-                  <div className="flex items-center justify-between mb-4 pb-2 border-b border-[#F1F5F9]">
-                    <div>
-                      <h4 className="text-sm font-bold text-[#1A202C]">Airline Performance Summary — Top 10</h4>
-                      <p className="text-xs text-slate-400 mt-0.5">Aggregated by airline · ranked by chargeable tonnage</p>
-                    </div>
+              <div className="saas-card bg-white p-6">
+                {/* Full-width: Top 10 Airlines Summary Table */}
+                <div className="flex items-center justify-between mb-4 pb-2 border-b border-[#F1F5F9]">
+                  <div>
+                    <h4 className="text-sm font-bold text-[#1A202C]">Airline Performance Summary — Top 10</h4>
+                    <p className="text-xs text-slate-400 mt-0.5">Aggregated by airline · ranked by chargeable tonnage</p>
                   </div>
+                </div>
 
-                  <div className="overflow-x-auto">
-                    {(() => {
-                      // Aggregate raw rows by Airline and Route (using origin city → dest city)
-                      const aggMap: {
-                        [key: string]: {
-                          airline: string;
-                          tonnage: number;
-                          revenue: number;
-                          cost: number;
-                          shipments: number;
-                          mastersSet: Set<string>;
-                          numericMasters: number;
-                          routes: {
-                            [routeKey: string]: {
-                              originCity: string;
-                              destCity: string;
-                              tonnage: number;
-                              revenue: number;
-                              cost: number;
-                              shipments: number;
-                              mastersSet: Set<string>;
-                              numericMasters: number;
-                            };
+                <div className="overflow-x-auto">
+                  {(() => {
+                    // Aggregate raw rows by Airline and Route (using origin city → dest city)
+                    const aggMap: {
+                      [key: string]: {
+                        airline: string;
+                        tonnage: number;
+                        revenue: number;
+                        cost: number;
+                        shipments: number;
+                        mastersSet: Set<string>;
+                        numericMasters: number;
+                        routes: {
+                          [routeKey: string]: {
+                            originCity: string;
+                            destCity: string;
+                            tonnage: number;
+                            revenue: number;
+                            cost: number;
+                            shipments: number;
+                            mastersSet: Set<string>;
+                            numericMasters: number;
                           };
-                        }
-                      } = {};
+                        };
+                      }
+                    } = {};
 
-                      data.forEach((r: any) => {
-                        const airline = r.Airline ?? r.AirlineName1 ?? r.carrier ?? "Unknown";
-                        if (!aggMap[airline]) {
-                          aggMap[airline] = { airline, tonnage: 0, revenue: 0, cost: 0, shipments: 0, mastersSet: new Set<string>(), numericMasters: 0, routes: {} };
-                        }
-                        const tonnage = Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
-                        const revenue = Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
-                        const cost = Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
-                        const shipments = Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
+                    data.forEach((r: any) => {
+                      const airline = r.Airline ?? r.AirlineName1 ?? r.carrier ?? "Unknown";
+                      if (!aggMap[airline]) {
+                        aggMap[airline] = { airline, tonnage: 0, revenue: 0, cost: 0, shipments: 0, mastersSet: new Set<string>(), numericMasters: 0, routes: {} };
+                      }
+                      const tonnage = Number(r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.Total_Tonnage ?? r.tonnage ?? 0);
+                      const revenue = Number(r.Revenue_USD ?? r.Total_Revenue ?? r.revenue ?? 0);
+                      const cost = Number(r.Cost_USD ?? r.Total_Cost ?? r.cost ?? 0);
+                      const shipments = Number(r.Total_Shipments ?? r.ShipmentCount ?? r.Shipments ?? 1);
 
-                        const masterId = r.Console_Number ?? r.ConsoleNumber ?? r.Master_Airway_Bill ?? r.MasterBillNum ?? r.Console_No;
-                        const numericMasterVal = Number(r.Number_of_Masters ?? r.Total_Masters ?? 0);
+                      const masterId = r.Console_Number ?? r.ConsoleNumber ?? r.Master_Airway_Bill ?? r.MasterBillNum ?? r.Console_No;
+                      const numericMasterVal = Number(r.Number_of_Masters ?? r.Total_Masters ?? 0);
 
-                        aggMap[airline].tonnage += tonnage;
-                        aggMap[airline].revenue += revenue;
-                        aggMap[airline].cost += cost;
-                        aggMap[airline].shipments += shipments;
-                        if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
-                          aggMap[airline].mastersSet.add(String(masterId).trim());
-                        } else if (numericMasterVal > 0) {
-                          aggMap[airline].numericMasters += numericMasterVal;
-                        } else {
-                          aggMap[airline].numericMasters += 1;
-                        }
-
-                        const originCity = r.Origin_City ?? r.OriginCity ?? r.origin_city ?? "—";
-                        const destCity = r.Destination_City ?? r.DestCity ?? r.dest_city ?? "—";
-                        const routeKey = `${originCity} → ${destCity}`;
-
-                        if (!aggMap[airline].routes[routeKey]) {
-                          aggMap[airline].routes[routeKey] = {
-                            originCity,
-                            destCity,
-                            tonnage: 0,
-                            revenue: 0,
-                            cost: 0,
-                            shipments: 0,
-                            mastersSet: new Set<string>(),
-                            numericMasters: 0
-                          };
-                        }
-                        const rt = aggMap[airline].routes[routeKey];
-                        rt.tonnage += tonnage;
-                        rt.revenue += revenue;
-                        rt.cost += cost;
-                        rt.shipments += shipments;
-                        if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
-                          rt.mastersSet.add(String(masterId).trim());
-                        } else if (numericMasterVal > 0) {
-                          rt.numericMasters += numericMasterVal;
-                        } else {
-                          rt.numericMasters += 1;
-                        }
-                      });
-
-                      const sorted = Object.values(aggMap).sort((a, b) => b.tonnage - a.tonnage);
-                      const top10 = sorted.slice(0, 10);
-                      const others = sorted.slice(10);
-                      const othersRow = others.length > 0 ? {
-                        airline: `Others (${others.length} airlines)`,
-                        tonnage: others.reduce((s, r) => s + r.tonnage, 0),
-                        revenue: others.reduce((s, r) => s + r.revenue, 0),
-                        cost: others.reduce((s, r) => s + r.cost, 0),
-                        shipments: others.reduce((s, r) => s + r.shipments, 0),
-                        mastersSet: others.reduce((accSet, o) => {
-                          o.mastersSet.forEach((m) => accSet.add(m));
-                          return accSet;
-                        }, new Set<string>()),
-                        numericMasters: others.reduce((s, r) => s + r.numericMasters, 0),
-                        routes: others.reduce((acc: any, o) => {
-                          Object.values(o.routes || {}).forEach((rt: any) => {
-                            const routeKey = `${rt.originCity} → ${rt.destCity}`;
-                            if (!acc[routeKey]) {
-                              acc[routeKey] = {
-                                ...rt,
-                                mastersSet: new Set<string>(rt.mastersSet),
-                              };
-                            } else {
-                              acc[routeKey].tonnage += rt.tonnage;
-                              acc[routeKey].revenue += rt.revenue;
-                              acc[routeKey].cost += rt.cost;
-                              acc[routeKey].shipments += rt.shipments;
-                              rt.mastersSet.forEach((m: string) => acc[routeKey].mastersSet.add(m));
-                              acc[routeKey].numericMasters += rt.numericMasters;
-                            }
-                          });
-                          return acc;
-                        }, {})
-                      } : null;
-
-                      const rows = othersRow ? [...top10, othersRow] : top10;
-
-                      const grandMastersSet = new Set<string>();
-                      let grandNumericMasters = 0;
-                      rows.forEach((r: any) => {
-                        if (r.mastersSet && r.mastersSet.size > 0) {
-                          r.mastersSet.forEach((m: string) => grandMastersSet.add(m));
-                        } else {
-                          grandNumericMasters += (r.numericMasters || 0);
-                        }
-                      });
-
-                      const grandTotal = {
-                        tonnage: rows.reduce((s, r) => s + r.tonnage, 0),
-                        revenue: rows.reduce((s, r) => s + r.revenue, 0),
-                        cost: rows.reduce((s, r) => s + r.cost, 0),
-                        shipments: rows.reduce((s, r) => s + r.shipments, 0),
-                        masters: grandMastersSet.size > 0 ? grandMastersSet.size : grandNumericMasters,
-                      };
-
-                      if (rows.length === 0) {
-                        return (
-                          <div className="py-14 flex flex-col items-center gap-2 text-slate-400">
-                            <span className="text-3xl">✈️</span>
-                            <p className="text-xs font-medium text-center">No airline data available.<br />Run a SQL query that returns <code className="bg-slate-100 px-1 rounded">Airline</code>, <code className="bg-slate-100 px-1 rounded">Revenue_USD</code> columns.</p>
-                          </div>
-                        );
+                      aggMap[airline].tonnage += tonnage;
+                      aggMap[airline].revenue += revenue;
+                      aggMap[airline].cost += cost;
+                      aggMap[airline].shipments += shipments;
+                      if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
+                        aggMap[airline].mastersSet.add(String(masterId).trim());
+                      } else if (numericMasterVal > 0) {
+                        aggMap[airline].numericMasters += numericMasterVal;
+                      } else {
+                        aggMap[airline].numericMasters += 1;
                       }
 
-                      return (
-                        <table className="w-full text-left text-xs border-collapse">
-                          <thead>
-                            <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[10px] tracking-wider bg-slate-50/70">
-                              <th className="px-3 py-3 w-8">#</th>
-                              <th className="px-3 py-3">Airline</th>
-                              <th className="px-3 py-3 text-right">Tonnage (kg)</th>
-                              <th className="px-3 py-3 text-right">No of Masters</th>
-                              <th className="px-3 py-3 text-right">Shipments</th>
-                              <th className="px-3 py-3 text-right">Shipment Revenue (USD)</th>
-                              {/* <th className="px-3 py-3 text-right">Shipment Cost (USD)</th> */}
-                              {/* <th className="px-3 py-3 text-right">Gross Profit (USD)</th> */}
-                              {/* <th className="px-3 py-3 text-right">GP Margin</th> */}
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-[#F1F5F9]">
-                            {rows.map((row, i) => {
-                              const isOthers = row.airline.startsWith("Others");
-                              const gpMargin = row.revenue > 0 ? ((row.revenue + row.cost) / row.revenue * 100) : 0;
-                              const totalTonnage = grandTotal.tonnage;
-                              const pct = totalTonnage > 0 ? (row.tonnage / totalTonnage * 100) : 0;
-                              const sortedRoutes = (Object.values(row.routes || {}) as any[]).sort((a, b) => b.tonnage - a.tonnage);
-                              const rowMasters = row.mastersSet?.size > 0 ? row.mastersSet.size : row.numericMasters;
+                      const originCity = r.Origin_City ?? r.OriginCity ?? r.origin_city ?? "—";
+                      const destCity = r.Destination_City ?? r.DestCity ?? r.dest_city ?? "—";
+                      const routeKey = `${originCity} → ${destCity}`;
 
-                              return (
-                                <Fragment key={i}>
-                                  <tr
-                                    className={`hover:bg-slate-50/60 transition-colors ${isOthers ? "bg-slate-50/50 italic" : ""}`}
-                                  >
-                                    <td className="px-3 py-3 text-slate-400 font-bold tabular-nums">
-                                      {isOthers ? "—" : (
-                                        <span
-                                          className="inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-extrabold text-white"
-                                          style={{ backgroundColor: getAirlineColor(row.airline, i) }}
-                                        >
-                                          {i + 1}
-                                        </span>
-                                      )}
-                                    </td>
-                                    <td className="px-3 py-3">
-                                      <div className="flex items-center gap-2 select-none">
-                                        <span className={`font-bold ${isOthers ? "text-slate-400" : "text-[#2D3748]"}`}>
-                                          {row.airline}
-                                        </span>
+                      if (!aggMap[airline].routes[routeKey]) {
+                        aggMap[airline].routes[routeKey] = {
+                          originCity,
+                          destCity,
+                          tonnage: 0,
+                          revenue: 0,
+                          cost: 0,
+                          shipments: 0,
+                          mastersSet: new Set<string>(),
+                          numericMasters: 0
+                        };
+                      }
+                      const rt = aggMap[airline].routes[routeKey];
+                      rt.tonnage += tonnage;
+                      rt.revenue += revenue;
+                      rt.cost += cost;
+                      rt.shipments += shipments;
+                      if (masterId !== undefined && masterId !== null && String(masterId).trim() !== "") {
+                        rt.mastersSet.add(String(masterId).trim());
+                      } else if (numericMasterVal > 0) {
+                        rt.numericMasters += numericMasterVal;
+                      } else {
+                        rt.numericMasters += 1;
+                      }
+                    });
+
+                    const sorted = Object.values(aggMap).sort((a, b) => b.tonnage - a.tonnage);
+                    const top10 = sorted.slice(0, 10);
+                    const others = sorted.slice(10);
+                    const othersRow = others.length > 0 ? {
+                      airline: `Others (${others.length} airlines)`,
+                      tonnage: others.reduce((s, r) => s + r.tonnage, 0),
+                      revenue: others.reduce((s, r) => s + r.revenue, 0),
+                      cost: others.reduce((s, r) => s + r.cost, 0),
+                      shipments: others.reduce((s, r) => s + r.shipments, 0),
+                      mastersSet: others.reduce((accSet, o) => {
+                        o.mastersSet.forEach((m) => accSet.add(m));
+                        return accSet;
+                      }, new Set<string>()),
+                      numericMasters: others.reduce((s, r) => s + r.numericMasters, 0),
+                      routes: others.reduce((acc: any, o) => {
+                        Object.values(o.routes || {}).forEach((rt: any) => {
+                          const routeKey = `${rt.originCity} → ${rt.destCity}`;
+                          if (!acc[routeKey]) {
+                            acc[routeKey] = {
+                              ...rt,
+                              mastersSet: new Set<string>(rt.mastersSet),
+                            };
+                          } else {
+                            acc[routeKey].tonnage += rt.tonnage;
+                            acc[routeKey].revenue += rt.revenue;
+                            acc[routeKey].cost += rt.cost;
+                            acc[routeKey].shipments += rt.shipments;
+                            rt.mastersSet.forEach((m: string) => acc[routeKey].mastersSet.add(m));
+                            acc[routeKey].numericMasters += rt.numericMasters;
+                          }
+                        });
+                        return acc;
+                      }, {})
+                    } : null;
+
+                    const rows = othersRow ? [...top10, othersRow] : top10;
+
+                    const grandMastersSet = new Set<string>();
+                    let grandNumericMasters = 0;
+                    rows.forEach((r: any) => {
+                      if (r.mastersSet && r.mastersSet.size > 0) {
+                        r.mastersSet.forEach((m: string) => grandMastersSet.add(m));
+                      } else {
+                        grandNumericMasters += (r.numericMasters || 0);
+                      }
+                    });
+
+                    const grandTotal = {
+                      tonnage: rows.reduce((s, r) => s + r.tonnage, 0),
+                      revenue: rows.reduce((s, r) => s + r.revenue, 0),
+                      cost: rows.reduce((s, r) => s + r.cost, 0),
+                      shipments: rows.reduce((s, r) => s + r.shipments, 0),
+                      masters: grandMastersSet.size > 0 ? grandMastersSet.size : grandNumericMasters,
+                    };
+
+                    if (rows.length === 0) {
+                      return (
+                        <div className="py-14 flex flex-col items-center gap-2 text-slate-400">
+                          <span className="text-3xl">✈️</span>
+                          <p className="text-xs font-medium text-center">No airline data available.<br />Run a SQL query that returns <code className="bg-slate-100 px-1 rounded">Airline</code>, <code className="bg-slate-100 px-1 rounded">Revenue_USD</code> columns.</p>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[10px] tracking-wider bg-slate-50/70">
+                            <th className="px-3 py-3 w-8">#</th>
+                            <th className="px-3 py-3">Airline</th>
+                            <th className="px-3 py-3 text-right">Tonnage (kg)</th>
+                            <th className="px-3 py-3 text-right">No of Masters</th>
+                            <th className="px-3 py-3 text-right">Shipments</th>
+                            <th className="px-3 py-3 text-right">Shipment Revenue (USD)</th>
+                            {/* <th className="px-3 py-3 text-right">Shipment Cost (USD)</th> */}
+                            {/* <th className="px-3 py-3 text-right">Gross Profit (USD)</th> */}
+                            {/* <th className="px-3 py-3 text-right">GP Margin</th> */}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F5F9]">
+                          {rows.map((row, i) => {
+                            const isOthers = row.airline.startsWith("Others");
+                            const gpMargin = row.revenue > 0 ? ((row.revenue + row.cost) / row.revenue * 100) : 0;
+                            const totalTonnage = grandTotal.tonnage;
+                            const pct = totalTonnage > 0 ? (row.tonnage / totalTonnage * 100) : 0;
+                            const sortedRoutes = (Object.values(row.routes || {}) as any[]).sort((a, b) => b.tonnage - a.tonnage);
+                            const rowMasters = row.mastersSet?.size > 0 ? row.mastersSet.size : row.numericMasters;
+
+                            return (
+                              <Fragment key={i}>
+                                <tr
+                                  className={`hover:bg-slate-50/60 transition-colors ${isOthers ? "bg-slate-50/50 italic" : ""}`}
+                                >
+                                  <td className="px-3 py-3 text-slate-400 font-bold tabular-nums">
+                                    {isOthers ? "—" : (
+                                      <span
+                                        className="inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-extrabold text-white"
+                                        style={{ backgroundColor: getAirlineColor(row.airline, i) }}
+                                      >
+                                        {i + 1}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-3">
+                                    <div className="flex items-center gap-2 select-none">
+                                      <span className={`font-bold ${isOthers ? "text-slate-400" : "text-[#2D3748]"}`}>
+                                        {row.airline}
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="px-3 py-3 text-right tabular-nums">
+                                    <div className="flex flex-col items-end gap-0.5">
+                                      <span className="font-bold text-[#3182CE]">{formatNumber(row.tonnage)} kg</span>
+                                      <div className="h-1 rounded-full bg-slate-100 w-16 overflow-hidden">
+                                        <div
+                                          className="h-full rounded-full"
+                                          style={{ width: `${pct}%`, backgroundColor: getAirlineColor(row.airline, i) }}
+                                        />
                                       </div>
-                                    </td>
-                                    <td className="px-3 py-3 text-right tabular-nums">
-                                      <div className="flex flex-col items-end gap-0.5">
-                                        <span className="font-bold text-[#3182CE]">{formatNumber(row.tonnage)} kg</span>
-                                        <div className="h-1 rounded-full bg-slate-100 w-16 overflow-hidden">
-                                          <div
-                                            className="h-full rounded-full"
-                                            style={{ width: `${pct}%`, backgroundColor: getAirlineColor(row.airline, i) }}
-                                          />
-                                        </div>
-                                      </div>
-                                    </td>
-                                    <td className="px-3 py-3 text-right font-semibold text-slate-700 tabular-nums">{formatNumber(rowMasters)}</td>
-                                    <td className="px-3 py-3 text-right font-semibold text-slate-700 tabular-nums">{formatNumber(row.shipments)}</td>
-                                    <td className="px-3 py-3 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
-                                    {/* <td className="px-3 py-3 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td> */}
-                                    {/* <td className="px-3 py-3 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td> */}
-                                    {/* <td className="px-3 py-3 text-right tabular-nums">
+                                    </div>
+                                  </td>
+                                  <td className="px-3 py-3 text-right font-semibold text-slate-700 tabular-nums">{formatNumber(rowMasters)}</td>
+                                  <td className="px-3 py-3 text-right font-semibold text-slate-700 tabular-nums">{formatNumber(row.shipments)}</td>
+                                  <td className="px-3 py-3 text-right font-bold text-emerald-600 tabular-nums">{formatCurrency(row.revenue)}</td>
+                                  {/* <td className="px-3 py-3 text-right font-semibold text-slate-500 tabular-nums">{formatCurrency(row.cost)}</td> */}
+                                  {/* <td className="px-3 py-3 text-right font-bold text-[#2D3748] tabular-nums">{formatCurrency(row.revenue + row.cost)}</td> */}
+                                  {/* <td className="px-3 py-3 text-right tabular-nums">
                                       <span className={`font-bold text-[10px] ${gpMargin >= 20 ? "text-emerald-600" : gpMargin >= 10 ? "text-amber-600" : "text-rose-500"}`}>
                                         {gpMargin.toFixed(1)}%
                                       </span>
                                     </td> */}
-                                  </tr>
-                                  {sortedRoutes.length > 0 && (
-                                    sortedRoutes.map((route, rIdx) => {
-                                      const routeGpMargin = route.revenue > 0 ? ((route.revenue + route.cost) / route.revenue * 100) : 0;
-                                      const routeMasters = route.mastersSet?.size > 0 ? route.mastersSet.size : route.numericMasters;
-                                      return (
-                                        <tr key={`${i}-route-${rIdx}`} className="bg-[#EBF8FF]/50 text-slate-950 text-[11px] border-l-4 border-blue-300 hover:bg-[#EBF8FF]/70 transition-colors">
-                                          <td className="px-3 py-1 text-center text-[8px] text-blue-400 font-bold"></td>
-                                          <td className="px-3 py-2 pl-8">
-                                            <span className="font-semibold text-slate-950">{route.originCity} → {route.destCity}</span>
-                                          </td>
-                                          <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatNumber(route.tonnage)} kg</td>
-                                          <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatNumber(routeMasters)}</td>
-                                          <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatNumber(route.shipments)}</td>
-                                          <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatCurrency(route.revenue)}</td>
-                                          {/* <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatCurrency(route.cost)}</td> */}
-                                          {/* <td className="px-3 py-2 text-right tabular-nums font-extrabold text-slate-950">{formatCurrency(route.revenue + route.cost)}</td> */}
-                                          {/* <td className="px-3 py-2 text-right tabular-nums">
+                                </tr>
+                                {sortedRoutes.length > 0 && (
+                                  sortedRoutes.map((route, rIdx) => {
+                                    const routeGpMargin = route.revenue > 0 ? ((route.revenue + route.cost) / route.revenue * 100) : 0;
+                                    const routeMasters = route.mastersSet?.size > 0 ? route.mastersSet.size : route.numericMasters;
+                                    return (
+                                      <tr key={`${i}-route-${rIdx}`} className="bg-[#EBF8FF]/50 text-slate-950 text-[11px] border-l-4 border-blue-300 hover:bg-[#EBF8FF]/70 transition-colors">
+                                        <td className="px-3 py-1 text-center text-[8px] text-blue-400 font-bold"></td>
+                                        <td className="px-3 py-2 pl-8">
+                                          <span className="font-semibold text-slate-950">{route.originCity} → {route.destCity}</span>
+                                        </td>
+                                        <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatNumber(route.tonnage)} kg</td>
+                                        <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatNumber(routeMasters)}</td>
+                                        <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatNumber(route.shipments)}</td>
+                                        <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatCurrency(route.revenue)}</td>
+                                        {/* <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatCurrency(route.cost)}</td> */}
+                                        {/* <td className="px-3 py-2 text-right tabular-nums font-extrabold text-slate-950">{formatCurrency(route.revenue + route.cost)}</td> */}
+                                        {/* <td className="px-3 py-2 text-right tabular-nums">
                                             <span className="font-extrabold text-slate-950">
                                               {routeGpMargin.toFixed(1)}%
                                             </span>
                                           </td> */}
-                                        </tr>
-                                      );
-                                    })
-                                  )}
-                                </Fragment>
-                              );
-                            })}
-                          </tbody>
-                          {/* Grand Total Footer */}
-                          <tfoot>
-                            <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-xs">
-                              <td className="px-3 py-3 text-slate-500" colSpan={2}>TOTAL</td>
-                              <td className="px-3 py-3 text-right text-[#3182CE] tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
-                              <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.masters)}</td>
-                              <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
-                              <td className="px-3 py-3 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
-                              {/* <td className="px-3 py-3 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td> */}
-                              {/* <td className="px-3 py-3 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td> */}
-                              {/* <td className="px-3 py-3 text-right">
+                                      </tr>
+                                    );
+                                  })
+                                )}
+                              </Fragment>
+                            );
+                          })}
+                        </tbody>
+                        {/* Grand Total Footer */}
+                        <tfoot>
+                          <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-xs">
+                            <td className="px-3 py-3 text-slate-500" colSpan={2}>TOTAL</td>
+                            <td className="px-3 py-3 text-right text-[#3182CE] tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
+                            <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.masters)}</td>
+                            <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
+                            <td className="px-3 py-3 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
+                            {/* <td className="px-3 py-3 text-right text-slate-500 tabular-nums">{formatCurrency(grandTotal.cost)}</td> */}
+                            {/* <td className="px-3 py-3 text-right text-[#2D3748] tabular-nums">{formatCurrency(grandTotal.revenue + grandTotal.cost)}</td> */}
+                            {/* <td className="px-3 py-3 text-right">
                                 <span className="font-bold text-slate-600 text-[10px]">
                                   {grandTotal.revenue > 0 ? ((grandTotal.revenue + grandTotal.cost) / grandTotal.revenue * 100).toFixed(1) : "0.0"}%
                                 </span>
                               </td> */}
-                            </tr>
-                          </tfoot>
-                        </table>
-                      );
-                    })()}
-                  </div>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    );
+                  })()}
                 </div>
+              </div>
             </div>
           )}
 
         </div>{/* end main content area */}
       </div>{/* end sidebar+main flex */}
+
+      {/* ── ADD STATION MODAL ── */}
+      {isAddStationModalOpen && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-[#070b19]/60 backdrop-blur-md p-4 sm:p-6 animate-in fade-in-0 duration-200">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl flex flex-col border border-sky-100 overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-sky-500 via-blue-600 to-sky-600 px-5 py-3.5 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div>
+                  <h3 className="text-xs font-extrabold tracking-tight">Add Operational Station</h3>
+                  <p className="text-[9.5px] text-sky-100">Register a new global station for automated reports</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsAddStationModalOpen(false)}
+                className="p-1 rounded-full hover:bg-white/20 text-sky-100 hover:text-white transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Form Body */}
+            <form onSubmit={handleAddNewStation} className="p-5 space-y-3.5">
+              <div>
+                <label className="text-[9.5px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                  Station Code *
+                </label>
+                <Input
+                  required
+                  maxLength={6}
+                  placeholder="e.g. DXB"
+                  value={newStationCode}
+                  onChange={(e) => setNewStationCode(e.target.value.toUpperCase())}
+                  className="h-8 uppercase text-xs font-mono font-bold bg-slate-50 border-slate-200 rounded-lg focus:bg-white focus:border-sky-400"
+                />
+              </div>
+
+              <div>
+                <label className="text-[9.5px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                  Station Display Name *
+                </label>
+                <Input
+                  required
+                  placeholder="e.g. Dubai (United Arab Emirates)"
+                  value={newStationName}
+                  onChange={(e) => setNewStationName(e.target.value)}
+                  className="h-8 text-xs bg-slate-50 border-slate-200 rounded-lg focus:bg-white focus:border-sky-400"
+                />
+              </div>
+
+              <div>
+                <label className="text-[9.5px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                  Country Name
+                </label>
+                <Input
+                  placeholder="e.g. United Arab Emirates"
+                  value={newStationCountry}
+                  onChange={(e) => setNewStationCountry(e.target.value)}
+                  className="h-8 text-xs bg-slate-50 border-slate-200 rounded-lg focus:bg-white focus:border-sky-400"
+                />
+              </div>
+
+              <div>
+                <label className="text-[9.5px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                  Azure AD Matching Keywords
+                </label>
+                <Input
+                  placeholder="e.g. dubai, dxb, uae (comma separated)"
+                  value={newStationKeywords}
+                  onChange={(e) => setNewStationKeywords(e.target.value)}
+                  className="h-8 text-xs bg-slate-50 border-slate-200 rounded-lg focus:bg-white focus:border-sky-400"
+                />
+                <p className="text-[8.5px] text-slate-400 mt-1">
+                  Used to automatically group Azure Active Directory users into this station.
+                </p>
+              </div>
+
+              {/* Footer */}
+              <div className="pt-2.5 border-t border-slate-100 flex items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsAddStationModalOpen(false)}
+                  className="h-8 px-3 text-xs font-semibold rounded-lg"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  className="h-8 px-4 bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold rounded-lg shadow-xs transition-all"
+                >
+                  Add Station
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── ADD BRANCH MODAL ── */}
+      {isAddBranchModalOpen && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-[#070b19]/60 backdrop-blur-md p-4 sm:p-6 animate-in fade-in-0 duration-200">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl flex flex-col border border-sky-100 overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-sky-500 via-blue-600 to-sky-600 px-5 py-3.5 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-white/20 backdrop-blur-md flex items-center justify-center">
+                  <Building2 className="w-4 h-4 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-extrabold tracking-tight">Add Branch Office</h3>
+                  <p className="text-[9.5px] text-sky-100">Register a new branch for station report breakdowns</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsAddBranchModalOpen(false)}
+                className="p-1 rounded-full hover:bg-white/20 text-sky-100 hover:text-white transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Form Body */}
+            <form onSubmit={handleAddNewBranch} className="p-5 space-y-3.5">
+              <div>
+                <label className="text-[9.5px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                  Branch Code *
+                </label>
+                <Input
+                  required
+                  maxLength={6}
+                  placeholder="e.g. HYD"
+                  value={newBranchCode}
+                  onChange={(e) => setNewBranchCode(e.target.value.toUpperCase())}
+                  className="h-8 uppercase text-xs font-mono font-bold bg-slate-50 border-slate-200 rounded-lg focus:bg-white focus:border-sky-400"
+                />
+              </div>
+
+              <div>
+                <label className="text-[9.5px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                  Branch Display Name *
+                </label>
+                <Input
+                  required
+                  placeholder="e.g. Hyderabad (HYD)"
+                  value={newBranchName}
+                  onChange={(e) => setNewBranchName(e.target.value)}
+                  className="h-8 text-xs bg-slate-50 border-slate-200 rounded-lg focus:bg-white focus:border-sky-400"
+                />
+              </div>
+
+              <div>
+                <label className="text-[9.5px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                  City / Location
+                </label>
+                <Input
+                  placeholder="e.g. Hyderabad"
+                  value={newBranchCity}
+                  onChange={(e) => setNewBranchCity(e.target.value)}
+                  className="h-8 text-xs bg-slate-50 border-slate-200 rounded-lg focus:bg-white focus:border-sky-400"
+                />
+              </div>
+
+              {/* Footer */}
+              <div className="pt-2.5 border-t border-slate-100 flex items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsAddBranchModalOpen(false)}
+                  className="h-8 px-3 text-xs font-semibold rounded-lg"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  className="h-8 px-4 bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold rounded-lg shadow-xs transition-all"
+                >
+                  Add Branch
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* ── SECTION SELECTOR MODAL (Before PDF Preview) ── */}
       {showSectionSelector && (

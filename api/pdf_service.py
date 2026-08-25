@@ -20,7 +20,7 @@ def get_tonnage_base_url() -> str:
     Probes candidate ports (3001, 3000, 3002, 8000, 8080) to ensure we connect
     to the correct application even if another project is running on port 3000.
     """
-    if os.environ.get("K_SERVICE"):
+    if os.environ.get("K_SERVICE") or os.environ.get("PORT"):
         cloud_run_port = int(os.environ.get("PORT", 8080))
         return f"http://127.0.0.1:{cloud_run_port}"
 
@@ -126,6 +126,10 @@ def generate_dashboard_pdf(
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
+            
+            # Listen to browser console and page errors for diagnostics
+            page.on("console", lambda msg: print(f"[Playwright Browser {msg.type.upper()}]: {msg.text}"))
+            page.on("pageerror", lambda err: print(f"[Playwright Page Error]: {err}"))
             
             # Navigate to the frontend UI with increased timeout for data loading
             # Use "load" instead of "networkidle" for faster response

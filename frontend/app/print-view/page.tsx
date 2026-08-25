@@ -9,11 +9,11 @@ import {
 import { Plane, Globe, CheckSquare, Square, Printer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
-// In production: frontend & backend share the same Cloud Run host → use relative URLs.
-// In local dev: Next.js runs on :3000, backend on :8000 → use absolute localhost URL.
+// In production / Cloud Run / Playwright container: frontend & backend share the same host/port → use relative URLs ("").
+// In local development: Next.js dev server runs on :3000/:3001/:3002, backend on :8000 → use absolute localhost URL.
 const API = process.env.NEXT_PUBLIC_API_URL ||
   (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
-    ? (window.location.port !== "8000" ? "http://localhost:8000" : "")
+    ? (window.location.port.startsWith("300") ? "http://localhost:8000" : "")
     : "");
 
 
