@@ -362,23 +362,37 @@ if __name__ == "__main__":
         logging.critical(f"Failed to build database engine: {e}")
         sys.exit(1)
         
-    # 3. Define stations to process
-    STATIONS = [
-        {"code": "CMB", "country": "Sri Lanka", "name": "Colombo (Sri Lanka)", "env_var": "RECIPIENTS_CMB"},
-        {"code": "IND", "country": "India", "name": "India", "env_var": "RECIPIENTS_IND"},
-        {"code": "VNM", "country": "Viet Nam", "name": "Viet Nam", "env_var": "RECIPIENTS_VNM"},
-        {"code": "DAC", "country": "Bangladesh", "name": "Bangladesh", "env_var": "RECIPIENTS_DAC"},
-        {"code": "PKI", "country": "Pakistan", "name": "Pakistan", "env_var": "RECIPIENTS_PKI"},
-        {"code": "NYC", "country": "United States", "name": "United States", "env_var": "RECIPIENTS_NYC"},
-    ]
+    # 3. Define stations to process (dynamically from Supabase with fallback)
+    try:
+        from api.scheduler_db import get_supabase_stations, get_supabase_recipients
+        STATIONS = get_supabase_stations()
+    except Exception as e:
+        logging.warning(f"Could not load dynamic stations from Supabase: {e}")
+        STATIONS = [
+            {"code": "CMB", "country": "Sri Lanka", "name": "Colombo (Sri Lanka)", "env_var": "RECIPIENTS_CMB"},
+            {"code": "IND", "country": "India", "name": "India", "env_var": "RECIPIENTS_IND"},
+            {"code": "VNM", "country": "Viet Nam", "name": "Viet Nam", "env_var": "RECIPIENTS_VNM"},
+            {"code": "DAC", "country": "Bangladesh", "name": "Bangladesh", "env_var": "RECIPIENTS_DAC"},
+            {"code": "PKI", "country": "Pakistan", "name": "Pakistan", "env_var": "RECIPIENTS_PKI"},
+            {"code": "NYC", "country": "United States", "name": "United States", "env_var": "RECIPIENTS_NYC"},
+        ]
     
     for station in STATIONS:
         logging.info(f"Processing station: {station['name']} ({station['code']})")
         pdf_file_path = f"outputs/Weekly_Tonnage_Report_{station['code']}.pdf"
         
-        # Get recipients for this station
-        recipients_str = os.getenv(station["env_var"]) or os.getenv("RECIPIENT_EMAILS", "")
-        recipients = [r.strip() for r in recipients_str.split(",") if r.strip()]
+        # Get recipients for this station: check Supabase station_recipients table first, then env var
+        recipients = []
+        try:
+            from api.scheduler_db import get_supabase_recipients
+            recipients = get_supabase_recipients(station["code"], is_branch=False)
+        except Exception:
+            pass
+            
+        if not recipients:
+            env_key = station.get("env_var") or f"RECIPIENTS_{station['code']}"
+            recipients_str = os.getenv(env_key) or os.getenv("RECIPIENT_EMAILS", "")
+            recipients = [r.strip() for r in recipients_str.split(",") if r.strip()]
         
         if not recipients:
             logging.warning(f"No recipients configured for {station['name']}. Skipping.")

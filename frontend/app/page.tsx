@@ -784,7 +784,18 @@ export default function Dashboard() {
   // --- SCHEDULER STATES ---
   const [schedules, setSchedules] = useState<any[]>([]);
   const [schedulerLoading, setSchedulerLoading] = useState(false);
-  const [schedStation, setSchedStation] = useState("Global");
+  const [schedStation, setSchedStation] = useState("IND");
+  const [schedSelectedStations, setSchedSelectedStations] = useState<string[]>(DEFAULT_STATIONS.map(s => s.code));
+  const [schedSelectedBranches, setSchedSelectedBranches] = useState<string[]>(["BLR"]);
+  const [schedSelectedRecipientSources, setSchedSelectedRecipientSources] = useState<string[]>([]);
+  const [isSchedStationDropdownOpen, setIsSchedStationDropdownOpen] = useState(false);
+  const [isSchedBranchDropdownOpen, setIsSchedBranchDropdownOpen] = useState(false);
+  const [isSchedRecipientSourceDropdownOpen, setIsSchedRecipientSourceDropdownOpen] = useState(false);
+  const [schedRecipientSourceSearch, setSchedRecipientSourceSearch] = useState("");
+  const [schedRecipientSourceCategory, setSchedRecipientSourceCategory] = useState<"all" | "station" | "branch">("all");
+  const [schedStationSearch, setSchedStationSearch] = useState("");
+  const [schedBranchSearch, setSchedBranchSearch] = useState("");
+
   const [schedFrequency, setSchedFrequency] = useState<"weekly" | "monthly" | "daily">("weekly");
   const [schedDayOfWeek, setSchedDayOfWeek] = useState<number>(0); // 0=Monday
   const [schedDayOfMonth, setSchedDayOfMonth] = useState<number>(1);
@@ -796,6 +807,67 @@ export default function Dashboard() {
   const [schedActiveTab, setSchedActiveTab] = useState<"list" | "create">("list");
   const [schedStartDate, setSchedStartDate] = useState("");
   const [schedEndDate, setSchedEndDate] = useState("");
+
+  // Helper to re-aggregate recipients whenever selected sources change
+  const syncRecipientsFromSources = (sources: string[]) => {
+    const emailsSet = new Set<string>();
+    sources.forEach(src => {
+      const list = stationSelectedEmails[src] || [];
+      list.forEach(e => {
+        const clean = (e || "").trim().toLowerCase();
+        if (clean && !DUMMY_EMAILS.includes(clean)) {
+          emailsSet.add(clean);
+        }
+      });
+    });
+    setSchedRecipients(Array.from(emailsSet).join(", "));
+  };
+
+  const handleToggleRecipientSource = (sourceCode: string) => {
+    setSchedSelectedRecipientSources(prev => {
+      const next = prev.includes(sourceCode)
+        ? prev.filter(x => x !== sourceCode)
+        : [...prev, sourceCode];
+      syncRecipientsFromSources(next);
+      return next;
+    });
+  };
+
+  const handleSelectAllRecipientStations = () => {
+    const allStationCodes = stationsList.map(s => s.code);
+    if ((stationSelectedEmails["OTHER"] || []).length > 0) allStationCodes.push("OTHER");
+    setSchedSelectedRecipientSources(prev => {
+      const set = new Set([...prev, ...allStationCodes]);
+      const next = Array.from(set);
+      syncRecipientsFromSources(next);
+      return next;
+    });
+  };
+
+  const handleSelectAllRecipientBranches = () => {
+    const allBranchCodes = branchesList.map(b => b.code);
+    setSchedSelectedRecipientSources(prev => {
+      const set = new Set([...prev, ...allBranchCodes]);
+      const next = Array.from(set);
+      syncRecipientsFromSources(next);
+      return next;
+    });
+  };
+
+  const handleClearRecipientSources = () => {
+    setSchedSelectedRecipientSources([]);
+    setSchedRecipients("");
+  };
+
+  // Helper to quickly load recipients matching currently selected target stations or branches
+  const handleLoadRecipientsForSelectedTargets = () => {
+    const targets = schedReportLevel === "branch" ? schedSelectedBranches : schedSelectedStations;
+    const targetCodes = targets.includes("Global")
+      ? stationsList.map(s => s.code)
+      : targets;
+    setSchedSelectedRecipientSources(targetCodes);
+    syncRecipientsFromSources(targetCodes);
+  };
 
   const fetchSchedules = useCallback(async (supabaseClient?: any) => {
     const client = supabaseClient || supabase;
@@ -838,77 +910,134 @@ export default function Dashboard() {
       return;
     }
 
-    // Map station/branch to filters
-    let filters: any = {
-      mode: "standard",
-      include_weekly_visual: true,
-      include_weekly_ledger: true,
-      include_monthly_visual: true,
-      include_monthly_ledger: true,
-      max_data_rows: 100,
-      report_level: schedReportLevel,
-    };
-
-    if (schedReportLevel === "branch") {
-      filters.branch = schedBranch;
-      filters.country = "India";
-      filters.company_code = "IND";
-    } else if (schedStation !== "Global") {
-      const stationMap: Record<string, { code: string; country: string }> = {
-        "CMB": { code: "CMB", country: "Sri Lanka" },
-        "IND": { code: "IND", country: "India" },
-        "VNM": { code: "VNM", country: "Viet Nam" },
-        "DAC": { code: "DAC", country: "Bangladesh" },
-        "PKI": { code: "PKI", country: "Pakistan" },
-        "NYC": { code: "NYC", country: "United States" },
-      };
-      const info = stationMap[schedStation];
-      if (info) {
-        filters.country = info.country;
-        filters.company_code = info.code;
-      }
-    }
-
-    if (schedStartDate) filters.start_date = schedStartDate;
-    if (schedEndDate) filters.end_date = schedEndDate;
-
     setSchedIsCreating(true);
     setSchedStatusMessage("");
     setSchedStatusSuccess(null);
 
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API}/api/schedules`, {
-        method: "POST",
-        headers: authHeaders,
-        body: JSON.stringify({
-          recipient_email: schedRecipients,
-          frequency: schedFrequency,
-          day_of_week: schedFrequency === "weekly" ? schedDayOfWeek : null,
-          day_of_month: schedFrequency === "monthly" ? schedDayOfMonth : null,
-          time_of_day: schedTime,
-          filters: filters,
-          is_active: true,
-        }),
-      });
-      const data = await res.json();
-      if (data.status === "success") {
-        setSchedStatusMessage("Schedule configured successfully!");
-        setSchedStatusSuccess(true);
-        setSchedRecipients("");
-        setSchedStartDate("");
-        setSchedEndDate("");
-        // Pass the live supabase client so fetchSchedules always has a fresh token
-        fetchSchedules(supabase);
+      let createdCount = 0;
+      let errorMessages: string[] = [];
+
+      if (schedReportLevel === "branch") {
+        const branchesToProcess = schedSelectedBranches.length > 0 ? schedSelectedBranches : [schedBranch];
+
+        for (const branchCode of branchesToProcess) {
+          const branchInfo = branchesList.find(b => b.code === branchCode);
+          const filters: any = {
+            mode: "standard",
+            include_weekly_visual: true,
+            include_weekly_ledger: true,
+            include_monthly_visual: true,
+            include_monthly_ledger: true,
+            max_data_rows: 100,
+            report_level: "branch",
+            branch: branchCode,
+            country: (branchInfo as any)?.country || "India",
+            company_code: (branchInfo as any)?.company_code || "IND",
+          };
+          if (schedStartDate) filters.start_date = schedStartDate;
+          if (schedEndDate) filters.end_date = schedEndDate;
+
+          const res = await fetch(`${API}/api/schedules`, {
+            method: "POST",
+            headers: authHeaders,
+            body: JSON.stringify({
+              recipient_email: schedRecipients,
+              frequency: schedFrequency,
+              day_of_week: schedFrequency === "weekly" ? schedDayOfWeek : null,
+              day_of_month: schedFrequency === "monthly" ? schedDayOfMonth : null,
+              time_of_day: schedTime,
+              filters: filters,
+              is_active: true,
+            }),
+          });
+          const data = await res.json();
+          if (data.status === "success") {
+            createdCount++;
+          } else {
+            errorMessages.push(`Branch ${branchCode}: ${data.detail || "Failed"}`);
+          }
+        }
+
+        if (createdCount > 0) {
+          setSchedStatusMessage(`Successfully configured ${createdCount} branch schedule${createdCount > 1 ? "s" : ""} (${branchesToProcess.join(", ")})!`);
+          setSchedStatusSuccess(true);
+          setSchedRecipients("");
+          setSchedSelectedRecipientSources([]);
+          setSchedStartDate("");
+          setSchedEndDate("");
+          fetchSchedules(supabase);
+        } else {
+          setSchedStatusMessage(errorMessages.join("; ") || "Failed to configure schedule.");
+          setSchedStatusSuccess(false);
+        }
       } else {
-        setSchedStatusMessage(data.detail || "Failed to save schedule configuration.");
-        setSchedStatusSuccess(false);
+        const stationsToProcess = schedSelectedStations.length > 0 ? schedSelectedStations : stationsList.map(s => s.code);
+
+        if (stationsToProcess.length === 0) {
+          setSchedStatusMessage("Please select at least one target station.");
+          setSchedStatusSuccess(false);
+          setSchedIsCreating(false);
+          return;
+        }
+
+        for (const stationCode of stationsToProcess) {
+          const stObj = stationsList.find(s => s.code === stationCode);
+          const filters: any = {
+            mode: "standard",
+            include_weekly_visual: true,
+            include_weekly_ledger: true,
+            include_monthly_visual: true,
+            include_monthly_ledger: true,
+            max_data_rows: 100,
+            report_level: "station",
+            country: stObj?.country || "India",
+            company_code: stObj?.code || stationCode,
+          };
+          if (schedStartDate) filters.start_date = schedStartDate;
+          if (schedEndDate) filters.end_date = schedEndDate;
+
+          const res = await fetch(`${API}/api/schedules`, {
+            method: "POST",
+            headers: authHeaders,
+            body: JSON.stringify({
+              recipient_email: schedRecipients,
+              frequency: schedFrequency,
+              day_of_week: schedFrequency === "weekly" ? schedDayOfWeek : null,
+              day_of_month: schedFrequency === "monthly" ? schedDayOfMonth : null,
+              time_of_day: schedTime,
+              filters: filters,
+              is_active: true,
+            }),
+          });
+          const data = await res.json();
+          if (data.status === "success") {
+            createdCount++;
+          } else {
+            errorMessages.push(`Station ${stationCode}: ${data.detail || "Failed"}`);
+          }
+        }
+
+        if (createdCount > 0) {
+          setSchedStatusMessage(`Successfully configured ${createdCount} station schedule${createdCount > 1 ? "s" : ""} (${stationsToProcess.join(", ")})!`);
+          setSchedStatusSuccess(true);
+          setSchedRecipients("");
+          setSchedSelectedRecipientSources([]);
+          setSchedStartDate("");
+          setSchedEndDate("");
+          fetchSchedules(supabase);
+        } else {
+          setSchedStatusMessage(errorMessages.join("; ") || "Failed to configure schedule.");
+          setSchedStatusSuccess(false);
+        }
       }
-    } catch (e) {
-      setSchedStatusMessage("Error transmitting scheduling request.");
+    } catch (e: any) {
+      setSchedStatusMessage(`Error transmitting scheduling request: ${e.message || e}`);
       setSchedStatusSuccess(false);
+    } finally {
+      setSchedIsCreating(false);
     }
-    setSchedIsCreating(false);
   };
 
   const handleToggleSchedule = async (scheduleId: string) => {
@@ -1067,17 +1196,8 @@ export default function Dashboard() {
 
   const [showSectionSelector, setShowSectionSelector] = useState(false);
 
-  // --- BRANCH OPTIONS & SQL QUERY GENERATORS ---
-  const BRANCH_OPTIONS = [
-    { code: "BLR", name: "Bengaluru (BLR)" },
-    { code: "MAA", name: "Chennai (MAA)" },
-    { code: "HYD", name: "Hyderabad (HYD)" },
-    { code: "AMD", name: "Ahmedabad (AMD)" },
-    { code: "BOM", name: "Mumbai (BOM)" },
-    { code: "PNQ", name: "Pune (PNQ)" },
-    { code: "DEL", name: "Delhi (DEL)" },
-    { code: "CCU", name: "Kolkata (CCU)" },
-  ];
+  // --- BRANCH OPTIONS & SQL QUERY GENERATORS (Uses Supabase dynamic lists)
+  const BRANCH_OPTIONS = branchesList;
 
   const getStationwiseSqlTemplate = (country = "India", companyCode = "IND", sDate = "2026-06-01", eDate = "2026-06-07") => `-- Station-wise Report Query Template
 SELECT
@@ -1789,7 +1909,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
       // Format default SQL template dynamically with station parameters
       let formattedSql = "";
       if (stationCode === "OTHER") {
-        const knownCompanies = STATIONS.map(s => `'${s.code}'`).join(", ");
+        const knownCompanies = stationsList.map(s => `'${s.code}'`).join(", ");
         formattedSql = `
 SELECT
     vt.ConsoleNumber AS Console_Number,
@@ -3291,11 +3411,11 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           onClick={() => {
                             if (activeSection === "weekly-reports") {
                               setWeeklyReportLevel("station");
-                              const stObj = STATIONS.find(s => s.code === weeklyStation) || { country: "India", code: "IND" };
+                              const stObj = stationsList.find(s => s.code === weeklyStation) || stationsList[0] || { country: "India", code: "IND" };
                               setWeeklySqlText(getStationwiseSqlTemplate(stObj.country, stObj.code, startDate, endDate));
                             } else {
                               setMonthlyReportLevel("station");
-                              const stObj = STATIONS.find(s => s.code === monthlyStation) || { country: "India", code: "IND" };
+                              const stObj = stationsList.find(s => s.code === monthlyStation) || stationsList[0] || { country: "India", code: "IND" };
                               setMonthlySqlText(getStationwiseSqlTemplate(stObj.country, stObj.code, startDate, endDate));
                             }
                           }}
@@ -3309,12 +3429,13 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                         <button
                           type="button"
                           onClick={() => {
+                            const brObj = branchesList.find(b => b.code === (activeSection === "weekly-reports" ? weeklyBranch : monthlyBranch)) || branchesList[0] || { code: "BLR" };
                             if (activeSection === "weekly-reports") {
                               setWeeklyReportLevel("branch");
-                              setWeeklySqlText(getBranchwiseSqlTemplate("India", "IND", weeklyBranch, startDate, endDate));
+                              setWeeklySqlText(getBranchwiseSqlTemplate("India", "IND", brObj.code, startDate, endDate));
                             } else {
                               setMonthlyReportLevel("branch");
-                              setMonthlySqlText(getBranchwiseSqlTemplate("India", "IND", monthlyBranch, startDate, endDate));
+                              setMonthlySqlText(getBranchwiseSqlTemplate("India", "IND", brObj.code, startDate, endDate));
                             }
                           }}
                           className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm ${(activeSection === "weekly-reports" ? weeklyReportLevel : monthlyReportLevel) === "branch"
@@ -3335,7 +3456,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               value={activeSection === "weekly-reports" ? weeklyStation : monthlyStation}
                               onChange={(e) => {
                                 const stCode = e.target.value;
-                                const stObj = STATIONS.find(s => s.code === stCode) || { country: "India", code: "IND" };
+                                const stObj = stationsList.find(s => s.code === stCode) || stationsList[0] || { country: "India", code: "IND" };
                                 if (activeSection === "weekly-reports") {
                                   setWeeklyStation(stCode);
                                   setWeeklySqlText(getStationwiseSqlTemplate(stObj.country, stObj.code, startDate, endDate));
@@ -3346,7 +3467,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               }}
                               className="h-8 px-2.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-700 shadow-sm focus:outline-none focus:ring-1 focus:ring-[#3182CE]"
                             >
-                              {STATIONS.map((st) => (
+                              {stationsList.map((st) => (
                                 <option key={st.code} value={st.code}>
                                   {st.name} ({st.code})
                                 </option>
@@ -3373,7 +3494,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               }}
                               className="h-8 px-2.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-700 shadow-sm focus:outline-none focus:ring-1 focus:ring-[#3182CE]"
                             >
-                              {BRANCH_OPTIONS.map((br) => (
+                              {branchesList.map((br) => (
                                 <option key={br.code} value={br.code}>{br.name}</option>
                               ))}
                             </select>
@@ -3403,7 +3524,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               const isBranch = (activeSection === "weekly-reports" ? weeklyReportLevel : monthlyReportLevel) === "branch";
                               const b = activeSection === "weekly-reports" ? weeklyBranch : monthlyBranch;
                               const stCode = activeSection === "weekly-reports" ? weeklyStation : monthlyStation;
-                              const stObj = STATIONS.find(s => s.code === stCode) || { country: "India", code: "IND" };
+                              const stObj = stationsList.find(s => s.code === stCode) || stationsList[0] || { country: "India", code: "IND" };
                               const updatedSql = isBranch
                                 ? getBranchwiseSqlTemplate("India", "IND", b, startDate, endDate)
                                 : getStationwiseSqlTemplate(stObj.country, stObj.code, startDate, endDate);
@@ -3483,7 +3604,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               const isBranch = (activeSection === "weekly-reports" ? weeklyReportLevel : monthlyReportLevel) === "branch";
                               const b = activeSection === "weekly-reports" ? weeklyBranch : monthlyBranch;
                               const stCode = activeSection === "weekly-reports" ? weeklyStation : monthlyStation;
-                              const stObj = STATIONS.find(s => s.code === stCode) || { country: "India", code: "IND" };
+                              const stObj = stationsList.find(s => s.code === stCode) || stationsList[0] || { country: "India", code: "IND" };
                               const defaultSql = isBranch
                                 ? getBranchwiseSqlTemplate("India", "IND", b, startDate, endDate)
                                 : getStationwiseSqlTemplate(stObj.country, stObj.code, startDate, endDate);
@@ -4432,7 +4553,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                 {/* ── LEFT COL: Configure New Schedule Form ── */}
                 {schedActiveTab === "create" && (
                   <div className="col-span-12">
-                    <div className="admin-card p-6 bg-white border border-slate-200 rounded-xl shadow-sm relative overflow-hidden">
+                    <div className="admin-card p-6 bg-white border border-slate-200 rounded-xl shadow-sm relative overflow-visible">
                       <div className="flex items-center gap-2.5 mb-5 pb-4 border-b border-[#EDF2F7]">
                         <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center">
                           <Plus className="w-4 h-4 text-violet-500" />
@@ -4465,35 +4586,247 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           </div>
                         </div>
 
+                        {/* Target Selection with Multi-Select Capability */}
                         {schedReportLevel === "branch" ? (
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Target Branch</label>
-                            <select
-                              value={schedBranch}
-                              onChange={(e) => setSchedBranch(e.target.value)}
-                              className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-purple-500"
-                            >
-                              {BRANCH_OPTIONS.map((br) => (
-                                <option key={br.code} value={br.code}>{br.name}</option>
-                              ))}
-                            </select>
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                Target Branches ({schedSelectedBranches.length} selected)
+                              </label>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setSchedSelectedBranches(branchesList.map(b => b.code))}
+                                  className="text-[9.5px] font-bold text-purple-600 hover:text-purple-800"
+                                >
+                                  Select All
+                                </button>
+                                <span className="text-slate-300">|</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setSchedSelectedBranches([])}
+                                  className="text-[9.5px] font-bold text-slate-400 hover:text-slate-600"
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={() => setIsSchedBranchDropdownOpen(!isSchedBranchDropdownOpen)}
+                                className="w-full min-h-[36px] px-3 py-1.5 bg-slate-50 border border-slate-200 hover:border-purple-300 rounded-lg text-slate-700 text-xs font-semibold flex items-center justify-between transition-colors text-left"
+                              >
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-purple-600">📍</span>
+                                  {schedSelectedBranches.length === 0 ? (
+                                    <span className="text-slate-400 italic">No branch selected</span>
+                                  ) : schedSelectedBranches.length === branchesList.length ? (
+                                    <span className="font-bold text-purple-700">All Branches ({branchesList.length})</span>
+                                  ) : (
+                                    <span className="font-semibold text-slate-700">
+                                      {schedSelectedBranches.length} Branch{schedSelectedBranches.length > 1 ? "es" : ""}: {schedSelectedBranches.join(", ")}
+                                    </span>
+                                  )}
+                                </div>
+                                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isSchedBranchDropdownOpen ? "rotate-180" : ""}`} />
+                              </button>
+
+                              {isSchedBranchDropdownOpen && (
+                                <div className="absolute left-0 top-full mt-1.5 w-full bg-white border border-purple-200 rounded-xl shadow-xl z-50 p-2.5 text-slate-800 animate-in fade-in-0 duration-150 space-y-2">
+                                  <Input
+                                    type="text"
+                                    placeholder="Search branches..."
+                                    value={schedBranchSearch}
+                                    onChange={(e) => setSchedBranchSearch(e.target.value)}
+                                    className="h-7 text-xs bg-slate-50 border-slate-200"
+                                  />
+                                  <div className="max-h-48 overflow-y-auto space-y-1 pr-1">
+                                    {branchesList
+                                      .filter(b => b.name.toLowerCase().includes(schedBranchSearch.toLowerCase()) || b.code.toLowerCase().includes(schedBranchSearch.toLowerCase()))
+                                      .map((br) => {
+                                        const isChecked = schedSelectedBranches.includes(br.code);
+                                        return (
+                                          <div
+                                            key={br.code}
+                                            onClick={() => {
+                                              setSchedSelectedBranches(prev =>
+                                                prev.includes(br.code) ? prev.filter(c => c !== br.code) : [...prev, br.code]
+                                              );
+                                            }}
+                                            className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${isChecked ? "bg-purple-50 text-purple-900 font-bold" : "hover:bg-slate-50 text-slate-700"}`}
+                                          >
+                                            <div className="flex items-center gap-2">
+                                              <input
+                                                type="checkbox"
+                                                checked={isChecked}
+                                                onChange={() => { }}
+                                                className="w-3.5 h-3.5 rounded border-slate-300 text-purple-600 focus:ring-purple-500 pointer-events-none"
+                                              />
+                                              <span>{br.name}</span>
+                                            </div>
+                                            <Badge variant="outline" className="text-[9px] border-slate-200 text-slate-500">{br.code}</Badge>
+                                          </div>
+                                        );
+                                      })}
+                                  </div>
+                                  <div className="flex justify-end pt-1 border-t border-slate-100">
+                                    <button
+                                      type="button"
+                                      onClick={() => setIsSchedBranchDropdownOpen(false)}
+                                      className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white font-bold text-[10px] rounded-md"
+                                    >
+                                      Done
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         ) : (
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Target Station</label>
-                            <select
-                              value={schedStation}
-                              onChange={(e) => setSchedStation(e.target.value)}
-                              className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
-                            >
-                              <option value="Global">Global (All Stations)</option>
-                              <option value="CMB">Sri Lanka (CMB)</option>
-                              <option value="IND">India (IND)</option>
-                              <option value="VNM">Viet Nam (VNM)</option>
-                              <option value="DAC">Bangladesh (DAC)</option>
-                              <option value="PKI">Pakistan (PKI)</option>
-                              <option value="NYC">United States (NYC)</option>
-                            </select>
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                Target Stations ({schedSelectedStations.length === stationsList.length && stationsList.length > 0 ? "All Stations Selected" : `${schedSelectedStations.length} selected`})
+                              </label>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setSchedSelectedStations(stationsList.map(s => s.code))}
+                                  className="text-[9.5px] font-bold text-violet-600 hover:text-violet-800"
+                                >
+                                  Select All
+                                </button>
+                                <span className="text-slate-300">|</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setSchedSelectedStations([])}
+                                  className="text-[9.5px] font-bold text-slate-400 hover:text-slate-600"
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={() => setIsSchedStationDropdownOpen(!isSchedStationDropdownOpen)}
+                                className="w-full min-h-[36px] px-3 py-1.5 bg-slate-50 border border-slate-200 hover:border-violet-300 rounded-lg text-slate-700 text-xs font-semibold flex items-center justify-between transition-colors text-left"
+                              >
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-violet-600">🏢</span>
+                                  {schedSelectedStations.length === 0 ? (
+                                    <span className="text-slate-400 italic">No station selected</span>
+                                  ) : schedSelectedStations.length === stationsList.length ? (
+                                    <span className="font-bold text-violet-700">All Stations Selected ({stationsList.length})</span>
+                                  ) : (
+                                    <span className="font-semibold text-slate-700">
+                                      {schedSelectedStations.length} Station{schedSelectedStations.length > 1 ? "s" : ""}: {schedSelectedStations.join(", ")}
+                                    </span>
+                                  )}
+                                </div>
+                                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isSchedStationDropdownOpen ? "rotate-180" : ""}`} />
+                              </button>
+
+                              {isSchedStationDropdownOpen && (
+                                <div className="absolute left-0 top-full mt-1.5 w-full bg-white border border-violet-200 rounded-xl shadow-xl z-50 p-2.5 text-slate-800 animate-in fade-in-0 duration-150 space-y-2">
+                                  <div className="flex items-center justify-between px-1 pb-1 border-b border-slate-100">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase">Quick Actions</span>
+                                    <div className="flex gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => setSchedSelectedStations(stationsList.map(s => s.code))}
+                                        className="text-[9.5px] font-bold text-violet-600 hover:text-violet-800"
+                                      >
+                                        Select All
+                                      </button>
+                                      <span className="text-slate-300">|</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSchedSelectedStations([])}
+                                        className="text-[9.5px] font-bold text-slate-400 hover:text-slate-600"
+                                      >
+                                        Clear All
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <Input
+                                    type="text"
+                                    placeholder="Search stations..."
+                                    value={schedStationSearch}
+                                    onChange={(e) => setSchedStationSearch(e.target.value)}
+                                    className="h-7 text-xs bg-slate-50 border-slate-200"
+                                  />
+                                  <div className="max-h-52 overflow-y-auto space-y-1 pr-1">
+                                    {/* Select All Checkbox Option */}
+                                    <div
+                                      onClick={() => {
+                                        if (schedSelectedStations.length === stationsList.length) {
+                                          setSchedSelectedStations([]);
+                                        } else {
+                                          setSchedSelectedStations(stationsList.map(s => s.code));
+                                        }
+                                      }}
+                                      className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${schedSelectedStations.length === stationsList.length && stationsList.length > 0 ? "bg-violet-50 text-violet-900 font-bold" : "hover:bg-slate-50 text-slate-700"}`}
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <input
+                                          type="checkbox"
+                                          checked={schedSelectedStations.length === stationsList.length && stationsList.length > 0}
+                                          onChange={() => { }}
+                                          className="w-3.5 h-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 pointer-events-none"
+                                        />
+                                        <span>🏢 Select All Stations ({stationsList.length})</span>
+                                      </div>
+                                      <Badge variant="outline" className="text-[9px] border-violet-200 text-violet-700 bg-violet-50">All</Badge>
+                                    </div>
+
+                                    <div className="border-t border-slate-100 my-1" />
+
+                                    {/* Individual Stations */}
+                                    {stationsList
+                                      .filter(s => s.name.toLowerCase().includes(schedStationSearch.toLowerCase()) || s.code.toLowerCase().includes(schedStationSearch.toLowerCase()))
+                                      .map((st) => {
+                                        const isChecked = schedSelectedStations.includes(st.code);
+                                        return (
+                                          <div
+                                            key={st.code}
+                                            onClick={() => {
+                                              setSchedSelectedStations(prev =>
+                                                prev.includes(st.code) ? prev.filter(c => c !== st.code) : [...prev, st.code]
+                                              );
+                                            }}
+                                            className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${isChecked ? "bg-violet-50 text-violet-900 font-bold" : "hover:bg-slate-50 text-slate-700"}`}
+                                          >
+                                            <div className="flex items-center gap-2">
+                                              <input
+                                                type="checkbox"
+                                                checked={isChecked}
+                                                onChange={() => { }}
+                                                className="w-3.5 h-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 pointer-events-none"
+                                              />
+                                              <span>{st.name}</span>
+                                            </div>
+                                            <Badge variant="outline" className="text-[9px] border-slate-200 text-slate-500">{st.code}</Badge>
+                                          </div>
+                                        );
+                                      })}
+                                  </div>
+                                  <div className="flex justify-end pt-1 border-t border-slate-100">
+                                    <button
+                                      type="button"
+                                      onClick={() => setIsSchedStationDropdownOpen(false)}
+                                      className="px-3 py-1 bg-violet-600 hover:bg-violet-700 text-white font-bold text-[10px] rounded-md"
+                                    >
+                                      Done
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         )}
 
@@ -4588,40 +4921,186 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           </div>
                         </div>
 
-                        {/* Recipients Selection */}
-                        <div className="space-y-2">
-                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                            Select Station to Load Recipients
-                          </label>
-                          <select
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val) {
-                                const emails = stationSelectedEmails[val] || [];
-                                setSchedRecipients(emails.join(", "));
-                              } else {
-                                setSchedRecipients("");
-                              }
-                            }}
-                            defaultValue=""
-                            className="w-full h-9 bg-slate-50 border border-[#E2E8F0] rounded-lg text-slate-700 text-xs px-3 focus:outline-none focus:ring-1 focus:ring-violet-500 font-semibold cursor-pointer transition-colors hover:bg-slate-100/80"
-                          >
-                            <option value="">-- Choose a Station --</option>
-                            {STATIONS.map((s) => {
-                              const count = (stationSelectedEmails[s.code] || []).length;
-                              return (
-                                <option key={s.code} value={s.code}>
-                                  {s.name} ({count} users)
-                                </option>
-                              );
-                            })}
-                            <option value="OTHER">Corporate/OTHER ({(stationSelectedEmails["OTHER"] || []).length} users)</option>
-                          </select>
+                        {/* Multiple Recipients Selection from Stations & Branches */}
+                        <div className="space-y-2 p-3 bg-slate-50/80 border border-slate-200 rounded-xl">
+                          <div className="flex items-center justify-between flex-wrap gap-2">
+                            <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                              <Users className="w-3.5 h-3.5 text-violet-600" />
+                              Select Stations / Branches to Load Recipients ({schedSelectedRecipientSources.length} selected)
+                            </label>
+                            <button
+                              type="button"
+                              onClick={handleLoadRecipientsForSelectedTargets}
+                              className="text-[9.5px] font-bold text-violet-600 hover:text-violet-800 flex items-center gap-1 bg-violet-50 px-2 py-0.5 rounded border border-violet-200"
+                              title="Load recipients matching the currently selected Target stations or branches above"
+                            >
+                              ⚡ Match Target Selection
+                            </button>
+                          </div>
 
-                          {/* Visual Recipients List */}
+                          {/* Quick Actions & Filters */}
+                          <div className="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-slate-200/60">
+                            <div className="flex items-center gap-1">
+                              {(["all", "station", "branch"] as const).map((cat) => (
+                                <button
+                                  key={cat}
+                                  type="button"
+                                  onClick={() => setSchedRecipientSourceCategory(cat)}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold capitalize transition-colors ${schedRecipientSourceCategory === cat ? "bg-violet-600 text-white shadow-xs" : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"}`}
+                                >
+                                  {cat === "all" ? "All Sources" : cat === "station" ? `Stations (${stationsList.length})` : `Branches (${branchesList.length})`}
+                                </button>
+                              ))}
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={handleSelectAllRecipientStations}
+                                className="text-[9.5px] font-bold text-violet-600 hover:text-violet-800"
+                              >
+                                + All Stations
+                              </button>
+                              <span className="text-slate-300">|</span>
+                              <button
+                                type="button"
+                                onClick={handleSelectAllRecipientBranches}
+                                className="text-[9.5px] font-bold text-purple-600 hover:text-purple-800"
+                              >
+                                + All Branches
+                              </button>
+                              <span className="text-slate-300">|</span>
+                              <button
+                                type="button"
+                                onClick={handleClearRecipientSources}
+                                className="text-[9.5px] font-bold text-slate-400 hover:text-slate-600"
+                              >
+                                Clear
+                              </button>
+                            </div>
+                          </div>
+
+                          <Input
+                            type="text"
+                            placeholder="🔍 Filter stations or branches by name or code..."
+                            value={schedRecipientSourceSearch}
+                            onChange={(e) => setSchedRecipientSourceSearch(e.target.value)}
+                            className="h-7 text-xs bg-white border-slate-200"
+                          />
+
+                          {/* Scrollable List Container */}
+                          <div className="max-h-48 overflow-y-auto space-y-1.5 p-1.5 bg-white border border-slate-200 rounded-lg shadow-inner divide-y divide-slate-100">
+                            {/* Stations Section */}
+                            {(schedRecipientSourceCategory === "all" || schedRecipientSourceCategory === "station") && (
+                              <div className="space-y-0.5 pt-0.5 first:pt-0">
+                                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 px-1">Stations (National)</p>
+                                {stationsList
+                                  .filter(s => s.name.toLowerCase().includes(schedRecipientSourceSearch.toLowerCase()) || s.code.toLowerCase().includes(schedRecipientSourceSearch.toLowerCase()))
+                                  .map((s) => {
+                                    const count = (stationSelectedEmails[s.code] || []).length;
+                                    const isChecked = schedSelectedRecipientSources.includes(s.code);
+                                    return (
+                                      <div
+                                        key={s.code}
+                                        onClick={() => handleToggleRecipientSource(s.code)}
+                                        className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${isChecked ? "bg-violet-50 text-violet-900 font-bold border border-violet-200" : "hover:bg-slate-50 text-slate-700 border border-transparent"}`}
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          <input
+                                            type="checkbox"
+                                            checked={isChecked}
+                                            onChange={() => { }}
+                                            className="w-3.5 h-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 pointer-events-none"
+                                          />
+                                          <span>🏢 {s.name}</span>
+                                        </div>
+                                        <div className="flex items-center gap-1.5">
+                                          <Badge variant="outline" className="text-[9px] border-slate-200 text-slate-400">{s.code}</Badge>
+                                          <Badge variant="outline" className={`text-[9px] ${count > 0 ? "border-violet-200 text-violet-700 bg-violet-50 font-bold" : "border-slate-200 text-slate-400 font-normal"}`}>
+                                            {count} users
+                                          </Badge>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+
+                                {/* Corporate / OTHER */}
+                                <div
+                                  onClick={() => handleToggleRecipientSource("OTHER")}
+                                  className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${schedSelectedRecipientSources.includes("OTHER") ? "bg-violet-50 text-violet-900 font-bold border border-violet-200" : "hover:bg-slate-50 text-slate-700 border border-transparent"}`}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      type="checkbox"
+                                      checked={schedSelectedRecipientSources.includes("OTHER")}
+                                      onChange={() => { }}
+                                      className="w-3.5 h-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 pointer-events-none"
+                                    />
+                                    <span>🏢 Corporate / OTHER</span>
+                                  </div>
+                                  <Badge variant="outline" className="text-[9px] border-slate-200 text-slate-500">
+                                    {(stationSelectedEmails["OTHER"] || []).length} users
+                                  </Badge>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Branches Section */}
+                            {(schedRecipientSourceCategory === "all" || schedRecipientSourceCategory === "branch") && branchesList.length > 0 && (
+                              <div className="space-y-0.5 pt-1.5 first:pt-0">
+                                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 px-1">Branches (Offices)</p>
+                                {branchesList
+                                  .filter(b => b.name.toLowerCase().includes(schedRecipientSourceSearch.toLowerCase()) || b.code.toLowerCase().includes(schedRecipientSourceSearch.toLowerCase()))
+                                  .map((b) => {
+                                    const count = (stationSelectedEmails[b.code] || []).length;
+                                    const isChecked = schedSelectedRecipientSources.includes(b.code);
+                                    return (
+                                      <div
+                                        key={b.code}
+                                        onClick={() => handleToggleRecipientSource(b.code)}
+                                        className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${isChecked ? "bg-purple-50 text-purple-900 font-bold border border-purple-200" : "hover:bg-slate-50 text-slate-700 border border-transparent"}`}
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          <input
+                                            type="checkbox"
+                                            checked={isChecked}
+                                            onChange={() => { }}
+                                            className="w-3.5 h-3.5 rounded border-slate-300 text-purple-600 focus:ring-purple-500 pointer-events-none"
+                                          />
+                                          <span>📍 {b.name}</span>
+                                        </div>
+                                        <div className="flex items-center gap-1.5">
+                                          <Badge variant="outline" className="text-[9px] border-slate-200 text-slate-400">{b.code}</Badge>
+                                          <Badge variant="outline" className={`text-[9px] ${count > 0 ? "border-purple-200 text-purple-700 bg-purple-50 font-bold" : "border-slate-200 text-slate-400 font-normal"}`}>
+                                            {count} users
+                                          </Badge>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                          {/* Visual Loaded Recipients List */}
                           {schedRecipients.split(",").map(r => r.trim()).filter(Boolean).length > 0 && (
                             <div className="space-y-1.5 mt-2">
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Loaded Recipients</p>
+                              <div className="flex items-center justify-between">
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                  Loaded Recipients ({schedRecipients.split(",").map(r => r.trim()).filter(Boolean).length} emails)
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSchedRecipients("");
+                                    setSchedSelectedRecipientSources([]);
+                                  }}
+                                  className="text-[9.5px] font-bold text-rose-500 hover:text-rose-700"
+                                >
+                                  Clear Emails
+                                </button>
+                              </div>
                               <div className="flex flex-wrap gap-1 p-2 border border-dashed border-slate-200 rounded-lg bg-slate-50 max-h-32 overflow-y-auto shadow-inner">
                                 {schedRecipients
                                   .split(",")
@@ -4648,7 +5127,6 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               </div>
                             </div>
                           )}
-                        </div>
 
                         {/* Feedback status banner */}
                         {schedStatusMessage && (
@@ -4829,7 +5307,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                       >
                         <option value="ALL">All Stations</option>
                         <option value="Global">Global</option>
-                        {STATIONS.map((s) => (
+                        {stationsList.map((s) => (
                           <option key={s.code} value={s.code}>{s.name} ({s.code})</option>
                         ))}
                         <option value="OTHER">Corporate / Other</option>

@@ -44,6 +44,8 @@ from api.scheduler_db import (
     get_schedule,
     delete_schedule,
     update_schedule_status,
+    get_supabase_stations,
+    get_supabase_branches,
 )
 import json
 import datetime
@@ -1260,6 +1262,21 @@ def execute_scheduled_report_job(schedule_id: str):
     country_val = filters.get("country")
     branch_val = filters.get("branch")
     
+    # Dynamically resolve station & branch metadata from Supabase if not provided
+    db_stations = get_supabase_stations()
+    db_branches = get_supabase_branches()
+    
+    if company_val and not country_val:
+        st_match = next((s for s in db_stations if s.get("code") == company_val), None)
+        if st_match and st_match.get("country"):
+            country_val = st_match.get("country")
+            
+    if branch_val:
+        br_match = next((b for b in db_branches if b.get("code") == branch_val), None)
+        if br_match:
+            country_val = br_match.get("country", country_val or "India")
+            company_val = br_match.get("company_code", company_val or "IND")
+    
     if (company_val and company_val != "all") or branch_val:
         mode = "custom-sql"
         if branch_val or filters.get("report_level") == "branch":
@@ -1271,6 +1288,9 @@ def execute_scheduled_report_job(schedule_id: str):
                 end_date=end_date
             )
         elif company_val == "OTHER":
+            # Dynamically exclude all registered station codes from Supabase
+            registered_codes = [f"'{s['code']}'" for s in db_stations if s.get("code")]
+            excluded_codes_str = ", ".join(registered_codes) if registered_codes else "'CMB', 'IND', 'VNM', 'DAC', 'PKI', 'NYC'"
             custom_sql = f"""
 SELECT
     vt.ConsoleNumber AS Console_Number,
@@ -1298,7 +1318,7 @@ LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs
 WHERE vt.ETD >= '{start_date}'
     AND vt.ETD <= '{end_date}'
     AND vt.TransportMode = 'AIR'
-    AND vs.Company NOT IN ('CMB', 'IND', 'VNM', 'DAC', 'PKI', 'NYC')
+    AND vs.Company NOT IN ({excluded_codes_str})
 GROUP BY
     vt.ConsoleNumber,
     vt.MasterBillNum,

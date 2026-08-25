@@ -131,3 +131,74 @@ def update_schedule_status(schedule_id: str, is_active: int):
     except Exception as e:
         print(f"Supabase DB Error in update_schedule_status {schedule_id}: {e}")
         raise e
+
+
+DEFAULT_STATIONS_FALLBACK = [
+    {"code": "CMB", "country": "Sri Lanka", "name": "Colombo (Sri Lanka)", "env_var": "RECIPIENTS_CMB"},
+    {"code": "IND", "country": "India", "name": "India (National)", "env_var": "RECIPIENTS_IND"},
+    {"code": "VNM", "country": "Viet Nam", "name": "Viet Nam", "env_var": "RECIPIENTS_VNM"},
+    {"code": "DAC", "country": "Bangladesh", "name": "Bangladesh", "env_var": "RECIPIENTS_DAC"},
+    {"code": "PKI", "country": "Pakistan", "name": "Pakistan", "env_var": "RECIPIENTS_PKI"},
+    {"code": "NYC", "country": "United States", "name": "United States (NYC)", "env_var": "RECIPIENTS_NYC"},
+]
+
+DEFAULT_BRANCHES_FALLBACK = [
+    {"code": "BLR", "name": "Bengaluru (BLR)", "city": "Bengaluru", "country": "India", "company_code": "IND"},
+    {"code": "MAA", "name": "Chennai (MAA)", "city": "Chennai", "country": "India", "company_code": "IND"},
+    {"code": "HYD", "name": "Hyderabad (HYD)", "city": "Hyderabad", "country": "India", "company_code": "IND"},
+    {"code": "AMD", "name": "Ahmedabad (AMD)", "city": "Ahmedabad", "country": "India", "company_code": "IND"},
+    {"code": "BOM", "name": "Mumbai (BOM)", "city": "Mumbai", "country": "India", "company_code": "IND"},
+    {"code": "PNQ", "name": "Pune (PNQ)", "city": "Pune", "country": "India", "company_code": "IND"},
+    {"code": "DEL", "name": "Delhi (DEL)", "city": "Delhi", "country": "India", "company_code": "IND"},
+    {"code": "CCU", "name": "Kolkata (CCU)", "city": "Kolkata", "country": "India", "company_code": "IND"},
+]
+
+def get_supabase_stations() -> List[Dict]:
+    """Fetches active stations from Supabase table 'stations', falling back to defaults if unreachable."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return DEFAULT_STATIONS_FALLBACK
+    headers = get_headers()
+    url = f"{SUPABASE_URL}/rest/v1/stations?is_active=eq.true&order=code.asc&select=*"
+    try:
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data and len(data) > 0:
+                return data
+    except Exception as e:
+        print(f"Warning: Could not fetch stations from Supabase: {e}")
+    return DEFAULT_STATIONS_FALLBACK
+
+def get_supabase_branches() -> List[Dict]:
+    """Fetches active branches from Supabase table 'branches', falling back to defaults if unreachable."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return DEFAULT_BRANCHES_FALLBACK
+    headers = get_headers()
+    url = f"{SUPABASE_URL}/rest/v1/branches?is_active=eq.true&order=name.asc&select=*"
+    try:
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data and len(data) > 0:
+                return data
+    except Exception as e:
+        print(f"Warning: Could not fetch branches from Supabase: {e}")
+    return DEFAULT_BRANCHES_FALLBACK
+
+def get_supabase_recipients(code: str, is_branch: bool = False) -> List[str]:
+    """Fetches recipient email addresses for a station or branch from Supabase."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    headers = get_headers()
+    table = "branch_recipients" if is_branch else "station_recipients"
+    col = "branch_code" if is_branch else "station_code"
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{col}=eq.{code}&select=email"
+    try:
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            return [row["email"].strip() for row in data if row.get("email") and row["email"].strip()]
+    except Exception as e:
+        print(f"Warning: Could not fetch recipients for {code} from Supabase: {e}")
+    return []
+
