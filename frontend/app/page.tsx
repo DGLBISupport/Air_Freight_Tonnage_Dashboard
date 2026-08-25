@@ -784,6 +784,10 @@ export default function Dashboard() {
   // --- SCHEDULER STATES ---
   const [schedules, setSchedules] = useState<any[]>([]);
   const [schedulerLoading, setSchedulerLoading] = useState(false);
+  const [selectedScheduleIds, setSelectedScheduleIds] = useState<string[]>([]);
+  const [scheduleSearch, setScheduleSearch] = useState("");
+  const [scheduleFrequencyFilter, setScheduleFrequencyFilter] = useState("ALL");
+  const [scheduleStatusFilter, setScheduleStatusFilter] = useState("ALL");
   const [schedStation, setSchedStation] = useState("IND");
   const [schedSelectedStations, setSchedSelectedStations] = useState<string[]>(DEFAULT_STATIONS.map(s => s.code));
   const [schedSelectedBranches, setSchedSelectedBranches] = useState<string[]>(["BLR"]);
@@ -1078,38 +1082,85 @@ export default function Dashboard() {
     }
   };
 
-  // Delete Schedule Modal State
-  const [scheduleToDelete, setScheduleToDelete] = useState<{ id: string; stationLabel?: string; triggerDesc?: string } | null>(null);
+  // Delete Schedule Modal State (Supports single and bulk deletion)
+  const [schedulesToDelete, setSchedulesToDelete] = useState<{ id: string; stationLabel?: string; triggerDesc?: string; recipientCount?: number }[] | null>(null);
   const [isDeletingSchedule, setIsDeletingSchedule] = useState(false);
   const [scheduleDeleteError, setScheduleDeleteError] = useState<string | null>(null);
 
-  const handleDeleteSchedule = (scheduleId: string, stationLabel?: string, triggerDesc?: string) => {
+  const handleDeleteSchedule = (scheduleId: string, stationLabel?: string, triggerDesc?: string, recipientCount?: number) => {
     setScheduleDeleteError(null);
-    setScheduleToDelete({ id: scheduleId, stationLabel, triggerDesc });
+    setSchedulesToDelete([{ id: scheduleId, stationLabel, triggerDesc, recipientCount }]);
+  };
+
+  const handleBulkDeleteSchedules = () => {
+    if (selectedScheduleIds.length === 0) return;
+    const toDelete = schedules
+      .filter((s) => selectedScheduleIds.includes(s.id))
+      .map((s) => {
+        const filters = s.filters || {};
+        const countryClean = cleanCountryName(filters.country);
+        let stationLabel = "Global (All)";
+        if (filters.branch_code) {
+          stationLabel = `Branch: ${filters.branch_code} (${countryClean || "Global"})`;
+        } else if (filters.company_code) {
+          stationLabel = `${countryClean} (${filters.company_code})`;
+        }
+
+        let triggerDesc = "";
+        if (s.frequency === "weekly") {
+          const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+          triggerDesc = `Weekly on ${days[s.day_of_week] || "Monday"} at ${s.time_of_day}`;
+        } else if (s.frequency === "monthly") {
+          triggerDesc = `Monthly on day ${s.day_of_month} at ${s.time_of_day}`;
+        } else {
+          triggerDesc = `Daily at ${s.time_of_day}`;
+        }
+        const recipientCount = (s.recipient_email || "").split(",").map((r: string) => r.trim()).filter(Boolean).length;
+        return { id: s.id, stationLabel, triggerDesc, recipientCount };
+      });
+
+    setScheduleDeleteError(null);
+    setSchedulesToDelete(toDelete);
   };
 
   const handleConfirmDeleteSchedule = async () => {
-    if (!scheduleToDelete) return;
+    if (!schedulesToDelete || schedulesToDelete.length === 0) return;
     setIsDeletingSchedule(true);
     setScheduleDeleteError(null);
     try {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API}/api/schedules/${scheduleToDelete.id}`, {
-        method: "DELETE",
-        headers: {
-          "Authorization": authHeaders.Authorization
-        }
-      });
+      const idsToDelete = schedulesToDelete.map((s) => s.id);
+
+      let res;
+      if (idsToDelete.length === 1) {
+        res = await fetch(`${API}/api/schedules/${idsToDelete[0]}`, {
+          method: "DELETE",
+          headers: {
+            "Authorization": authHeaders.Authorization
+          }
+        });
+      } else {
+        res = await fetch(`${API}/api/schedules/batch-delete`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": authHeaders.Authorization
+          },
+          body: JSON.stringify({ schedule_ids: idsToDelete })
+        });
+      }
+
       const data = await res.json();
       if (data.status === "success") {
-        setScheduleToDelete(null);
+        setSelectedScheduleIds((prev) => prev.filter((id) => !idsToDelete.includes(id)));
+        setSchedulesToDelete(null);
         fetchSchedules(supabase);
       } else {
-        setScheduleDeleteError(data.detail || "Could not delete schedule.");
+        setScheduleDeleteError(data.detail || data.message || "Could not delete schedule(s).");
       }
     } catch (e) {
       console.error(e);
-      setScheduleDeleteError("Failed to delete schedule. Please check server connection.");
+      setScheduleDeleteError("Failed to delete schedule(s). Please check server connection.");
     } finally {
       setIsDeletingSchedule(false);
     }
@@ -5083,50 +5134,50 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           </div>
                         </div>
 
-                          {/* Visual Loaded Recipients List */}
-                          {schedRecipients.split(",").map(r => r.trim()).filter(Boolean).length > 0 && (
-                            <div className="space-y-1.5 mt-2">
-                              <div className="flex items-center justify-between">
-                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                                  Loaded Recipients ({schedRecipients.split(",").map(r => r.trim()).filter(Boolean).length} emails)
-                                </p>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSchedRecipients("");
-                                    setSchedSelectedRecipientSources([]);
-                                  }}
-                                  className="text-[9.5px] font-bold text-rose-500 hover:text-rose-700"
-                                >
-                                  Clear Emails
-                                </button>
-                              </div>
-                              <div className="flex flex-wrap gap-1 p-2 border border-dashed border-slate-200 rounded-lg bg-slate-50 max-h-32 overflow-y-auto shadow-inner">
-                                {schedRecipients
-                                  .split(",")
-                                  .map(r => r.trim())
-                                  .filter(Boolean)
-                                  .map((email) => (
-                                    <Badge
-                                      key={email}
-                                      className="bg-white hover:bg-slate-50 text-slate-750 border border-[#CBD5E0] font-semibold text-[9px] px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm"
-                                    >
-                                      <span className="truncate max-w-[180px]">{email}</span>
-                                      <X
-                                        className="w-2.5 h-2.5 text-slate-400 hover:text-slate-650 cursor-pointer shrink-0"
-                                        onClick={() => {
-                                          const remaining = schedRecipients
-                                            .split(",")
-                                            .map(r => r.trim())
-                                            .filter(x => x && x !== email);
-                                          setSchedRecipients(remaining.join(", "));
-                                        }}
-                                      />
-                                    </Badge>
-                                  ))}
-                              </div>
+                        {/* Visual Loaded Recipients List */}
+                        {schedRecipients.split(",").map(r => r.trim()).filter(Boolean).length > 0 && (
+                          <div className="space-y-1.5 mt-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                Loaded Recipients ({schedRecipients.split(",").map(r => r.trim()).filter(Boolean).length} emails)
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSchedRecipients("");
+                                  setSchedSelectedRecipientSources([]);
+                                }}
+                                className="text-[9.5px] font-bold text-rose-500 hover:text-rose-700"
+                              >
+                                Clear Emails
+                              </button>
                             </div>
-                          )}
+                            <div className="flex flex-wrap gap-1 p-2 border border-dashed border-slate-200 rounded-lg bg-slate-50 max-h-32 overflow-y-auto shadow-inner">
+                              {schedRecipients
+                                .split(",")
+                                .map(r => r.trim())
+                                .filter(Boolean)
+                                .map((email) => (
+                                  <Badge
+                                    key={email}
+                                    className="bg-white hover:bg-slate-50 text-slate-750 border border-[#CBD5E0] font-semibold text-[9px] px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm"
+                                  >
+                                    <span className="truncate max-w-[180px]">{email}</span>
+                                    <X
+                                      className="w-2.5 h-2.5 text-slate-400 hover:text-slate-650 cursor-pointer shrink-0"
+                                      onClick={() => {
+                                        const remaining = schedRecipients
+                                          .split(",")
+                                          .map(r => r.trim())
+                                          .filter(x => x && x !== email);
+                                        setSchedRecipients(remaining.join(", "));
+                                      }}
+                                    />
+                                  </Badge>
+                                ))}
+                            </div>
+                          </div>
+                        )}
 
                         {/* Feedback status banner */}
                         {schedStatusMessage && (
@@ -5148,108 +5199,377 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                   </div>
                 )}
 
-                {/* ── RIGHT COL: Active Schedules List ── */}
-                {schedActiveTab === "list" && (
-                  <div className="col-span-12">
-                    <div className="admin-card p-6 bg-white border border-slate-200 rounded-xl shadow-sm relative overflow-hidden flex flex-col justify-between min-h-[400px]">
-                      <div>
-                        <div className="flex items-center justify-between mb-5 pb-4 border-b border-[#EDF2F7]">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center">
-                              <Clock className="w-4 h-4 text-violet-500" />
+                {/* ── RIGHT COL: Active Schedules Table ── */}
+                {schedActiveTab === "list" && (() => {
+                  const filteredSchedules = schedules.filter((s) => {
+                    // Search query match
+                    const searchQ = scheduleSearch.toLowerCase().trim();
+                    if (searchQ) {
+                      const filters = s.filters || {};
+                      const country = (filters.country || "").toLowerCase();
+                      const company = (filters.company_code || "").toLowerCase();
+                      const branch = (filters.branch_code || "").toLowerCase();
+                      const recipients = (s.recipient_email || "").toLowerCase();
+                      const freq = (s.frequency || "").toLowerCase();
+                      const time = (s.time_of_day || "").toLowerCase();
+                      const matches = country.includes(searchQ) ||
+                        company.includes(searchQ) ||
+                        branch.includes(searchQ) ||
+                        recipients.includes(searchQ) ||
+                        freq.includes(searchQ) ||
+                        time.includes(searchQ);
+                      if (!matches) return false;
+                    }
+
+                    // Frequency filter
+                    if (scheduleFrequencyFilter !== "ALL" && s.frequency !== scheduleFrequencyFilter) {
+                      return false;
+                    }
+
+                    // Status filter
+                    if (scheduleStatusFilter === "ACTIVE" && !s.is_active) return false;
+                    if (scheduleStatusFilter === "PAUSED" && s.is_active) return false;
+
+                    return true;
+                  });
+
+                  const isAllFilteredSelected = filteredSchedules.length > 0 && filteredSchedules.every(s => selectedScheduleIds.includes(s.id));
+                  const isSomeFilteredSelected = filteredSchedules.some(s => selectedScheduleIds.includes(s.id));
+
+                  return (
+                    <div className="col-span-12">
+                      <div className="admin-card p-6 bg-white border border-slate-200 rounded-xl shadow-sm relative overflow-hidden flex flex-col justify-between min-h-[450px]">
+                        <div>
+                          {/* Header Toolbar */}
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5 pb-4 border-b border-[#EDF2F7]">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center">
+                                <Clock className="w-4 h-4 text-violet-500" />
+                              </div>
+                              <div>
+                                <h3 className="text-sm font-bold text-[#1A202C]">Active Schedules</h3>
+                                <p className="text-[10.5px] text-slate-400">Currently configured periodic automated reports</p>
+                              </div>
                             </div>
-                            <div>
-                              <h3 className="text-sm font-bold text-[#1A202C]">Active Schedules</h3>
-                              <p className="text-[10.5px] text-slate-400">Currently configured periodic mailers</p>
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline" className="border-violet-200 text-violet-750 bg-violet-50 text-[10px] font-bold">
+                                {schedules.length} configured
+                              </Badge>
+                              <button
+                                onClick={() => fetchSchedules(supabase)}
+                                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+                                title="Refresh schedules"
+                              >
+                                <RefreshCw className={`w-4 h-4 ${schedulerLoading ? "animate-spin" : ""}`} />
+                              </button>
                             </div>
                           </div>
-                          <Badge variant="outline" className="border-violet-200 text-violet-750 bg-violet-50 text-[10px] font-bold">
-                            {schedules.length} configured
-                          </Badge>
-                        </div>
 
-                        <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
-                          {schedulerLoading ? (
-                            <div className="flex flex-col gap-2">
-                              <Skeleton className="h-20 w-full bg-slate-50" />
-                              <Skeleton className="h-20 w-full bg-slate-50" />
+                          {/* Search, Filter & Quick Action Bar */}
+                          <div className="flex flex-col sm:flex-row gap-3 mb-4">
+                            <div className="relative flex-1">
+                              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                              <Input
+                                placeholder="Search by country, station, branch, email..."
+                                value={scheduleSearch}
+                                onChange={(e) => setScheduleSearch(e.target.value)}
+                                className="h-9 pl-8 text-xs bg-white border-[#CBD5E0] rounded-lg text-slate-700 w-full"
+                              />
                             </div>
-                          ) : schedules.length === 0 ? (
-                            <div className="text-center py-12 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                              <p className="text-xs text-slate-400 font-medium italic">No schedules configured yet.</p>
-                              <p className="text-[10.5px] text-slate-400 mt-1">Configure one using the form on the left.</p>
+
+                            <select
+                              value={scheduleFrequencyFilter}
+                              onChange={(e) => setScheduleFrequencyFilter(e.target.value)}
+                              className="h-9 px-3 bg-white border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500 w-full sm:w-40"
+                            >
+                              <option value="ALL">All Frequencies</option>
+                              <option value="daily">Daily</option>
+                              <option value="weekly">Weekly</option>
+                              <option value="monthly">Monthly</option>
+                            </select>
+
+                            <select
+                              value={scheduleStatusFilter}
+                              onChange={(e) => setScheduleStatusFilter(e.target.value)}
+                              className="h-9 px-3 bg-white border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500 w-full sm:w-36"
+                            >
+                              <option value="ALL">All Statuses</option>
+                              <option value="ACTIVE">Active Only</option>
+                              <option value="PAUSED">Paused Only</option>
+                            </select>
+                          </div>
+
+                          {/* Multi-Selection Bulk Action Toolbar */}
+                          {selectedScheduleIds.length > 0 && (
+                            <div className="mb-4 p-3 bg-rose-50/90 border border-rose-200 rounded-xl flex items-center justify-between flex-wrap gap-2 animate-in fade-in-0 duration-150">
+                              <div className="flex items-center gap-2">
+                                <span className="w-5 h-5 rounded-full bg-rose-600 text-white flex items-center justify-center text-[10px] font-black shrink-0">
+                                  {selectedScheduleIds.length}
+                                </span>
+                                <span className="text-xs font-bold text-rose-900">
+                                  {selectedScheduleIds.length} schedule{selectedScheduleIds.length > 1 ? "s" : ""} selected
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() => setSelectedScheduleIds([])}
+                                  className="h-7 px-2.5 text-[10.5px] font-bold text-slate-600 bg-white border-slate-200 hover:bg-slate-50"
+                                >
+                                  Clear Selection
+                                </Button>
+                                <Button
+                                  type="button"
+                                  onClick={handleBulkDeleteSchedules}
+                                  className="h-7 px-3 text-[10.5px] font-bold bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1.5 shadow-sm shadow-rose-500/20"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  Delete Selected ({selectedScheduleIds.length})
+                                </Button>
+                              </div>
                             </div>
-                          ) : (
-                            schedules.map((s) => {
-                              const filters = s.filters || {};
-                              const countryClean = cleanCountryName(filters.country);
-                              const stationLabel = filters.company_code ? `${countryClean} (${filters.company_code})` : "Global (All)";
-
-                              let triggerDesc = "";
-                              if (s.frequency === "weekly") {
-                                const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-                                triggerDesc = `Weekly on ${days[s.day_of_week] || "Monday"} at ${s.time_of_day}`;
-                              } else if (s.frequency === "monthly") {
-                                triggerDesc = `Monthly on day ${s.day_of_month} at ${s.time_of_day}`;
-                              } else {
-                                triggerDesc = `Daily at ${s.time_of_day}`;
-                              }
-
-                              return (
-                                <div key={s.id} className="p-4 bg-slate-50 border border-slate-200 rounded-xl hover:bg-slate-100/50 transition-colors flex flex-col justify-between gap-3">
-                                  <div className="flex justify-between items-start gap-2">
-                                    <div>
-                                      <h4 className="text-xs font-bold text-slate-800">{stationLabel}</h4>
-                                      <p className="text-[10px] font-semibold text-slate-400 mt-0.5">{triggerDesc}</p>
-                                      {filters.start_date && filters.end_date && (
-                                        <div className="text-[9px] font-bold text-violet-600 mt-1 flex items-center gap-1">
-                                          📅 Range: {filters.start_date} to {filters.end_date}
-                                        </div>
-                                      )}
-                                    </div>
-                                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase ${s.is_active ? "text-emerald-700 bg-emerald-100" : "text-slate-500 bg-slate-200"}`}>
-                                      {s.is_active ? "Active" : "Paused"}
-                                    </span>
-                                  </div>
-
-                                  <div className="text-[9.5px] text-slate-450 bg-white border border-slate-200/60 p-2 rounded-lg max-h-16 overflow-y-auto">
-                                    <span className="font-bold text-slate-500">Recipients:</span> {s.recipient_email}
-                                  </div>
-
-                                  <div className="flex justify-between items-center border-t border-slate-200/60 pt-2 mt-1">
-                                    <button
-                                      onClick={() => handleToggleSchedule(s.id)}
-                                      className={`text-[9.5px] font-bold px-2 py-1 rounded transition-colors ${s.is_active ? "text-amber-700 bg-amber-50 hover:bg-amber-100" : "text-emerald-700 bg-emerald-50 hover:bg-emerald-100"}`}
-                                    >
-                                      {s.is_active ? "Pause" : "Activate"}
-                                    </button>
-
-                                    <div className="flex items-center gap-2">
-                                      <button
-                                        onClick={() => handleRunScheduleNow(s.id)}
-                                        className="p-1 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-colors"
-                                        title="Run Schedule Now"
-                                      >
-                                        <Play className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        onClick={() => handleDeleteSchedule(s.id, stationLabel, triggerDesc)}
-                                        className="p-1 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 transition-colors"
-                                        title="Delete Schedule"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })
                           )}
+
+                          {/* Table Container */}
+                          <div className="overflow-x-auto max-h-[500px] border border-slate-200 rounded-xl">
+                            {schedulerLoading ? (
+                              <div className="p-6 space-y-3">
+                                <Skeleton className="h-10 w-full bg-slate-50" />
+                                <Skeleton className="h-10 w-full bg-slate-50" />
+                                <Skeleton className="h-10 w-full bg-slate-50" />
+                              </div>
+                            ) : schedules.length === 0 ? (
+                              <div className="text-center py-14 bg-slate-50 rounded-xl">
+                                <Clock className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                                <p className="text-xs text-slate-500 font-bold">No schedules configured yet.</p>
+                                <p className="text-[10.5px] text-slate-400 mt-1">Configure automated reporting schedules using the "Configure New Schedule" tab.</p>
+                              </div>
+                            ) : filteredSchedules.length === 0 ? (
+                              <div className="text-center py-12 bg-slate-50 rounded-xl">
+                                <Filter className="w-7 h-7 text-slate-300 mx-auto mb-2" />
+                                <p className="text-xs text-slate-500 font-bold">No schedules match your search filters.</p>
+                                <button
+                                  type="button"
+                                  onClick={() => { setScheduleSearch(""); setScheduleFrequencyFilter("ALL"); setScheduleStatusFilter("ALL"); }}
+                                  className="text-[10.5px] text-violet-600 font-bold hover:underline mt-1"
+                                >
+                                  Clear All Filters
+                                </button>
+                              </div>
+                            ) : (
+                              <table className="w-full text-left text-xs border-collapse">
+                                <thead>
+                                  <tr className="border-b border-[#E2E8F0] text-slate-500 uppercase font-bold text-[9.5px] tracking-wider bg-slate-50/80 sticky top-0 z-10 backdrop-blur-sm">
+                                    <th className="p-3 text-center w-10">
+                                      <input
+                                        type="checkbox"
+                                        checked={isAllFilteredSelected}
+                                        ref={(el) => {
+                                          if (el) el.indeterminate = !isAllFilteredSelected && isSomeFilteredSelected;
+                                        }}
+                                        onChange={(e) => {
+                                          if (e.target.checked) {
+                                            setSelectedScheduleIds(Array.from(new Set([...selectedScheduleIds, ...filteredSchedules.map(s => s.id)])));
+                                          } else {
+                                            const filteredIds = new Set(filteredSchedules.map(s => s.id));
+                                            setSelectedScheduleIds(selectedScheduleIds.filter(id => !filteredIds.has(id)));
+                                          }
+                                        }}
+                                        className="w-3.5 h-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 cursor-pointer"
+                                        title={isAllFilteredSelected ? "Deselect all" : "Select all visible"}
+                                      />
+                                    </th>
+                                    <th className="px-4 py-3">Report Scope</th>
+                                    <th className="px-4 py-3">Frequency & Trigger</th>
+                                    <th className="px-4 py-3">Date Range</th>
+                                    <th className="px-4 py-3">Recipients</th>
+                                    <th className="px-4 py-3 text-center">Status</th>
+                                    <th className="px-4 py-3 text-right">Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-[#F1F5F9] bg-white">
+                                  {filteredSchedules.map((s) => {
+                                    const filters = s.filters || {};
+                                    const countryClean = cleanCountryName(filters.country);
+                                    const isBranch = !!filters.branch_code;
+                                    const isStation = !!filters.company_code && !isBranch;
+
+                                    let stationLabel = "Global (All)";
+                                    if (isBranch) {
+                                      stationLabel = `Branch: ${filters.branch_code} (${countryClean || "Global"})`;
+                                    } else if (isStation) {
+                                      stationLabel = `${countryClean} (${filters.company_code})`;
+                                    }
+
+                                    let triggerDesc = "";
+                                    if (s.frequency === "weekly") {
+                                      const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+                                      triggerDesc = `Weekly on ${days[s.day_of_week] || "Monday"} at ${s.time_of_day}`;
+                                    } else if (s.frequency === "monthly") {
+                                      triggerDesc = `Monthly on day ${s.day_of_month} at ${s.time_of_day}`;
+                                    } else {
+                                      triggerDesc = `Daily at ${s.time_of_day}`;
+                                    }
+
+                                    const recipientList = (s.recipient_email || "").split(",").map((r: string) => r.trim()).filter(Boolean);
+                                    const isSelected = selectedScheduleIds.includes(s.id);
+
+                                    return (
+                                      <tr
+                                        key={s.id}
+                                        className={`transition-colors hover:bg-slate-50/70 ${isSelected ? "bg-violet-50/40 font-medium" : ""}`}
+                                      >
+                                        {/* Row Checkbox */}
+                                        <td className="p-3 text-center">
+                                          <input
+                                            type="checkbox"
+                                            checked={isSelected}
+                                            onChange={() => {
+                                              setSelectedScheduleIds((prev) =>
+                                                prev.includes(s.id) ? prev.filter((id) => id !== s.id) : [...prev, s.id]
+                                              );
+                                            }}
+                                            className="w-3.5 h-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 cursor-pointer"
+                                          />
+                                        </td>
+
+                                        {/* Report Scope / Target */}
+                                        <td className="px-4 py-3">
+                                          <div className="flex items-center gap-2">
+                                            {isBranch ? (
+                                              <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200 text-[10px] font-bold shrink-0">
+                                                📍 {filters.branch_code}
+                                              </Badge>
+                                            ) : isStation ? (
+                                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-[10px] font-bold shrink-0">
+                                                🏢 {filters.company_code}
+                                              </Badge>
+                                            ) : (
+                                              <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-200 text-[10px] font-bold shrink-0">
+                                                🌐 Global
+                                              </Badge>
+                                            )}
+                                            <div>
+                                              <div className="font-bold text-slate-800 text-xs">{stationLabel}</div>
+                                              {filters.country && countryClean && isBranch && (
+                                                <div className="text-[10px] text-slate-400">{countryClean}</div>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </td>
+
+                                        {/* Frequency & Trigger */}
+                                        <td className="px-4 py-3">
+                                          <div className="flex items-center gap-1.5 flex-wrap">
+                                            <Badge
+                                              variant="outline"
+                                              className={`text-[9.5px] font-bold uppercase tracking-wider ${s.frequency === "daily"
+                                                  ? "bg-sky-50 text-sky-700 border-sky-200"
+                                                  : s.frequency === "monthly"
+                                                    ? "bg-amber-50 text-amber-700 border-amber-200"
+                                                    : "bg-violet-50 text-violet-700 border-violet-200"
+                                                }`}
+                                            >
+                                              {s.frequency}
+                                            </Badge>
+                                            <span className="text-[11px] font-semibold text-slate-700">{triggerDesc}</span>
+                                          </div>
+                                        </td>
+
+                                        {/* Date Range */}
+                                        <td className="px-4 py-3">
+                                          {filters.start_date && filters.end_date ? (
+                                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200">
+                                              <Calendar className="w-3 h-3 text-slate-500" />
+                                              {filters.start_date} → {filters.end_date}
+                                            </span>
+                                          ) : (
+                                            <span className="text-[10px] text-slate-400 font-medium italic">
+                                              Full Data Period
+
+                                            </span>
+                                          )}
+                                        </td>
+
+                                        {/* Recipients */}
+                                        <td className="px-4 py-3">
+                                          <div className="space-y-1">
+                                            <div className="flex items-center gap-1.5">
+                                              <Badge className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-[9.5px] font-bold border border-slate-200 px-1.5 py-0 rounded">
+                                                <Users className="w-2.5 h-2.5 mr-1" />
+                                                {recipientList.length} recipient{recipientList.length !== 1 ? "s" : ""}
+                                              </Badge>
+                                            </div>
+                                            <p
+                                              className="text-[10px] text-slate-500 truncate max-w-[200px]"
+                                              title={s.recipient_email}
+                                            >
+                                              {s.recipient_email}
+                                            </p>
+                                          </div>
+                                        </td>
+
+                                        {/* Status */}
+                                        <td className="px-4 py-3 text-center">
+                                          <span
+                                            className={`inline-flex items-center gap-1 text-[9.5px] font-black px-2 py-0.5 rounded-full uppercase border ${s.is_active
+                                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                                : "bg-slate-100 text-slate-500 border-slate-200"
+                                              }`}
+                                          >
+                                            <span
+                                              className={`w-1.5 h-1.5 rounded-full ${s.is_active ? "bg-emerald-500 animate-pulse" : "bg-slate-400"
+                                                }`}
+                                            />
+                                            {s.is_active ? "Active" : "Paused"}
+                                          </span>
+                                        </td>
+
+                                        {/* Actions */}
+                                        <td className="px-4 py-3 text-right">
+                                          <div className="flex items-center justify-end gap-1.5">
+                                            <button
+                                              type="button"
+                                              onClick={() => handleRunScheduleNow(s.id)}
+                                              className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-100 transition-colors"
+                                              title="Run Report Now"
+                                            >
+                                              <Play className="w-3.5 h-3.5" />
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => handleToggleSchedule(s.id)}
+                                              className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-colors ${s.is_active
+                                                  ? "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"
+                                                  : "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                                                }`}
+                                              title={s.is_active ? "Pause automated schedule" : "Activate schedule"}
+                                            >
+                                              {s.is_active ? "Pause" : "Activate"}
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => handleDeleteSchedule(s.id, stationLabel, triggerDesc, recipientList.length)}
+                                              className="p-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-100 transition-colors"
+                                              title="Delete Schedule"
+                                            >
+                                              <Trash2 className="w-3.5 h-3.5" />
+                                            </button>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             </div>
           )}
@@ -7399,7 +7719,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
       )}
 
       {/* ── DELETE SCHEDULE CONFIRMATION MODAL ── */}
-      {scheduleToDelete && (
+      {schedulesToDelete && schedulesToDelete.length > 0 && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/65 backdrop-blur-md animate-in fade-in-0 duration-200">
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-lg w-full p-6 sm:p-8 text-slate-800 animate-in zoom-in-95 duration-200 relative overflow-hidden">
             {/* Top Warning Accent Bar */}
@@ -7412,13 +7732,17 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                   <AlertTriangle className="w-6 h-6" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-extrabold text-slate-900 tracking-tight">Delete Automated Schedule?</h3>
-                  <p className="text-xs text-slate-400 font-medium mt-0.5">Permanent action for email subscription</p>
+                  <h3 className="text-lg font-extrabold text-slate-900 tracking-tight">
+                    {schedulesToDelete.length > 1
+                      ? `Delete ${schedulesToDelete.length} Automated Schedules?`
+                      : "Delete Automated Schedule?"}
+                  </h3>
+                  <p className="text-xs text-slate-400 font-medium mt-0.5">Permanent action for email subscriptions</p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => { setScheduleToDelete(null); setScheduleDeleteError(null); }}
+                onClick={() => { setSchedulesToDelete(null); setScheduleDeleteError(null); }}
                 className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"
               >
                 <X className="w-4 h-4" />
@@ -7426,27 +7750,35 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             </div>
 
             <p className="text-xs text-slate-600 mt-4 leading-relaxed bg-slate-50/70 p-3.5 rounded-xl border border-slate-100">
-              Are you sure you want to delete this schedule? Automated tonnage report emails will no longer be dispatched for this configuration.
+              {schedulesToDelete.length > 1
+                ? `Are you sure you want to permanently delete these ${schedulesToDelete.length} schedules? Automated tonnage report emails will no longer be dispatched for these configurations.`
+                : "Are you sure you want to delete this schedule? Automated tonnage report emails will no longer be dispatched for this configuration."}
             </p>
 
-            {scheduleToDelete.stationLabel && (
-              <div className="mt-4 p-4 bg-rose-50/40 border border-rose-100 rounded-xl text-xs space-y-2">
-                <div className="flex items-center justify-between font-bold text-slate-800">
-                  <span className="flex items-center gap-1.5 text-slate-900 font-extrabold">
-                    <span>📍</span> {cleanCountryName(scheduleToDelete.stationLabel)}
-                  </span>
-                  <span className="text-[9.5px] bg-rose-100 text-rose-700 px-2.5 py-0.5 rounded-full font-extrabold uppercase border border-rose-200">
-                    To Be Deleted
-                  </span>
-                </div>
-                {scheduleToDelete.triggerDesc && (
-                  <div className="text-[11.5px] font-medium text-slate-600 flex items-center gap-1.5 pt-1 border-t border-rose-100/60">
-                    <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span>{scheduleToDelete.triggerDesc}</span>
+            {/* Schedules list preview */}
+            <div className="mt-4 max-h-48 overflow-y-auto space-y-2 pr-1">
+              {schedulesToDelete.map((item, idx) => (
+                <div key={item.id || idx} className="p-3 bg-rose-50/40 border border-rose-100 rounded-xl text-xs space-y-1">
+                  <div className="flex items-center justify-between font-bold text-slate-800">
+                    <span className="flex items-center gap-1.5 text-slate-900 font-extrabold truncate max-w-[280px]">
+                      <span>📍</span> {cleanCountryName(item.stationLabel || "Schedule")}
+                    </span>
+                    <span className="text-[9.5px] bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full font-extrabold uppercase border border-rose-200 shrink-0">
+                      To Be Deleted
+                    </span>
                   </div>
-                )}
-              </div>
-            )}
+                  {item.triggerDesc && (
+                    <div className="text-[11px] font-medium text-slate-600 flex items-center gap-1.5 pt-0.5">
+                      <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                      <span>{item.triggerDesc}</span>
+                      {item.recipientCount != null && item.recipientCount > 0 && (
+                        <span className="text-slate-400 ml-auto">({item.recipientCount} recipient{item.recipientCount > 1 ? "s" : ""})</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
 
             {scheduleDeleteError && (
               <div className="mt-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-semibold text-rose-700 flex items-center gap-2">
@@ -7460,7 +7792,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
               <button
                 type="button"
                 disabled={isDeletingSchedule}
-                onClick={() => { setScheduleToDelete(null); setScheduleDeleteError(null); }}
+                onClick={() => { setSchedulesToDelete(null); setScheduleDeleteError(null); }}
                 className="px-5 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200/80 border border-slate-200 rounded-xl transition-all disabled:opacity-50"
               >
                 Cancel
@@ -7479,7 +7811,11 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                 ) : (
                   <>
                     <Trash2 className="w-3.5 h-3.5" />
-                    <span>Yes, Delete Schedule</span>
+                    <span>
+                      {schedulesToDelete.length > 1
+                        ? `Yes, Delete ${schedulesToDelete.length} Schedules`
+                        : "Yes, Delete Schedule"}
+                    </span>
                   </>
                 )}
               </button>
