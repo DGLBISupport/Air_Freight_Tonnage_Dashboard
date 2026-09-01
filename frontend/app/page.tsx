@@ -145,6 +145,24 @@ const getStationForUser = (user: any, activeStations: StationInfo[] = DEFAULT_ST
   return "OTHER";
 };
 
+// Helper for readable day ordinals (1st, 2nd, 8th, etc.)
+const getOrdinal = (n: number): string => {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+};
+
+const getMonthlyDayOptionLabel = (day: number): string => {
+  const ord = getOrdinal(day);
+  if (day === 1) {
+    return `${ord} of every month (Whole previous month report)`;
+  }
+  if (day === 2) {
+    return `${ord} of every month (1st day data)`;
+  }
+  return `${ord} of every month (1st - ${getOrdinal(day - 1)} completed data)`;
+};
+
 
 
 
@@ -1111,7 +1129,7 @@ export default function Dashboard() {
           const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
           triggerDesc = `Weekly on ${days[s.day_of_week] || "Monday"} at ${s.time_of_day}`;
         } else if (s.frequency === "monthly") {
-          triggerDesc = `Monthly on day ${s.day_of_month} at ${s.time_of_day}`;
+          triggerDesc = `Monthly on the ${getOrdinal(s.day_of_month || 1)} at ${s.time_of_day}`;
         } else {
           triggerDesc = `Daily at ${s.time_of_day}`;
         }
@@ -4920,16 +4938,31 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
                         {schedFrequency === "monthly" && (
                           <div>
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Day of Month</label>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Day of Month</label>
+                              <span className="text-[9.5px] font-bold text-violet-600">
+                                {schedDayOfMonth === 1 ? "Whole previous month report" : `1st – ${getOrdinal(schedDayOfMonth - 1)} completed days`}
+                              </span>
+                            </div>
                             <select
                               value={schedDayOfMonth}
                               onChange={(e) => setSchedDayOfMonth(parseInt(e.target.value))}
-                              className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
+                              className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500 text-xs"
                             >
-                              {Array.from({ length: 28 }, (_, i) => i + 1).map((day) => (
-                                <option key={day} value={day}>Day {day}</option>
+                              {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => (
+                                <option key={day} value={day}>
+                                  {getMonthlyDayOptionLabel(day)}
+                                </option>
                               ))}
                             </select>
+                            <p className="text-[10px] text-slate-500 mt-1.5 flex items-start gap-1.5 bg-violet-50/70 text-violet-800 p-2 rounded-md border border-violet-100 font-medium">
+                              <span className="text-xs shrink-0">💡</span>
+                              <span>
+                                {schedDayOfMonth === 1
+                                  ? "Configured for the 1st: Sends the whole previous calendar month data (e.g. Aug 1st to Aug 31st on Sep 1st)."
+                                  : `Configured for the ${getOrdinal(schedDayOfMonth)}: Sends new month data from the 1st up to the ${getOrdinal(schedDayOfMonth - 1)} (e.g. Sep 1st to Sep 7th on Sep 8th).`}
+                              </span>
+                            </p>
                           </div>
                         )}
 
@@ -5407,7 +5440,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                       const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
                                       triggerDesc = `Weekly on ${days[s.day_of_week] || "Monday"} at ${s.time_of_day}`;
                                     } else if (s.frequency === "monthly") {
-                                      triggerDesc = `Monthly on day ${s.day_of_month} at ${s.time_of_day}`;
+                                      triggerDesc = `Monthly on the ${getOrdinal(s.day_of_month || 1)} at ${s.time_of_day}`;
                                     } else {
                                       triggerDesc = `Daily at ${s.time_of_day}`;
                                     }

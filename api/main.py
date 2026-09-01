@@ -1215,27 +1215,29 @@ class ScheduleCreateRequest(BaseModel):
 
 
 def get_report_dates_by_frequency(frequency: str):
-    """Calculates cumulative month-to-date start and end dates relative to execution time.
+    """Calculates dynamic start and end dates relative to execution time.
 
-    Regardless of schedule frequency (daily / weekly / monthly), the report always covers
-    the current calendar month from its 1st day up to (but not including) today — i.e.
-    the last fully completed day.
+    1. When report runs on the 1st day of a new month (e.g., 2026-09-01):
+       The report covers the ENTIRE previous month:
+       start = 2026-08-01, end = 2026-08-31
+       (SQL: AND vt.ETD >= '2026-08-01' AND vt.ETD <= '2026-08-31')
 
-    Examples (report runs on 2026-08-25):
-        start = 2026-08-01, end = 2026-08-24
-
-    If the schedule fires on 2026-09-17:
-        start = 2026-09-01, end = 2026-09-16
+    2. When report runs on any subsequent day (e.g., 8th of month, 2026-09-08):
+       The report covers month-to-date up to yesterday (the 1st through 7th):
+       start = 2026-09-01, end = 2026-09-07
+       (SQL: AND vt.ETD >= '2026-09-01' AND vt.ETD <= '2026-09-07')
     """
     today = datetime.date.today()
-    # Start: first day of the current month
-    start = today.replace(day=1)
-    # End: yesterday (last fully completed day before the report runs)
-    end = today - datetime.timedelta(days=1)
 
-    # Edge case: if the schedule fires on the 1st of the month,
-    # end would be the last day of the previous month — this is intentional
-    # as it gives the most recent complete day available.
+    if today.day == 1:
+        # Running on the 1st of a new month -> send full previous month
+        end = today - datetime.timedelta(days=1)
+        start = end.replace(day=1)
+    else:
+        # Running on day 2..31 -> send month-to-date from day 1 to yesterday
+        start = today.replace(day=1)
+        end = today - datetime.timedelta(days=1)
+
     return start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
 
 
@@ -1493,8 +1495,11 @@ def api_create_schedule(req: ScheduleCreateRequest, current_user: dict = Depends
     """Registers a new schedule in Supabase and creates a Google Cloud Scheduler job."""
     if req.frequency == "weekly" and req.day_of_week is None:
         raise HTTPException(status_code=400, detail="day_of_week is required for weekly schedules")
-    if req.frequency == "monthly" and req.day_of_month is None:
-        raise HTTPException(status_code=400, detail="day_of_month is required for monthly schedules")
+    if req.frequency == "monthly":
+        if req.day_of_month is None:
+            raise HTTPException(status_code=400, detail="day_of_month is required for monthly schedules")
+        if not (1 <= req.day_of_month <= 31):
+            raise HTTPException(status_code=400, detail="day_of_month must be between 1 and 31")
 
     try:
         hour, minute = map(int, req.time_of_day.split(":"))

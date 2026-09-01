@@ -25,13 +25,25 @@ logging.basicConfig(
 # Load environment variables
 load_dotenv(override=True)
 
-# --- HELPER: Calculate Last Week's Dates ---
-def get_previous_week_dates():
-    """Calculates the start (Monday) and end (Sunday) dates of the previous complete week."""
+# --- HELPER: Calculate Report Dates ---
+def get_report_dates():
+    """Calculates report period dates:
+    - If today is the 1st of the month (e.g. 2026-09-01): returns the full previous month (2026-08-01 to 2026-08-31).
+    - If today is any subsequent day (e.g. 2026-09-08): returns month-to-date up to yesterday (2026-09-01 to 2026-09-07).
+    """
     today = datetime.date.today()
-    last_monday = today - datetime.timedelta(days=today.weekday() + 7)
-    last_sunday = today - datetime.timedelta(days=today.weekday() + 1)
-    return last_monday.strftime('%Y-%m-%d'), last_sunday.strftime('%Y-%m-%d')
+    if today.day == 1:
+        end = today - datetime.timedelta(days=1)
+        start = end.replace(day=1)
+    else:
+        start = today.replace(day=1)
+        end = today - datetime.timedelta(days=1)
+    return start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
+
+
+def get_previous_week_dates():
+    """Alias for backwards compatibility."""
+    return get_report_dates()
 
 # --- 1. DATA EXTRACTION ---
 def fetch_data(engine, station, start_date, end_date):
