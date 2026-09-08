@@ -34,14 +34,22 @@ def build_cron_expression(
       APScheduler:    0 = Monday  …  6 = Sunday
       Standard cron:  0 = Sunday, 1 = Monday  …  6 = Saturday
     Conversion formula: cron_day = (apscheduler_day + 1) % 7
+
+    Monthly-cycle weekly reports: When frequency='weekly' but day_of_month is
+    provided instead of day_of_week (e.g. 8, 15, 22), the cron fires on that
+    specific day of every month (same as monthly cron with day_of_month).
     """
     hour, minute = map(int, time_of_day.split(":"))
 
     if frequency == "daily":
         return f"{minute} {hour} * * *"
     elif frequency == "weekly":
+        # Month-cycle weekly: fire on a specific day of every month (8th, 15th, 22nd)
+        if day_of_month is not None:
+            return f"{minute} {hour} {day_of_month} * *"
+        # Traditional weekly: fire on a specific day of every week
         if day_of_week is None:
-            raise ValueError("day_of_week is required for weekly schedules")
+            raise ValueError("day_of_week or day_of_month is required for weekly schedules")
         cron_day = (day_of_week + 1) % 7
         return f"{minute} {hour} * * {cron_day}"
     elif frequency == "monthly":

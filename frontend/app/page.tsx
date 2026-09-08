@@ -155,12 +155,21 @@ const getOrdinal = (n: number): string => {
 const getMonthlyDayOptionLabel = (day: number): string => {
   const ord = getOrdinal(day);
   if (day === 1) {
-    return `${ord} of every month (Whole previous month report)`;
+    return `${ord} of every month — Monthly Report (Whole previous month 1st–30th/31st)`;
+  }
+  if (day === 8) {
+    return `${ord} of every month — Weekly Report (1st–7th cumulative daily data: 7 days)`;
+  }
+  if (day === 15) {
+    return `${ord} of every month — Weekly Report (1st–14th cumulative daily data: 14 days)`;
+  }
+  if (day === 22) {
+    return `${ord} of every month — Weekly Report (1st–21st cumulative daily data: 21 days)`;
   }
   if (day === 2) {
-    return `${ord} of every month (1st day data)`;
+    return `${ord} of every month — Weekly Report (1st day data)`;
   }
-  return `${ord} of every month (1st - ${getOrdinal(day - 1)} completed data)`;
+  return `${ord} of every month — Weekly Report (1st–${getOrdinal(day - 1)} cumulative daily data)`;
 };
 
 
@@ -820,6 +829,8 @@ export default function Dashboard() {
 
   const [schedFrequency, setSchedFrequency] = useState<"weekly" | "monthly" | "daily">("weekly");
   const [schedDayOfWeek, setSchedDayOfWeek] = useState<number>(0); // 0=Monday
+  const [schedWeeklyType, setSchedWeeklyType] = useState<"day_of_week" | "month_cycle">("day_of_week");
+  const [schedWeeklyMonthCycleDay, setSchedWeeklyMonthCycleDay] = useState<number>(8); // 8, 15, or 22
   const [schedDayOfMonth, setSchedDayOfMonth] = useState<number>(1);
   const [schedTime, setSchedTime] = useState("08:00");
   const [schedRecipients, setSchedRecipients] = useState("");
@@ -967,8 +978,10 @@ export default function Dashboard() {
             body: JSON.stringify({
               recipient_email: schedRecipients,
               frequency: schedFrequency,
-              day_of_week: schedFrequency === "weekly" ? schedDayOfWeek : null,
-              day_of_month: schedFrequency === "monthly" ? schedDayOfMonth : null,
+              day_of_week: schedFrequency === "weekly" ? (schedWeeklyType === "month_cycle" ? null : schedDayOfWeek) : null,
+              day_of_month: schedFrequency === "monthly"
+                ? schedDayOfMonth
+                : (schedFrequency === "weekly" && schedWeeklyType === "month_cycle" ? schedWeeklyMonthCycleDay : null),
               time_of_day: schedTime,
               filters: filters,
               is_active: true,
@@ -1026,8 +1039,10 @@ export default function Dashboard() {
             body: JSON.stringify({
               recipient_email: schedRecipients,
               frequency: schedFrequency,
-              day_of_week: schedFrequency === "weekly" ? schedDayOfWeek : null,
-              day_of_month: schedFrequency === "monthly" ? schedDayOfMonth : null,
+              day_of_week: schedFrequency === "weekly" ? (schedWeeklyType === "month_cycle" ? null : schedDayOfWeek) : null,
+              day_of_month: schedFrequency === "monthly"
+                ? schedDayOfMonth
+                : (schedFrequency === "weekly" && schedWeeklyType === "month_cycle" ? schedWeeklyMonthCycleDay : null),
               time_of_day: schedTime,
               filters: filters,
               is_active: true,
@@ -1126,10 +1141,18 @@ export default function Dashboard() {
 
         let triggerDesc = "";
         if (s.frequency === "weekly") {
-          const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-          triggerDesc = `Weekly on ${days[s.day_of_week] || "Monday"} at ${s.time_of_day}`;
+          if (s.day_of_month) {
+            triggerDesc = `Weekly on the ${getOrdinal(s.day_of_month)} at ${s.time_of_day}`;
+          } else {
+            const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+            triggerDesc = `Weekly on ${days[s.day_of_week] || "Monday"} at ${s.time_of_day}`;
+          }
         } else if (s.frequency === "monthly") {
-          triggerDesc = `Monthly on the ${getOrdinal(s.day_of_month || 1)} at ${s.time_of_day}`;
+          if (s.day_of_month && s.day_of_month > 1) {
+            triggerDesc = `Weekly (Cycle) on the ${getOrdinal(s.day_of_month)} at ${s.time_of_day}`;
+          } else {
+            triggerDesc = `Monthly on the ${getOrdinal(s.day_of_month || 1)} at ${s.time_of_day}`;
+          }
         } else {
           triggerDesc = `Daily at ${s.time_of_day}`;
         }
@@ -4918,21 +4941,64 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
                         {/* Day selection based on frequency */}
                         {schedFrequency === "weekly" && (
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Day of Week</label>
-                            <select
-                              value={schedDayOfWeek}
-                              onChange={(e) => setSchedDayOfWeek(parseInt(e.target.value))}
-                              className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500"
-                            >
-                              <option value={0}>Monday</option>
-                              <option value={1}>Tuesday</option>
-                              <option value={2}>Wednesday</option>
-                              <option value={3}>Thursday</option>
-                              <option value={4}>Friday</option>
-                              <option value={5}>Saturday</option>
-                              <option value={6}>Sunday</option>
-                            </select>
+                          <div className="space-y-2">
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Weekly Schedule Type</label>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setSchedWeeklyType("day_of_week")}
+                                className={`flex-1 py-1 px-2 rounded border text-xs font-semibold transition-colors ${schedWeeklyType === "day_of_week" ? "bg-violet-100 border-violet-300 text-violet-800" : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"}`}
+                              >
+                                Day of Week (Mon–Sun)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSchedWeeklyType("month_cycle")}
+                                className={`flex-1 py-1 px-2 rounded border text-xs font-semibold transition-colors ${schedWeeklyType === "month_cycle" ? "bg-violet-100 border-violet-300 text-violet-800" : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"}`}
+                              >
+                                Month Cycle (8th, 15th, 22nd)
+                              </button>
+                            </div>
+
+                            {schedWeeklyType === "day_of_week" ? (
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Day of Week</label>
+                                <select
+                                  value={schedDayOfWeek}
+                                  onChange={(e) => setSchedDayOfWeek(parseInt(e.target.value))}
+                                  className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500 text-xs"
+                                >
+                                  <option value={0}>Monday</option>
+                                  <option value={1}>Tuesday</option>
+                                  <option value={2}>Wednesday</option>
+                                  <option value={3}>Thursday</option>
+                                  <option value={4}>Friday</option>
+                                  <option value={5}>Saturday</option>
+                                  <option value={6}>Sunday</option>
+                                </select>
+                              </div>
+                            ) : (
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Select Month Cycle Day</label>
+                                <select
+                                  value={schedWeeklyMonthCycleDay}
+                                  onChange={(e) => setSchedWeeklyMonthCycleDay(parseInt(e.target.value))}
+                                  className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500 text-xs"
+                                >
+                                  <option value={8}>8th of every month (1st–7th day cumulative weekly data: 7 days)</option>
+                                  <option value={15}>15th of every month (1st–14th day cumulative weekly data: 14 days)</option>
+                                  <option value={22}>22nd of every month (1st–21st day cumulative weekly data: 21 days)</option>
+                                </select>
+                                <p className="text-[10px] text-slate-500 mt-1.5 flex items-start gap-1.5 bg-violet-50/70 text-violet-800 p-2 rounded-md border border-violet-100 font-medium">
+                                  <span className="text-xs shrink-0">💡</span>
+                                  <span>
+                                    {schedWeeklyMonthCycleDay === 8 && "Runs on the 8th: Sends a Weekly Report with Day-by-Day Stack covering the 1st through 7th (7 days)."}
+                                    {schedWeeklyMonthCycleDay === 15 && "Runs on the 15th: Sends a Weekly Report with Day-by-Day Stack covering the 1st through 14th (14 days cumulative)."}
+                                    {schedWeeklyMonthCycleDay === 22 && "Runs on the 22nd: Sends a Weekly Report with Day-by-Day Stack covering the 1st through 21st (21 days cumulative)."}
+                                  </span>
+                                </p>
+                              </div>
+                            )}
                           </div>
                         )}
 
@@ -4959,8 +5025,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               <span className="text-xs shrink-0">💡</span>
                               <span>
                                 {schedDayOfMonth === 1
-                                  ? "Configured for the 1st: Sends the whole previous calendar month data (e.g. Aug 1st to Aug 31st on Sep 1st)."
-                                  : `Configured for the ${getOrdinal(schedDayOfMonth)}: Sends new month data from the 1st up to the ${getOrdinal(schedDayOfMonth - 1)} (e.g. Sep 1st to Sep 7th on Sep 8th).`}
+                                  ? "Configured for the 1st: Sends the Monthly Report covering the full previous calendar month (e.g. Aug 1st to Aug 31st when sent on Sep 1st) with day-by-day data."
+                                  : `Configured for the ${getOrdinal(schedDayOfMonth)}: Sends a Weekly Report covering cumulative day-by-day data from the 1st up to the ${getOrdinal(schedDayOfMonth - 1)} (e.g. 1st–7th on the 8th, 1st–14th on the 15th, 1st–21st on the 22nd).`}
                               </span>
                             </p>
                           </div>
@@ -5436,7 +5502,10 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                     }
 
                                     let triggerDesc = "";
-                                    if (s.frequency === "weekly") {
+                                    const isMonthCycleWeekly = (s.frequency === "weekly" && !!s.day_of_month) || (s.frequency === "monthly" && !!s.day_of_month && s.day_of_month > 1);
+                                    if (isMonthCycleWeekly) {
+                                      triggerDesc = `Weekly on the ${getOrdinal(s.day_of_month)} at ${s.time_of_day}`;
+                                    } else if (s.frequency === "weekly") {
                                       const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
                                       triggerDesc = `Weekly on ${days[s.day_of_week] || "Monday"} at ${s.time_of_day}`;
                                     } else if (s.frequency === "monthly") {
@@ -5499,12 +5568,14 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                               variant="outline"
                                               className={`text-[9.5px] font-bold uppercase tracking-wider ${s.frequency === "daily"
                                                   ? "bg-sky-50 text-sky-700 border-sky-200"
-                                                  : s.frequency === "monthly"
-                                                    ? "bg-amber-50 text-amber-700 border-amber-200"
-                                                    : "bg-violet-50 text-violet-700 border-violet-200"
+                                                  : isMonthCycleWeekly
+                                                    ? "bg-violet-50 text-violet-700 border-violet-200"
+                                                    : s.frequency === "monthly"
+                                                      ? "bg-amber-50 text-amber-700 border-amber-200"
+                                                      : "bg-violet-50 text-violet-700 border-violet-200"
                                                 }`}
                                             >
-                                              {s.frequency}
+                                              {isMonthCycleWeekly ? "weekly" : s.frequency}
                                             </Badge>
                                             <span className="text-[11px] font-semibold text-slate-700">{triggerDesc}</span>
                                           </div>

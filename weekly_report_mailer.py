@@ -301,6 +301,15 @@ def send_email_via_graph(pdf_path, station_name, start_date, end_date, recipient
         client_secret = os.getenv("MAIL_AZURE_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET")
         sender = os.getenv("SENDER_EMAIL")
         
+        # Determine report type: Monthly if start is day 1 and end is the last day of a month,
+        # otherwise treat as Weekly (covers 1st-7th, 1st-14th, 1st-21st cumulative periods).
+        start_dt = datetime.datetime.strptime(start_date, '%Y-%m-%d').date() if isinstance(start_date, str) else start_date
+        end_dt = datetime.datetime.strptime(end_date, '%Y-%m-%d').date() if isinstance(end_date, str) else end_date
+        import calendar
+        last_day_of_start_month = calendar.monthrange(start_dt.year, start_dt.month)[1]
+        is_monthly = (start_dt.day == 1 and end_dt.day == last_day_of_start_month and start_dt.month == end_dt.month)
+        rep_label = "Monthly" if is_monthly else "Weekly"
+        
         # Authenticate with MSAL
         app = ConfidentialClientApplication(client_id, authority=f"https://login.microsoftonline.com/{tenant_id}", client_credential=client_secret)
         result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
@@ -318,16 +327,16 @@ def send_email_via_graph(pdf_path, station_name, start_date, end_date, recipient
         
         email_msg = {
             "message": {
-                "subject": f"Weekly Air Freight Tonnage Dashboard - {station_name} ({start_date} to {end_date})",
+                "subject": f"{rep_label} Air Freight Tonnage Dashboard - {station_name} ({start_date} to {end_date})",
                 "body": {
                     "contentType": "Text",
-                    "content": f"Dear Recipient,\n\nPlease find attached the Weekly Air Freight Tonnage and Revenue Performance Dashboard for {station_name} covering the period from {start_date} to {end_date}.\n\nBest Regards,\nBI Support Team"
+                    "content": f"Dear Recipient,\n\nPlease find attached the {rep_label} Air Freight Tonnage and Revenue Performance Dashboard for {station_name} covering the period from {start_date} to {end_date}.\n\nBest Regards,\nBI Support Team"
                 },
                 "toRecipients": to_recipients,
                 "attachments": [
                     {
                         "@odata.type": "#microsoft.graph.fileAttachment",
-                        "name": f"Weekly_Tonnage_Report_{station_name.replace(' ', '_')}.pdf",
+                        "name": f"{rep_label}_Tonnage_Report_{station_name.replace(' ', '_')}.pdf",
                         "contentType": "application/pdf",
                         "contentBytes": b64_pdf
                     }

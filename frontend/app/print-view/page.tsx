@@ -997,9 +997,9 @@ function PrintViewContent() {
       const last = new Date(end);
       last.setUTCHours(12, 0, 0, 0);
 
-      // Limit range generation to a maximum of 31 days to prevent chart overflow
+      // Limit range generation to a maximum of 32 days (full 31-day month + 1 buffer)
       let iterations = 0;
-      while (current <= last && iterations < 31) {
+      while (current <= last && iterations < 32) {
         const dateStr = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, '0')}-${String(current.getUTCDate()).padStart(2, '0')}`;
         if (!dayMap[dateStr]) {
           const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -1104,11 +1104,10 @@ function PrintViewContent() {
 
   const CustomLabel = (props: any) => {
     const { x, y, width, index } = props;
-    const dataList = reportType === "monthly" ? weeklyStackedAirlineData : dailyStackedAirlineData;
-    const row = dataList[index];
+    const row = dailyStackedAirlineData[index];
     if (!row || !row.total_tonnage || row.total_tonnage === 0) return null;
     
-    const isRotated = dataList.length > 8;
+    const isRotated = dailyStackedAirlineData.length > 8;
     return (
       <g transform={`translate(${x + width / 2}, ${y - 6})`}>
         <text
@@ -1130,47 +1129,7 @@ function PrintViewContent() {
     const { x, y, payload } = props;
     const value = payload.value;
 
-    if (reportType === "monthly") {
-      const index = weeklyStackedAirlineData.findIndex(item => item.week_label === value);
-      if (index !== -1) {
-        const getOrdinal = (n: number) => {
-          const s = ["th", "st", "nd", "rd"];
-          const v = n % 100;
-          return n + (s[(v - 20) % 10] || s[v] || s[0]);
-        };
-        const monthNum = weeklyStackedAirlineData[index].month || 1;
-        const monthStr = String(monthNum).padStart(2, '0');
-        const subLabel = `${getOrdinal(index + 1)} week/${monthStr}`;
-        return (
-          <g transform={`translate(${x},${y})`}>
-            <text
-              x={0}
-              y={0}
-              dy={12}
-              fill="#4A5568"
-              fontSize={13.5}
-              fontWeight={650}
-              textAnchor="middle"
-            >
-              {value}
-            </text>
-            <text
-              x={0}
-              y={18}
-              dy={12}
-              fill="#718096"
-              fontSize={11.5}
-              fontWeight={500}
-              textAnchor="middle"
-            >
-              {subLabel}
-            </text>
-          </g>
-        );
-      }
-    }
-
-    const isRotated = reportType !== "monthly" && dailyStackedAirlineData.length > 8;
+    const isRotated = dailyStackedAirlineData.length > 8;
     return (
       <g transform={`translate(${x},${y})`}>
         <text
@@ -1453,7 +1412,7 @@ function PrintViewContent() {
                 {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
                 <div className="flex items-baseline justify-between mt-1">
                   <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
-                    Dart Global Logistics · Weekly Operational Performance — Airline Breakdown
+                    Dart Global Logistics · {reportType === "monthly" ? "Monthly" : "Weekly"} Operational Performance — Airline Breakdown
                   </p>
                   <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
                     {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
@@ -1488,24 +1447,24 @@ function PrintViewContent() {
                   <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-1 shrink-0">
                     <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Top 10 Airlines Tonnage Share</span>
                     <span className="text-[9px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border">
-                      {reportType === "monthly" ? "Week-by-Week Stack" : "Day-by-Day Stack"}
+                      Day-by-Day Stack
                     </span>
                   </div>
                   <div className="h-[250px] w-full mt-1">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart
-                        data={reportType === "monthly" ? weeklyStackedAirlineData : dailyStackedAirlineData}
-                        margin={{ top: 45, right: 10, left: 4, bottom: reportType === "monthly" ? 25 : ((reportType === "monthly" ? weeklyStackedAirlineData : dailyStackedAirlineData).length > 8 ? 35 : 5) }}
+                        data={dailyStackedAirlineData}
+                        margin={{ top: 45, right: 10, left: 4, bottom: dailyStackedAirlineData.length > 8 ? 35 : 5 }}
                       >
                         <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} horizontal={true} />
                         <XAxis
-                          dataKey={reportType === "monthly" ? "week_label" : "date_label"}
+                          dataKey="date_label"
                           type="category"
                           height={45}
                           tick={<CustomXAxisTick />}
                           axisLine={{ stroke: "#E2E8F0" }}
                           tickLine={false}
-                          interval={(reportType === "monthly" ? weeklyStackedAirlineData : dailyStackedAirlineData).length > 14 ? Math.floor((reportType === "monthly" ? weeklyStackedAirlineData : dailyStackedAirlineData).length / 14) : 0}
+                          interval={dailyStackedAirlineData.length > 14 ? Math.floor(dailyStackedAirlineData.length / 14) : 0}
                         />
                         <YAxis
                           type="number"
@@ -1669,7 +1628,7 @@ function PrintViewContent() {
                 {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
                 <div className="flex items-baseline justify-between mt-1">
                   <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
-                    Dart Global Logistics · Weekly Operational Performance — Weekly Airline Trend
+                    Dart Global Logistics · {reportType === "monthly" ? "Monthly" : "Weekly"} Operational Performance — Weekly Airline Trend
                   </p>
                   <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
                     {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
@@ -1780,7 +1739,7 @@ function PrintViewContent() {
                 {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
                 <div className="flex items-baseline justify-between mt-1">
                   <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
-                    Dart Global Logistics · Weekly Operational Performance — Trade Route Breakdown
+                    Dart Global Logistics · {reportType === "monthly" ? "Monthly" : "Weekly"} Operational Performance — Trade Route Breakdown
                   </p>
                   <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
                     {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
@@ -1880,7 +1839,7 @@ function PrintViewContent() {
               {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
               <div className="flex items-baseline justify-between mt-1">
                 <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
-                  Dart Global Logistics · Weekly Operational Performance Dashboard
+                  Dart Global Logistics · {reportType === "monthly" ? "Monthly" : "Weekly"} Operational Performance Dashboard
                 </p>
                 <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
                   {startDate} to {endDate} | Station: {getStationLabel()}

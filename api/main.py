@@ -1214,30 +1214,76 @@ class ScheduleCreateRequest(BaseModel):
     is_active: Optional[bool] = True
 
 
-def get_report_dates_by_frequency(frequency: str):
+def get_report_dates_by_frequency(frequency: str, day_of_month: Optional[int] = None):
     """Calculates dynamic start and end dates relative to execution time.
 
-    1. When report runs on the 1st day of a new month (e.g., 2026-09-01):
-       The report covers the ENTIRE previous month:
-       start = 2026-08-01, end = 2026-08-31
-       (SQL: AND vt.ETD >= '2026-08-01' AND vt.ETD <= '2026-08-31')
+    For monthly-cycle weekly reports (day_of_month > 1):
+        Reports run on the configured day_of_month (e.g. 8, 15, 22) always cover:
+        start = 1st of the current month, end = (day_of_month - 1) of current month
+        Example: runs on 8th -> start=Sep 1, end=Sep 7 (7-day weekly report)
+        Example: runs on 15th -> start=Sep 1, end=Sep 14 (14-day cumulative weekly report)
+        Example: runs on 22nd -> start=Sep 1, end=Sep 21 (21-day cumulative weekly report)
 
-    2. When report runs on any subsequent day (e.g., 8th of month, 2026-09-08):
-       The report covers month-to-date up to yesterday (the 1st through 7th):
-       start = 2026-09-01, end = 2026-09-07
-       (SQL: AND vt.ETD >= '2026-09-01' AND vt.ETD <= '2026-09-07')
+    For monthly reports (day_of_month == 1):
+        Covers the ENTIRE previous calendar month (1st to 30th/31st).
+        Example: runs on Sep 1 -> start=Aug 1, end=Aug 31
+
+    For traditional weekly frequency (day_of_week based):
+        Covers month-to-date from 1st to yesterday.
+
+    For daily frequency:
+        Covers yesterday only (1-day window).
     """
     today = datetime.date.today()
 
+    # Monthly-cycle: report fires on a fixed day of the month (1, 8, 15, 22, etc.)
+    if day_of_month is not None:
+        if day_of_month == 1:
+            # 1st of month -> full previous calendar month
+            end = today.replace(day=1) - datetime.timedelta(days=1)
+            start = end.replace(day=1)
+        else:
+            # 8th/15th/22nd etc -> 1st of THIS month up to (day_of_month - 1)
+            start = today.replace(day=1)
+            # end = (day_of_month - 1) of current month; if today < day_of_month use yesterday
+            try:
+                end = today.replace(day=day_of_month - 1)
+            except ValueError:
+                end = today - datetime.timedelta(days=1)
+        return start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
+
+    # Traditional weekly frequency: month-to-date from 1st to yesterday
+    if frequency == "weekly":
+        if today.day == 1:
+            end = today - datetime.timedelta(days=1)
+            start = end.replace(day=1)
+        else:
+            start = today.replace(day=1)
+            end = today - datetime.timedelta(days=1)
+        return start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
+
+    # Monthly frequency (legacy fallback)
+    if frequency == "monthly":
+        if today.day == 1:
+            end = today - datetime.timedelta(days=1)
+            start = end.replace(day=1)
+        else:
+            start = today.replace(day=1)
+            end = today - datetime.timedelta(days=1)
+        return start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
+
+    # Daily frequency -> yesterday only
+    if frequency == "daily":
+        yesterday = today - datetime.timedelta(days=1)
+        return yesterday.strftime('%Y-%m-%d'), yesterday.strftime('%Y-%m-%d')
+
+    # Fallback: month-to-date
     if today.day == 1:
-        # Running on the 1st of a new month -> send full previous month
         end = today - datetime.timedelta(days=1)
         start = end.replace(day=1)
     else:
-        # Running on day 2..31 -> send month-to-date from day 1 to yesterday
         start = today.replace(day=1)
         end = today - datetime.timedelta(days=1)
-
     return start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
 
 
@@ -1252,10 +1298,12 @@ def execute_scheduled_report_job(schedule_id: str):
     recipient_email = config["recipient_email"]
     frequency = config["frequency"]
     filters = config["filters"]
+    day_of_month = config.get("day_of_month")  # e.g. 1, 8, 15, 22
     
     # For automated recurring reports (weekly, monthly, daily), dynamically calculate the current relative dates
     # so every scheduled run executes with the latest timeframe instead of stale frozen dates.
-    start_date, end_date = get_report_dates_by_frequency(frequency)
+    # Pass day_of_month so monthly-cycle weekly reports get correct date ranges.
+    start_date, end_date = get_report_dates_by_frequency(frequency, day_of_month=day_of_month)
     
     # Only use fixed dates if explicitly configured with use_fixed_dates flag
     if filters.get("use_fixed_dates") and filters.get("start_date") and filters.get("end_date"):
@@ -1413,6 +1461,15 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             country_val = sql_country
 
     try:
+        # Resolve report_type:
+        # - day_of_month == 1 -> "monthly" (covering full previous calendar month)
+        # - day_of_month > 1 (e.g. 8, 15, 22) -> "weekly" (covering 1st to day_of_month - 1 cumulative weekly data)
+        # - day_of_month is None -> based on frequency
+        if day_of_month is not None:
+            resolved_report_type = "monthly" if day_of_month == 1 else "weekly"
+        else:
+            resolved_report_type = "monthly" if frequency == "monthly" else "weekly"
+
         generate_dashboard_pdf(
             start_date=start_date,
             end_date=end_date,
@@ -1433,7 +1490,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             mode=mode,
             custom_sql=custom_sql,
             query_id=query_id,
-            report_type="monthly" if frequency == "monthly" else "weekly",
+            report_type=resolved_report_type,
         )
         
         subject, body, attachment_name = build_email_metadata(
@@ -1442,7 +1499,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             country=country_val or filters.get("country"),
             company_code=company_val or filters.get("company_code"),
             branch=branch_val or filters.get("branch"),
-            report_type="monthly" if frequency == "monthly" else "weekly"
+            report_type=resolved_report_type
         )
         
         send_pdf_via_graph(
@@ -1493,8 +1550,9 @@ def api_list_schedules(current_user: dict = Depends(get_current_admin)):
 @app.post("/api/schedules")
 def api_create_schedule(req: ScheduleCreateRequest, current_user: dict = Depends(get_current_admin)):
     """Registers a new schedule in Supabase and creates a Google Cloud Scheduler job."""
-    if req.frequency == "weekly" and req.day_of_week is None:
-        raise HTTPException(status_code=400, detail="day_of_week is required for weekly schedules")
+    # Weekly schedules need either day_of_week (Mon-Sun) OR day_of_month (month-cycle: 8, 15, 22)
+    if req.frequency == "weekly" and req.day_of_week is None and req.day_of_month is None:
+        raise HTTPException(status_code=400, detail="day_of_week or day_of_month is required for weekly schedules")
     if req.frequency == "monthly":
         if req.day_of_month is None:
             raise HTTPException(status_code=400, detail="day_of_month is required for monthly schedules")
