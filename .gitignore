@@ -1,8 +1,12 @@
 # Environments and Secrets
 .env
+.venv/
 venv/
 env/
-__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
 
 # Next.js and Node.js
 frontend/.next/

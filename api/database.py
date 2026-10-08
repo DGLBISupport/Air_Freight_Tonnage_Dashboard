@@ -4,6 +4,12 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 import requests
+import json
+import logging
+import time
+from threading import Lock
+from api.data_cache import QueryResultCache
+from sqlalchemy.exc import ProgrammingError
 
 load_dotenv()
 
@@ -23,15 +29,53 @@ def get_engine():
 
 # On-Prem API endpoint configuration
 ONPREM_API_URL = os.getenv("ONPREM_API_URL", "https://survey.dartglobal.com/chatbot/v1.0/data")
+query_results = QueryResultCache()
+_gateway_retry_after = {}
+_gateway_lock = Lock()
+logger = logging.getLogger(__name__)
 
 
 
 def run_query(sql_str: str, params: dict = None) -> pd.DataFrame:
+    """Reuse identical reads for 60 seconds; concurrent callers share one query."""
+    from api.sea_query_optimizer import _without_comments
+    # UI report templates start with a descriptive SQL comment.
+    if _without_comments(sql_str).lstrip().upper().startswith(("SELECT", "WITH")):
+        key = (ONPREM_API_URL, os.getenv("DB_SERVER"), sql_str.strip(),
+               json.dumps(params or {}, sort_keys=True, default=str))
+        return query_results.get_or_load(key, lambda: _run_report_query(sql_str, params))
+    return _run_query_uncached(sql_str, params)
+
+
+def _run_report_query(sql_str, params):
+    from api.sea_query_optimizer import can_optimize, optimize_query, VIEW_DEFINITION_SQL
+    optimized = sql_str
+    if can_optimize(sql_str):
+        try:
+            metadata = run_query(VIEW_DEFINITION_SQL)
+            if not metadata.empty and metadata.iloc[0].get("definition"):
+                optimized = optimize_query(sql_str, metadata.iloc[0]["definition"])
+        except Exception as error:
+            logger.info("Using original SEA query: revenue-view optimization unavailable (%s).", type(error).__name__)
+    try:
+        return _run_query_uncached(optimized, params)
+    except ProgrammingError:
+        # Accounts permitted to read the view may not have permissions on its
+        # underlying tables. Keep the existing view query available to them.
+        if optimized == sql_str:
+            raise
+        logger.warning("Optimized SEA source unavailable; using original revenue view.")
+        return _run_query_uncached(sql_str, params)
+
+
+def _run_query_uncached(sql_str: str, params: dict = None) -> pd.DataFrame:
     """Executes a SQL query either via the On-Prem HTTP API or falls back to direct database engine connection."""
     # If parameters are passed, format them into the SQL string
     if params:
         formatted_sql = sql_str
-        for k, v in params.items():
+        # Replace longer names first: :carrier_1 must not corrupt :carrier_10.
+        for k in sorted(params, key=len, reverse=True):
+            v = params[k]
             if v is None:
                 val_str = "NULL"
             elif isinstance(v, str):
@@ -45,9 +89,13 @@ def run_query(sql_str: str, params: dict = None) -> pd.DataFrame:
         formatted_sql = sql_str
 
 
-    if ONPREM_API_URL:
+    with _gateway_lock:
+        gateway_available = time.monotonic() >= _gateway_retry_after.get(ONPREM_API_URL, 0)
+    direct_available = all(os.getenv(name) for name in ("DB_SERVER", "DB_USER", "DB_PASSWORD"))
+    if ONPREM_API_URL and (gateway_available or not direct_available):
         try:
-            resp = requests.post(ONPREM_API_URL, json={"sql_query": formatted_sql}, timeout=30)
+            resp = requests.post(ONPREM_API_URL, json={"sql_query": formatted_sql},
+                                 timeout=(3, 10) if direct_available else 30)
             if resp.status_code == 200:
                 data = resp.json()
                 if isinstance(data, list):
@@ -59,7 +107,13 @@ def run_query(sql_str: str, params: dict = None) -> pd.DataFrame:
             else:
                 raise Exception(f"API request failed with status code {resp.status_code}: {resp.text}")
         except Exception as e:
-            print(f"API Query failed ({e}). Falling back to direct database connection...")
+            # Avoid repeatedly paying the same connection timeout for a failed gateway.
+            unavailable = isinstance(e, requests.RequestException) or (
+                'resp' in locals() and resp.status_code in (404, 429, 502, 503, 504))
+            if unavailable and direct_available:
+                with _gateway_lock:
+                    _gateway_retry_after[ONPREM_API_URL] = time.monotonic() + 60
+            logger.warning("Database gateway failed; using direct SQL Server connection (%s).", type(e).__name__)
     
     with get_engine().connect() as conn:
         return pd.read_sql(text(sql_str), conn, params=params)

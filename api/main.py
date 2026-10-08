@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
 from dotenv import load_dotenv
 
 # Load credentials
@@ -33,6 +33,10 @@ from api.database import (
     get_branches,
     execute_custom_query,
     get_sector_carrier_distribution,
+)
+from api.sea_database import (
+    get_sea_data, get_sea_kpi, get_sea_trends, get_sea_options,
+    normalize_sea_records, render_sea_query, get_sea_sector_distribution, prepare_sea_query,
 )
 from api.pdf_service import generate_dashboard_pdf
 from api.email_service import send_pdf_via_graph
@@ -75,11 +79,11 @@ def extract_station_info_from_sql(custom_sql: str) -> tuple[Optional[str], Optio
     country = None
     
     # Matches: vs.Company = 'CMB' or Company = 'CMB' or Company='CMB'
-    company_match = re.search(r"(?:[a-zA-Z0-9_]+\.)?Company\s*=\s*'([^']+)'", custom_sql, re.IGNORECASE)
+    company_match = re.search(r"\b(?:[a-zA-Z0-9_]+\.)?Company\s*=\s*'([^']+)'", custom_sql, re.IGNORECASE)
     if company_match:
         company_code = company_match.group(1)
         
-    country_match = re.search(r"(?:[a-zA-Z0-9_]+\.)?ConLoadPortCountryName\s*=\s*'([^']+)'", custom_sql, re.IGNORECASE)
+    country_match = re.search(r"\b(?:[a-zA-Z0-9_]+\.)?ConLoadPortCountryName\s*=\s*'([^']+)'", custom_sql, re.IGNORECASE)
     if country_match:
         country = country_match.group(1)
         
@@ -93,7 +97,7 @@ def extract_branch_info_from_sql(custom_sql: str) -> Optional[str]:
     if not custom_sql:
         return None
     import re
-    branch_match = re.search(r"(?:[a-zA-Z0-9_]+\.)?Branch\s*=\s*'([^']+)'", custom_sql, re.IGNORECASE)
+    branch_match = re.search(r"\b(?:[a-zA-Z0-9_]+\.)?Branch\s*=\s*'([^']+)'", custom_sql, re.IGNORECASE)
     if branch_match:
         return branch_match.group(1)
     return None
@@ -170,11 +174,13 @@ def extract_dates_from_sql(custom_sql: str) -> tuple[Optional[str], Optional[str
     start_date = None
     end_date = None
     
-    start_match = re.search(r"(?:[a-zA-Z0-9_]+\.)?ETD\s*>=\s*'([^']+)'", custom_sql, re.IGNORECASE)
+    start_match = re.search(r"\b(?:[a-zA-Z0-9_]+\.)?ETD\s*>=\s*'([^']+)'", custom_sql, re.IGNORECASE)
     if start_match:
         start_date = start_match.group(1)
         
-    end_match = re.search(r"(?:[a-zA-Z0-9_]+\.)?ETD\s*<=\s*'([^']+)'", custom_sql, re.IGNORECASE)
+    end_match = re.search(r"\b(?:[a-zA-Z0-9_]+\.)?ETD\s*<=\s*'([^']+)'", custom_sql, re.IGNORECASE)
+    if not end_match:
+        end_match = re.search(r"ETD\s*<\s*DATEADD\(day,\s*1,\s*CAST\('([^']+)'\s+AS\s+date\)\)", custom_sql, re.IGNORECASE)
     if end_match:
         end_date = end_match.group(1)
         
@@ -278,6 +284,7 @@ def serve_print_view():
 # --- DATA MODELS ---
 class ReportRequest(BaseModel):
     recipient_email: str
+    transport_mode: Literal["AIR", "SEA", "BOTH"] = "AIR"
     # Standard mode fields (optional for custom-sql mode)
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -303,7 +310,21 @@ class ReportRequest(BaseModel):
 
 class CustomQueryRequest(BaseModel):
     query: str
+    transport_mode: Literal["AIR", "SEA"] = "AIR"
 
+
+class SectorDistributionRequest(BaseModel):
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    country: Optional[str] = None
+    company_code: Optional[str] = None
+    custom_sql: Optional[str] = None
+    transport_mode: Literal["AIR", "SEA"] = "AIR"
+    airline: Optional[str] = None
+    origin_city: Optional[str] = None
+    destination_country: Optional[str] = None
+    destination_city: Optional[str] = None
+    branch: Optional[str] = None
 
 
 # --- ENDPOINT 1: Fetch Dynamic JSON Data (with dynamic filters) ---
@@ -318,10 +339,11 @@ def fetch_data(
     destination_country: str = None,
     destination_city: str = None,
     branch: str = None,
+    transport_mode: Literal["AIR", "SEA"] = "AIR",
 ):
     """Provides filtered JSON data for the React frontend to display charts."""
     try:
-        data = get_filtered_data(
+        data = (get_sea_data if transport_mode == "SEA" else get_filtered_data)(
             start_date, end_date, country, airline, company_code, origin_city, destination_country, destination_city, branch
         )
         return {"status": "success", "data": data}
@@ -337,6 +359,12 @@ def fetch_sector_carrier_distribution(
     company_code: Optional[str] = None,
     custom_sql: Optional[str] = None,
     query_id: Optional[str] = None,
+    transport_mode: Literal["AIR", "SEA"] = "AIR",
+    airline: Optional[str] = None,
+    origin_city: Optional[str] = None,
+    destination_country: Optional[str] = None,
+    destination_city: Optional[str] = None,
+    branch: Optional[str] = None,
 ):
     """Provides sector-wise carrier tonnage distribution data."""
     try:
@@ -357,20 +385,32 @@ def fetch_sector_carrier_distribution(
                 start_date = sql_start
             if sql_end:
                 end_date = sql_end
+            if transport_mode == "SEA":
+                branch = extract_branch_info_from_sql(sql_str) or branch
 
         # Fallbacks to prevent validation/query errors
-        if not country or country == "":
+        if transport_mode == "AIR" and (not country or country == ""):
             country = "India"
         if not start_date or start_date == "":
             start_date = "2025-01-01"
         if not end_date or end_date == "":
             end_date = "2025-12-31"
 
-        data = get_sector_carrier_distribution(start_date, end_date, country, company_code)
+        if transport_mode == "SEA":
+            data = get_sea_sector_distribution(start_date, end_date, country, company_code,
+                                               airline, origin_city, destination_country, destination_city, branch)
+        else:
+            data = get_sector_carrier_distribution(start_date, end_date, country, company_code)
         return {"status": "success", "data": data}
     except Exception as e:
         print(f"Warning in sector-carrier distribution: {e}")
         return {"status": "success", "data": [], "warning": str(e)}
+
+
+@app.post("/api/sector-carrier-distribution")
+def fetch_sector_carrier_distribution_post(req: SectorDistributionRequest):
+    """Accept report SQL in the body so long queries never exceed URL limits."""
+    return fetch_sector_carrier_distribution(**req.model_dump())
 
 
 # --- ENDPOINT 2: KPI Summary cards ---
@@ -385,10 +425,11 @@ def fetch_kpi(
     destination_country: str = None,
     destination_city: str = None,
     branch: str = None,
+    transport_mode: Literal["AIR", "SEA"] = "AIR",
 ):
     """Returns aggregate KPI totals."""
     try:
-        kpi = get_kpi_summary(
+        kpi = (get_sea_kpi if transport_mode == "SEA" else get_kpi_summary)(
             start_date, end_date, country, airline, company_code, origin_city, destination_country, destination_city, branch
         )
         return {"status": "success", "data": kpi}
@@ -408,10 +449,11 @@ def fetch_weekly(
     destination_country: str = None,
     destination_city: str = None,
     branch: str = None,
+    transport_mode: Literal["AIR", "SEA"] = "AIR",
 ):
     """Returns data grouped by week for trend charts."""
     try:
-        data = get_weekly_data(
+        data = ((lambda *args: get_sea_trends("weekly", *args)) if transport_mode == "SEA" else get_weekly_data)(
             start_date, end_date, country, airline, company_code, origin_city, destination_country, destination_city, branch
         )
         return {"status": "success", "data": data}
@@ -431,10 +473,11 @@ def fetch_monthly(
     destination_country: str = None,
     destination_city: str = None,
     branch: str = None,
+    transport_mode: Literal["AIR", "SEA"] = "AIR",
 ):
     """Returns data grouped by month for trend charts."""
     try:
-        data = get_monthly_data(
+        data = ((lambda *args: get_sea_trends("monthly", *args)) if transport_mode == "SEA" else get_monthly_data)(
             start_date, end_date, country, airline, company_code, origin_city, destination_country, destination_city, branch
         )
         return {"status": "success", "data": data}
@@ -445,10 +488,10 @@ def fetch_monthly(
 
 # --- ENDPOINT 4: Countries dropdown ---
 @app.get("/api/countries")
-def fetch_countries(start_date: str, end_date: str, company_code: str = None):
+def fetch_countries(start_date: str, end_date: str, company_code: str = None, transport_mode: Literal["AIR", "SEA"] = "AIR"):
     """Returns distinct origin countries for the filter dropdown."""
     try:
-        countries = get_countries(start_date, end_date, company_code)
+        countries = get_sea_options("countries", start_date, end_date, company_code=company_code) if transport_mode == "SEA" else get_countries(start_date, end_date, company_code)
         return {"status": "success", "data": countries}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -456,10 +499,10 @@ def fetch_countries(start_date: str, end_date: str, company_code: str = None):
 
 # --- ENDPOINT 5: Airlines dropdown ---
 @app.get("/api/airlines")
-def fetch_airlines(start_date: str, end_date: str, country: str = None):
+def fetch_airlines(start_date: str, end_date: str, country: str = None, transport_mode: Literal["AIR", "SEA"] = "AIR"):
     """Returns distinct airlines (optionally filtered by country) for the filter dropdown."""
     try:
-        airlines = get_airlines(start_date, end_date, country)
+        airlines = get_sea_options("airlines", start_date, end_date, country=country) if transport_mode == "SEA" else get_airlines(start_date, end_date, country)
         return {"status": "success", "data": airlines}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -478,10 +521,10 @@ def fetch_company_codes(start_date: str, end_date: str):
 
 # --- ENDPOINT 5.2: Origin Cities dropdown ---
 @app.get("/api/origin-cities")
-def fetch_origin_cities(start_date: str, end_date: str, country: str = None):
+def fetch_origin_cities(start_date: str, end_date: str, country: str = None, transport_mode: Literal["AIR", "SEA"] = "AIR"):
     """Returns distinct origin cities, optionally filtered by country."""
     try:
-        cities = get_origin_cities(start_date, end_date, country)
+        cities = get_sea_options("origin-cities", start_date, end_date, country=country) if transport_mode == "SEA" else get_origin_cities(start_date, end_date, country)
         return {"status": "success", "data": cities}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -489,10 +532,10 @@ def fetch_origin_cities(start_date: str, end_date: str, country: str = None):
 
 # --- ENDPOINT 5.3: Destination Countries dropdown ---
 @app.get("/api/destination-countries")
-def fetch_destination_countries(start_date: str, end_date: str):
+def fetch_destination_countries(start_date: str, end_date: str, transport_mode: Literal["AIR", "SEA"] = "AIR"):
     """Returns distinct destination countries."""
     try:
-        countries = get_destination_countries(start_date, end_date)
+        countries = get_sea_options("destination-countries", start_date, end_date) if transport_mode == "SEA" else get_destination_countries(start_date, end_date)
         return {"status": "success", "data": countries}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -500,10 +543,10 @@ def fetch_destination_countries(start_date: str, end_date: str):
 
 # --- ENDPOINT 5.4: Destination Cities dropdown ---
 @app.get("/api/destination-cities")
-def fetch_destination_cities(start_date: str, end_date: str, country: str = None):
+def fetch_destination_cities(start_date: str, end_date: str, country: str = None, transport_mode: Literal["AIR", "SEA"] = "AIR"):
     """Returns distinct destination cities, optionally filtered by destination country."""
     try:
-        cities = get_destination_cities(start_date, end_date, country)
+        cities = get_sea_options("destination-cities", start_date, end_date, country=country) if transport_mode == "SEA" else get_destination_cities(start_date, end_date, country)
         return {"status": "success", "data": cities}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -551,7 +594,8 @@ def build_email_metadata(
     country: Optional[str] = None,
     company_code: Optional[str] = None,
     branch: Optional[str] = None,
-    report_type: str = "weekly"
+    report_type: str = "weekly",
+    transport_mode: Literal["AIR", "SEA", "BOTH"] = "AIR",
 ) -> tuple[str, str, str]:
     """
     Constructs email Subject, Body, and PDF Attachment Filename.
@@ -594,13 +638,23 @@ def build_email_metadata(
     clean_date_filename = re.sub(r'[^a-zA-Z0-9_\-]', '_', date_range_str)
     attachment_name = f"{rep_title}_Tonnage_Report_{clean_target_filename}_{clean_date_filename}.pdf"
 
+    if transport_mode == "BOTH":
+        freight_name = "Air & Sea"
+        attachment_name = "Air_and_Sea_" + attachment_name
+    elif transport_mode == "SEA":
+        freight_name = "Sea"
+        attachment_name = "Sea_" + attachment_name
+    else:
+        freight_name = "Air"
+
     # Subject line
-    subject = f"{rep_title} Air Freight Tonnage Dashboard - {target_label} ({date_range_str})"
+    subject = f"{rep_title} {freight_name} Freight Tonnage Dashboard - {target_label} ({date_range_str})"
 
     # Construct body as two paragraphs without bullet points
+    plural_reports = "Dashboards" if transport_mode == "BOTH" else "Dashboard"
     body = (
         f"Dear Recipient,\n\n"
-        f"Please find attached the {rep_title} Air Freight Tonnage and Revenue Performance Dashboard "
+        f"Please find attached the {rep_title} {freight_name} Freight Tonnage and Revenue Performance {plural_reports} "
         f"for {station_clean} Station"
         + (f" ({branch_str} Branch)" if branch_str else "")
         + f" covering the period from {start_date} to {end_date}.\n\n"
@@ -653,6 +707,7 @@ def process_pdf_and_email(req: ReportRequest):
             custom_sql=req.custom_sql,
             query_id=query_id,
             report_type=req.report_type or "weekly",
+            transport_mode=req.transport_mode,
         )
         
         subject, body, attachment_name = build_email_metadata(
@@ -661,7 +716,8 @@ def process_pdf_and_email(req: ReportRequest):
             country=country_val or req.country,
             company_code=company_val or req.company_code,
             branch=req.branch,
-            report_type=req.report_type or "weekly"
+            report_type=req.report_type or "weekly",
+            transport_mode=req.transport_mode,
         )
 
         send_pdf_via_graph(
@@ -1086,8 +1142,6 @@ def send_report(req: ReportRequest):
         )
         
     os.makedirs("outputs", exist_ok=True)
-    temp_pdf_path = f"outputs/report_{uuid.uuid4().hex}.pdf"
-    
     query_id = None
     if req.mode == "custom-sql" and req.custom_sql:
         query_id = str(uuid.uuid4())
@@ -1103,6 +1157,115 @@ def send_report(req: ReportRequest):
         if not country_val and sql_country:
             country_val = sql_country
 
+    if req.transport_mode == "BOTH":
+        temp_air_path = f"outputs/report_air_{uuid.uuid4().hex}.pdf"
+        temp_sea_path = f"outputs/report_sea_{uuid.uuid4().hex}.pdf"
+        temp_files_to_cleanup = [temp_air_path, temp_sea_path]
+        try:
+            # 1. Generate Air Freight report
+            generate_dashboard_pdf(
+                start_date=req.start_date,
+                end_date=req.end_date,
+                country=country_val,
+                airline=req.airline,
+                output_path=temp_air_path,
+                company_code=company_val,
+                origin_city=req.origin_city,
+                destination_country=req.destination_country,
+                destination_city=req.destination_city,
+                branch=req.branch,
+                include_weekly_visual=req.include_weekly_visual,
+                include_weekly_ledger=req.include_weekly_ledger,
+                include_monthly_visual=req.include_monthly_visual,
+                include_monthly_ledger=req.include_monthly_ledger,
+                include_sector_distribution=req.include_sector_distribution,
+                max_data_rows=req.max_data_rows,
+                mode=req.mode,
+                custom_sql=req.custom_sql if req.mode == "custom-sql" else None,
+                query_id=query_id,
+                report_type=req.report_type or "weekly",
+                transport_mode="AIR",
+            )
+            # 2. Generate Sea Freight report
+            generate_dashboard_pdf(
+                start_date=req.start_date,
+                end_date=req.end_date,
+                country=country_val,
+                airline=req.airline,
+                output_path=temp_sea_path,
+                company_code=company_val,
+                origin_city=req.origin_city,
+                destination_country=req.destination_country,
+                destination_city=req.destination_city,
+                branch=req.branch,
+                include_weekly_visual=req.include_weekly_visual,
+                include_weekly_ledger=req.include_weekly_ledger,
+                include_monthly_visual=req.include_monthly_visual,
+                include_monthly_ledger=req.include_monthly_ledger,
+                include_sector_distribution=req.include_sector_distribution,
+                max_data_rows=req.max_data_rows,
+                mode="standard",
+                custom_sql=None,
+                query_id=None,
+                report_type=req.report_type or "weekly",
+                transport_mode="SEA",
+            )
+
+            subject, body, _ = build_email_metadata(
+                start_date=req.start_date,
+                end_date=req.end_date,
+                country=country_val or req.country,
+                company_code=company_val or req.company_code,
+                branch=req.branch,
+                report_type=req.report_type or "weekly",
+                transport_mode="BOTH",
+            )
+            _, _, air_att_name = build_email_metadata(
+                start_date=req.start_date,
+                end_date=req.end_date,
+                country=country_val or req.country,
+                company_code=company_val or req.company_code,
+                branch=req.branch,
+                report_type=req.report_type or "weekly",
+                transport_mode="AIR",
+            )
+            _, _, sea_att_name = build_email_metadata(
+                start_date=req.start_date,
+                end_date=req.end_date,
+                country=country_val or req.country,
+                company_code=company_val or req.company_code,
+                branch=req.branch,
+                report_type=req.report_type or "weekly",
+                transport_mode="SEA",
+            )
+
+            send_pdf_via_graph(
+                recipient_email=req.recipient_email,
+                subject=subject,
+                body=body,
+                attachments=[
+                    {"path": temp_air_path, "name": air_att_name},
+                    {"path": temp_sea_path, "name": sea_att_name},
+                ]
+            )
+            return {
+                "status": "success",
+                "message": f"Both Air and Sea freight reports generated and email successfully sent to {req.recipient_email}."
+            }
+        except Exception as e:
+            from api.email_service import log_email_transaction
+            log_email_transaction(req.recipient_email, "HTTP_ERROR", str(e))
+            print(f"Sync Email Dispatch Failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to generate or send report: {str(e)}")
+        finally:
+            for p in temp_files_to_cleanup:
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+
+    temp_pdf_path = f"outputs/report_{uuid.uuid4().hex}.pdf"
     try:
         generate_dashboard_pdf(
             start_date=req.start_date,
@@ -1125,6 +1288,7 @@ def send_report(req: ReportRequest):
             custom_sql=req.custom_sql,
             query_id=query_id,
             report_type=req.report_type or "weekly",
+            transport_mode=req.transport_mode,
         )
         
         subject, body, attachment_name = build_email_metadata(
@@ -1133,7 +1297,8 @@ def send_report(req: ReportRequest):
             country=country_val or req.country,
             company_code=company_val or req.company_code,
             branch=req.branch,
-            report_type=req.report_type or "weekly"
+            report_type=req.report_type or "weekly",
+            transport_mode=req.transport_mode,
         )
 
         send_pdf_via_graph(
@@ -1191,8 +1356,15 @@ def custom_query(req: CustomQueryRequest):
         raise HTTPException(status_code=400, detail="SQL query string cannot be empty.")
     
     try:
-        data = execute_custom_query(req.query)
-        return {"status": "success", "data": data, "rowCount": len(data)}
+        import re
+        query_modes = re.findall(r"\bTransportMode\s*=\s*'(AIR|SEA)'", req.query, re.IGNORECASE)
+        if any(mode.upper() != req.transport_mode for mode in query_modes):
+            raise ValueError("Query transport mode does not match the selected freight tab")
+        effective_query = prepare_sea_query(req.query) if req.transport_mode == "SEA" else req.query
+        data = execute_custom_query(effective_query)
+        if req.transport_mode == "SEA":
+            data = normalize_sea_records(data)
+        return {"status": "success", "data": data, "rowCount": len(data), "effectiveQuery": effective_query}
     except ValueError as e:
         # Validation errors
         raise HTTPException(status_code=400, detail=f"Invalid SQL: {str(e)}")
@@ -1298,6 +1470,9 @@ def execute_scheduled_report_job(schedule_id: str):
     recipient_email = config["recipient_email"]
     frequency = config["frequency"]
     filters = config["filters"]
+    transport_mode = filters.get("transport_mode", "AIR")
+    if transport_mode not in ("AIR", "SEA", "BOTH"):
+        raise ValueError("Invalid freight transport mode")
     day_of_month = config.get("day_of_month")  # e.g. 1, 8, 15, 22
     
     # For automated recurring reports (weekly, monthly, daily), dynamically calculate the current relative dates
@@ -1311,6 +1486,8 @@ def execute_scheduled_report_job(schedule_id: str):
         end_date = filters["end_date"]
         
     temp_pdf_path = f"outputs/scheduled_report_{uuid.uuid4().hex}.pdf"
+    temp_air_path = f"outputs/scheduled_air_{uuid.uuid4().hex}.pdf" if transport_mode == "BOTH" else None
+    temp_sea_path = f"outputs/scheduled_sea_{uuid.uuid4().hex}.pdf" if transport_mode == "BOTH" else None
     os.makedirs("outputs", exist_ok=True)
     
     # Process mode and cache custom SQL query if needed
@@ -1333,7 +1510,24 @@ def execute_scheduled_report_job(schedule_id: str):
             country_val = br_match.get("country", country_val or "India")
             company_val = br_match.get("company_code", company_val or "IND")
     
-    if (company_val and company_val != "all") or branch_val:
+    if transport_mode == "SEA":
+        # Generate the same dedicated sea query for station and branch schedules.
+        mode = filters.get("mode", "standard")
+        custom_sql = filters.get("custom_sql")
+        if mode == "custom-sql" and custom_sql:
+            import re
+            custom_sql = re.sub(r"ETD\s*>=\s*'[^']+'", f"ETD >= '{start_date}'", custom_sql, flags=re.IGNORECASE)
+            custom_sql = re.sub(r"ETD\s*<=\s*'[^']+'", f"ETD <= '{end_date}'", custom_sql, flags=re.IGNORECASE)
+            custom_sql = re.sub(r"ETD\s*<\s*DATEADD\(day,\s*1,\s*CAST\('[^']+'\s+AS\s+date\)\)",
+                                f"ETD <= '{end_date}'", custom_sql, flags=re.IGNORECASE)
+        else:
+            mode = "custom-sql"
+            custom_sql = render_sea_query(start_date=start_date, end_date=end_date,
+                country=country_val, company_code=company_val, branch=branch_val,
+                airline=filters.get("airline"), origin_city=filters.get("origin_city"),
+                destination_country=filters.get("destination_country"),
+                destination_city=filters.get("destination_city"))
+    elif (company_val and company_val != "all") or branch_val:
         mode = "custom-sql"
         if branch_val or filters.get("report_level") == "branch":
             custom_sql = generate_branchwise_sql(
@@ -1470,56 +1664,145 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         else:
             resolved_report_type = "monthly" if frequency == "monthly" else "weekly"
 
-        generate_dashboard_pdf(
-            start_date=start_date,
-            end_date=end_date,
-            country=country_val or filters.get("country"),
-            airline=filters.get("airline"),
-            output_path=temp_pdf_path,
-            company_code=company_val or filters.get("company_code"),
-            origin_city=filters.get("origin_city"),
-            destination_country=filters.get("destination_country"),
-            destination_city=filters.get("destination_city"),
-            branch=branch_val or filters.get("branch"),
-            include_weekly_visual=filters.get("include_weekly_visual", True),
-            include_weekly_ledger=filters.get("include_weekly_ledger", True),
-            include_monthly_visual=filters.get("include_monthly_visual", True),
-            include_monthly_ledger=filters.get("include_monthly_ledger", True),
-            include_sector_distribution=filters.get("include_sector_distribution", True),
-            max_data_rows=filters.get("max_data_rows", 100),
-            mode=mode,
-            custom_sql=custom_sql,
-            query_id=query_id,
-            report_type=resolved_report_type,
-        )
-        
-        subject, body, attachment_name = build_email_metadata(
-            start_date=start_date,
-            end_date=end_date,
-            country=country_val or filters.get("country"),
-            company_code=company_val or filters.get("company_code"),
-            branch=branch_val or filters.get("branch"),
-            report_type=resolved_report_type
-        )
-        
-        send_pdf_via_graph(
-            pdf_path=temp_pdf_path,
-            recipient_email=recipient_email,
-            subject=subject,
-            body=body,
-            attachment_name=attachment_name
-        )
+        if transport_mode == "BOTH":
+            # 1. Generate Air Freight PDF
+            generate_dashboard_pdf(
+                start_date=start_date,
+                end_date=end_date,
+                country=country_val or filters.get("country"),
+                airline=filters.get("airline"),
+                output_path=temp_air_path,
+                company_code=company_val or filters.get("company_code"),
+                origin_city=filters.get("origin_city"),
+                destination_country=filters.get("destination_country"),
+                destination_city=filters.get("destination_city"),
+                branch=branch_val or filters.get("branch"),
+                include_weekly_visual=filters.get("include_weekly_visual", True),
+                include_weekly_ledger=filters.get("include_weekly_ledger", True),
+                include_monthly_visual=filters.get("include_monthly_visual", True),
+                include_monthly_ledger=filters.get("include_monthly_ledger", True),
+                include_sector_distribution=filters.get("include_sector_distribution", True),
+                max_data_rows=filters.get("max_data_rows", 100),
+                mode=mode,
+                custom_sql=custom_sql,
+                query_id=query_id,
+                report_type=resolved_report_type,
+                transport_mode="AIR",
+            )
+            # 2. Generate Sea Freight PDF
+            generate_dashboard_pdf(
+                start_date=start_date,
+                end_date=end_date,
+                country=country_val or filters.get("country"),
+                airline=filters.get("airline"),
+                output_path=temp_sea_path,
+                company_code=company_val or filters.get("company_code"),
+                origin_city=filters.get("origin_city"),
+                destination_country=filters.get("destination_country"),
+                destination_city=filters.get("destination_city"),
+                branch=branch_val or filters.get("branch"),
+                include_weekly_visual=filters.get("include_weekly_visual", True),
+                include_weekly_ledger=filters.get("include_weekly_ledger", True),
+                include_monthly_visual=filters.get("include_monthly_visual", True),
+                include_monthly_ledger=filters.get("include_monthly_ledger", True),
+                include_sector_distribution=filters.get("include_sector_distribution", True),
+                max_data_rows=filters.get("max_data_rows", 100),
+                mode="standard",
+                custom_sql=None,
+                query_id=None,
+                report_type=resolved_report_type,
+                transport_mode="SEA",
+            )
+            subject, body, _ = build_email_metadata(
+                start_date=start_date,
+                end_date=end_date,
+                country=country_val or filters.get("country"),
+                company_code=company_val or filters.get("company_code"),
+                branch=branch_val or filters.get("branch"),
+                report_type=resolved_report_type,
+                transport_mode="BOTH",
+            )
+            _, _, air_att_name = build_email_metadata(
+                start_date=start_date,
+                end_date=end_date,
+                country=country_val or filters.get("country"),
+                company_code=company_val or filters.get("company_code"),
+                branch=branch_val or filters.get("branch"),
+                report_type=resolved_report_type,
+                transport_mode="AIR",
+            )
+            _, _, sea_att_name = build_email_metadata(
+                start_date=start_date,
+                end_date=end_date,
+                country=country_val or filters.get("country"),
+                company_code=company_val or filters.get("company_code"),
+                branch=branch_val or filters.get("branch"),
+                report_type=resolved_report_type,
+                transport_mode="SEA",
+            )
+            send_pdf_via_graph(
+                recipient_email=recipient_email,
+                subject=subject,
+                body=body,
+                attachments=[
+                    {"path": temp_air_path, "name": air_att_name},
+                    {"path": temp_sea_path, "name": sea_att_name},
+                ]
+            )
+        else:
+            generate_dashboard_pdf(
+                start_date=start_date,
+                end_date=end_date,
+                country=country_val or filters.get("country"),
+                airline=filters.get("airline"),
+                output_path=temp_pdf_path,
+                company_code=company_val or filters.get("company_code"),
+                origin_city=filters.get("origin_city"),
+                destination_country=filters.get("destination_country"),
+                destination_city=filters.get("destination_city"),
+                branch=branch_val or filters.get("branch"),
+                include_weekly_visual=filters.get("include_weekly_visual", True),
+                include_weekly_ledger=filters.get("include_weekly_ledger", True),
+                include_monthly_visual=filters.get("include_monthly_visual", True),
+                include_monthly_ledger=filters.get("include_monthly_ledger", True),
+                include_sector_distribution=filters.get("include_sector_distribution", True),
+                max_data_rows=filters.get("max_data_rows", 100),
+                mode=mode,
+                custom_sql=custom_sql,
+                query_id=query_id,
+                report_type=resolved_report_type,
+                transport_mode=transport_mode,
+            )
+            
+            subject, body, attachment_name = build_email_metadata(
+                start_date=start_date,
+                end_date=end_date,
+                country=country_val or filters.get("country"),
+                company_code=company_val or filters.get("company_code"),
+                branch=branch_val or filters.get("branch"),
+                report_type=resolved_report_type,
+                transport_mode=transport_mode,
+            )
+            
+            send_pdf_via_graph(
+                pdf_path=temp_pdf_path,
+                recipient_email=recipient_email,
+                subject=subject,
+                body=body,
+                attachment_name=attachment_name
+            )
         print(f"Scheduler: Successfully sent report for schedule {schedule_id}")
     except Exception as e:
         from api.email_service import log_email_transaction
         log_email_transaction(recipient_email, "SCHEDULED_JOB_ERROR", str(e))
         print(f"Scheduler: Job execution failed for schedule {schedule_id}: {str(e)}")
     finally:
-        if os.path.exists(temp_pdf_path):
-            try:
-                os.remove(temp_pdf_path)
-            except Exception:
-                pass
+        for p in (temp_pdf_path, temp_air_path, temp_sea_path):
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
 
 
 def _verify_scheduler_token(request_token: Optional[str]) -> bool:
@@ -1538,10 +1821,11 @@ def startup_event():
 
 
 @app.get("/api/schedules")
-def api_list_schedules(current_user: dict = Depends(get_current_admin)):
+def api_list_schedules(transport_mode: Literal["AIR", "SEA", "BOTH", "ALL"] = "AIR", current_user: dict = Depends(get_current_admin)):
     """Returns a list of all defined report schedules."""
     try:
-        schedules = get_all_schedules()
+        schedules = [s for s in get_all_schedules()
+                     if transport_mode == "ALL" or (s.get("filters") or {}).get("transport_mode", "AIR") in (transport_mode, "BOTH")]
         return {"status": "success", "data": schedules}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1550,6 +1834,9 @@ def api_list_schedules(current_user: dict = Depends(get_current_admin)):
 @app.post("/api/schedules")
 def api_create_schedule(req: ScheduleCreateRequest, current_user: dict = Depends(get_current_admin)):
     """Registers a new schedule in Supabase and creates a Google Cloud Scheduler job."""
+    if req.filters.get("transport_mode", "AIR") not in ("AIR", "SEA", "BOTH"):
+        raise HTTPException(status_code=400, detail="transport_mode must be AIR, SEA, or BOTH")
+    req.filters.setdefault("transport_mode", "AIR")
     # Weekly schedules need either day_of_week (Mon-Sun) OR day_of_month (month-cycle: 8, 15, 22)
     if req.frequency == "weekly" and req.day_of_week is None and req.day_of_month is None:
         raise HTTPException(status_code=400, detail="day_of_week or day_of_month is required for weekly schedules")

@@ -9,7 +9,6 @@ import datetime
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 from msal import ConfidentialClientApplication
-from playwright.sync_api import sync_playwright
 from jinja2 import Environment, FileSystemLoader
 
 # --- SETUP: Directories and Logging ---
@@ -46,10 +45,15 @@ def get_previous_week_dates():
     return get_report_dates()
 
 # --- 1. DATA EXTRACTION ---
-def fetch_data(engine, station, start_date, end_date):
+def fetch_data(engine, station, start_date, end_date, transport_mode="AIR"):
     """Fetches custom tonnage data for a specific station, filtered by company code."""
     logging.info(f"Connecting to SQL Server to fetch tonnage data for {station['name']}...")
     try:
+        if transport_mode == "SEA":
+            from api.sea_database import build_sea_query
+            query, params = build_sea_query(start_date, end_date, country=station["country"],
+                                           company_code=station["code"], branch=station.get("branch"))
+            return pd.read_sql(text(query), engine, params=params)
         query = """
         SELECT
             vt.ConsoleNumber AS Console_Number,
@@ -104,27 +108,22 @@ def fetch_data(engine, station, start_date, end_date):
         raise
 
 # --- 2. PDF GENERATION ---
-import socket
-
-def is_port_open(port: int) -> bool:
-    """Checks if a local port is actively open and listening."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.3)
-        return s.connect_ex(('127.0.0.1', port)) == 0
-
-def generate_pdf(station_code, country, station_name, start_date, end_date, output_path):
+def generate_pdf(station_code, country, station_name, start_date, end_date, output_path, transport_mode="AIR", branch_code=None):
     """Generates A4 Landscape PDF dashboard in custom-sql mode via Playwright."""
     logging.info(f"Generating PDF dashboard via Playwright for {station_name}...")
     try:
-        # Auto-detect if port 3001 is active instead of 3000
-        detected_port = 3000
-        if is_port_open(3001) and not is_port_open(3000):
-            detected_port = 3001
-            
-        base_url = os.getenv("FRONTEND_BASE_URL", f"http://localhost:{detected_port}")
-        
+        if transport_mode == "SEA":
+            from api.sea_database import render_sea_query
+            from api.pdf_service import generate_dashboard_pdf
+            sql_query = render_sea_query(start_date=start_date, end_date=end_date, country=country,
+                                         company_code=station_code, branch=branch_code)
+            next_day = datetime.date.fromisoformat(end_date) + datetime.timedelta(days=1)
+            report_type = "monthly" if start_date.endswith("-01") and next_day.day == 1 else "weekly"
+            generate_dashboard_pdf(output_path=output_path, start_date=start_date, end_date=end_date,
+                country=country, company_code=station_code, branch=branch_code, mode="custom-sql",
+                custom_sql=sql_query, transport_mode="SEA", report_type=report_type)
+            return
         # 1. Format the SQL query (branch-wise if branch is set, station-wise otherwise)
-        branch_code = station.get("branch") if isinstance(station, dict) else None
         if branch_code:
             sql_query = f"""
 SELECT
@@ -225,74 +224,21 @@ GROUP BY
 ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 """.strip()
         
-        # 2. Cache the SQL query in the FastAPI server's memory to retrieve a query_id
-        query_id = None
-        try:
-            api_port = os.getenv("API_PORT", "8000")
-            cache_url = f"http://127.0.0.1:{api_port}/api/cache-query"
-            resp = requests.post(cache_url, json={"query": sql_query}, timeout=10)
-            if resp.status_code == 200:
-                query_id = resp.json().get("query_id")
-                logging.info(f"Successfully cached query on FastAPI server. query_id={query_id}")
-            else:
-                logging.warning(f"Failed to cache query on FastAPI server: {resp.text}")
-        except Exception as cache_err:
-            logging.warning(f"Error caching query on FastAPI server: {cache_err}")
+        # Use the same readiness checks and local API routing as dashboard emails.
+        from api.pdf_service import generate_dashboard_pdf
+        next_day = datetime.date.fromisoformat(end_date) + datetime.timedelta(days=1)
+        report_type = "monthly" if start_date.endswith("-01") and next_day.day == 1 else "weekly"
+        generate_dashboard_pdf(output_path=output_path, start_date=start_date, end_date=end_date,
+            country=country, company_code=station_code, branch=branch_code, mode="custom-sql",
+            custom_sql=sql_query, transport_mode="AIR", report_type=report_type)
 
-        # 3. Construct parameters with custom-sql mode and query ID
-        params = {
-            "mode": "custom-sql",
-            "start_date": start_date,
-            "end_date": end_date,
-            "include_weekly_visual": "true",
-            "include_weekly_ledger": "true",
-            "include_monthly_visual": "true",
-            "include_monthly_ledger": "true",
-            "include_sector_distribution": "true",
-            "max_data_rows": 100,
-            "country": country,
-            "company_code": station_code
-        }
-        if branch_code:
-            params["branch"] = branch_code
-        if query_id:
-            params["query_id"] = query_id
-        else:
-            params["custom_sql"] = sql_query
-        
-        query_string = urllib.parse.urlencode(params)
-        target_url = f"{base_url}/print-view?{query_string}"
-        
-        if sys.platform == 'win32':
-            import asyncio
-            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            
-            # Navigate to the print view URL
-            page.goto(target_url, wait_until="load", timeout=120000)
-            
-            # Wait for pdf-ready element
-            try:
-                page.wait_for_selector("#pdf-ready", timeout=120000)
-            except Exception:
-                logging.warning("pdf-ready indicator not found, proceeding with PDF capture")
-                
-            page.wait_for_timeout(1000)
-            
-            # Save as landscape A4 PDF
-            page.pdf(path=output_path, format="A4", landscape=True, print_background=True)
-            browser.close()
-            
         logging.info(f"PDF successfully saved to {output_path}")
     except Exception as e:
         logging.error(f"Failed to generate PDF for {station_name}: {e}")
         raise
 
 
-def send_email_via_graph(pdf_path, station_name, start_date, end_date, recipients):
+def send_email_via_graph(pdf_path, station_name, start_date, end_date, recipients, transport_mode="AIR"):
     """Sends email with PDF attachment using Microsoft Graph API."""
     logging.info(f"Authenticating with Microsoft Graph API to send email for {station_name}...")
     try:
@@ -309,6 +255,7 @@ def send_email_via_graph(pdf_path, station_name, start_date, end_date, recipient
         last_day_of_start_month = calendar.monthrange(start_dt.year, start_dt.month)[1]
         is_monthly = (start_dt.day == 1 and end_dt.day == last_day_of_start_month and start_dt.month == end_dt.month)
         rep_label = "Monthly" if is_monthly else "Weekly"
+        freight_name = "Sea" if transport_mode == "SEA" else "Air"
         
         # Authenticate with MSAL
         app = ConfidentialClientApplication(client_id, authority=f"https://login.microsoftonline.com/{tenant_id}", client_credential=client_secret)
@@ -327,16 +274,16 @@ def send_email_via_graph(pdf_path, station_name, start_date, end_date, recipient
         
         email_msg = {
             "message": {
-                "subject": f"{rep_label} Air Freight Tonnage Dashboard - {station_name} ({start_date} to {end_date})",
+                "subject": f"{rep_label} {freight_name} Freight Tonnage Dashboard - {station_name} ({start_date} to {end_date})",
                 "body": {
                     "contentType": "Text",
-                    "content": f"Dear Recipient,\n\nPlease find attached the {rep_label} Air Freight Tonnage and Revenue Performance Dashboard for {station_name} covering the period from {start_date} to {end_date}.\n\nBest Regards,\nBI Support Team"
+                    "content": f"Dear Recipient,\n\nPlease find attached the {rep_label} {freight_name} Freight Tonnage and Revenue Performance Dashboard for {station_name} covering the period from {start_date} to {end_date}.\n\nBest Regards,\nBI Support Team"
                 },
                 "toRecipients": to_recipients,
                 "attachments": [
                     {
                         "@odata.type": "#microsoft.graph.fileAttachment",
-                        "name": f"{rep_label}_Tonnage_Report_{station_name.replace(' ', '_')}.pdf",
+                        "name": f"{'Sea_' if transport_mode == 'SEA' else ''}{rep_label}_Tonnage_Report_{station_name.replace(' ', '_')}.pdf",
                         "contentType": "application/pdf",
                         "contentBytes": b64_pdf
                     }
@@ -364,6 +311,10 @@ def send_email_via_graph(pdf_path, station_name, start_date, end_date, recipient
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate and email air or sea freight reports.")
+    parser.add_argument("--transport-mode", choices=["AIR", "SEA"], default="AIR")
+    transport_mode = parser.parse_args().transport_mode
     logging.info("--- Starting Weekly Report Job ---")
     
     # 1. Calculate dates
@@ -400,7 +351,8 @@ if __name__ == "__main__":
     
     for station in STATIONS:
         logging.info(f"Processing station: {station['name']} ({station['code']})")
-        pdf_file_path = f"outputs/Weekly_Tonnage_Report_{station['code']}.pdf"
+        mode_prefix = "Sea_" if transport_mode == "SEA" else ""
+        pdf_file_path = f"outputs/{mode_prefix}Weekly_Tonnage_Report_{station['code']}.pdf"
         
         # Get recipients for this station: check Supabase station_recipients table first, then env var
         recipients = []
@@ -420,13 +372,14 @@ if __name__ == "__main__":
             continue
             
         try:
-            report_data = fetch_data(engine, station, start_date, end_date)
+            report_data = fetch_data(engine, station, start_date, end_date, transport_mode=transport_mode)
             if report_data.empty:
                 logging.info(f"No records found for {station['name']} in this period. Skipping email.")
                 continue
                 
-            generate_pdf(station["code"], station["country"], station["name"], start_date, end_date, pdf_file_path)
-            send_email_via_graph(pdf_file_path, station["name"], start_date, end_date, recipients)
+            generate_pdf(station["code"], station["country"], station["name"], start_date, end_date, pdf_file_path,
+                         transport_mode=transport_mode, branch_code=station.get("branch"))
+            send_email_via_graph(pdf_file_path, station["name"], start_date, end_date, recipients, transport_mode=transport_mode)
             logging.info(f"Job for {station['name']} completed successfully.")
         except Exception as e:
             logging.error(f"Job for {station['name']} failed: {e}")

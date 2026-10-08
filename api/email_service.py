@@ -13,14 +13,16 @@ def log_email_transaction(recipient: str, status: str, details: str = ""):
         f.write(log_entry)
 
 def send_pdf_via_graph(
-    pdf_path: str,
-    recipient_email: str,
+    pdf_path: str = None,
+    recipient_email: str = "",
     subject: str = "Weekly Air Freight Performance Report",
     body: str = "Dear {recipient_name},\n\nPlease find your requested custom tonnage dashboard view attached.\n\nBest Regards,\nBI Support Team",
-    attachment_name: str = "Custom_Tonnage_Dashboard.pdf"
+    attachment_name: str = "Custom_Tonnage_Dashboard.pdf",
+    attachments: list = None
 ):
     """
-    Authenticates via MSAL and sends an email with the attached PDF using MS Graph API.
+    Authenticates via MSAL and sends an email with the attached PDF(s) using MS Graph API.
+    Supports either a single pdf_path or a list of dicts: [{"path": ..., "name": ...}].
     """
     tenant_id = os.getenv("MAIL_AZURE_TENANT_ID") or os.getenv("AZURE_TENANT_ID")
     client_id = os.getenv("MAIL_AZURE_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
@@ -53,10 +55,30 @@ def send_pdf_via_graph(
             log_email_transaction(recipient_email, "AUTH_ERROR", err)
             raise Exception(err)
         
-        # Read the PDF into Base64 format
-        with open(pdf_path, "rb") as f:
-            pdf_bytes = f.read()
-        b64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
+        # Prepare attachments
+        email_attachments = []
+        if attachments:
+            for item in attachments:
+                item_path = item.get("path")
+                item_name = item.get("name", "Report.pdf")
+                if item_path and os.path.exists(item_path):
+                    with open(item_path, "rb") as f:
+                        file_bytes = f.read()
+                    email_attachments.append({
+                        "@odata.type": "#microsoft.graph.fileAttachment",
+                        "name": item_name,
+                        "contentType": "application/pdf",
+                        "contentBytes": base64.b64encode(file_bytes).decode('utf-8')
+                    })
+        elif pdf_path and os.path.exists(pdf_path):
+            with open(pdf_path, "rb") as f:
+                pdf_bytes = f.read()
+            email_attachments.append({
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": attachment_name,
+                "contentType": "application/pdf",
+                "contentBytes": base64.b64encode(pdf_bytes).decode('utf-8')
+            })
         
         # Prepare MS Graph Email Payload
         recipients_list = [email.strip() for email in recipient_email.split(",") if email.strip()]
@@ -70,14 +92,7 @@ def send_pdf_via_graph(
                     "content": body
                 },
                 "toRecipients": to_recipients,
-                "attachments": [
-                    {
-                        "@odata.type": "#microsoft.graph.fileAttachment",
-                        "name": attachment_name,
-                        "contentType": "application/pdf",
-                        "contentBytes": b64_pdf
-                    }
-                ]
+                "attachments": email_attachments
             },
             "saveToSentItems": "true"
         }

@@ -1,10 +1,14 @@
 import os
 import socket
 import urllib.parse
+import json
+import logging
+import time
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 def is_port_open(port: int) -> bool:
     """Checks if a local port is actively open and listening."""
@@ -66,6 +70,7 @@ def generate_dashboard_pdf(
     custom_sql: str = None,
     query_id: str = None,
     report_type: str = "weekly",
+    transport_mode: str = "AIR",
 ):
     """
     Directs a headless browser to the frontend print view and captures a PDF.
@@ -74,15 +79,15 @@ def generate_dashboard_pdf(
     base_url = get_tonnage_base_url()
     
     # Construct the print-optimized frontend URL with filter parameters
-    params = {}
+    params = {"transport_mode": transport_mode}
     
     # Add mode and query-specific parameters
     if mode == "custom-sql":
         params["mode"] = "custom-sql"
         if query_id:
             params["query_id"] = query_id
-        elif custom_sql:
-            params["custom_sql"] = custom_sql
+        # custom_sql is injected below rather than placed in a potentially
+        # oversized URL (and is available even when query_id has expired).
         # Pass station identification and date parameters to custom-sql mode
         if start_date: params["start_date"] = start_date
         if end_date: params["end_date"] = end_date
@@ -122,35 +127,37 @@ def generate_dashboard_pdf(
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+    started = time.monotonic()
+    # The browser must use this backend, even if the static frontend was built
+    # with a production API URL. SQL is injected directly to avoid worker-local
+    # query IDs and an extra network request during email generation.
+    api_base = (f"http://127.0.0.1:{os.getenv('PORT', '8080')}"
+                if os.environ.get("K_SERVICE") or os.environ.get("PORT")
+                else f"http://127.0.0.1:{os.getenv('API_PORT', '8000')}")
+    print_config = {"apiBaseUrl": api_base, "customSql": custom_sql}
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            
-            # Listen to browser console and page errors for diagnostics
-            page.on("console", lambda msg: print(f"[Playwright Browser {msg.type.upper()}]: {msg.text}"))
-            page.on("pageerror", lambda err: print(f"[Playwright Page Error]: {err}"))
-            
-            # Navigate to the frontend UI with increased timeout for data loading
-            # Use "load" instead of "networkidle" for faster response
-            # Timeout set to 120 seconds (120000ms) for complex SQL queries
-            response = page.goto(target_url, wait_until="load", timeout=120000)
-            if response and response.status >= 400:
-                print(f"Playwright error: {target_url} returned HTTP {response.status}")
-                raise RuntimeError(f"Print view page returned HTTP {response.status} for URL: {target_url}")
-            
-            # Wait for the pdf-ready indicator to ensure data is loaded
             try:
-                page.wait_for_selector("#pdf-ready", timeout=120000)
-            except Exception:
-                print("Warning: pdf-ready indicator not found, proceeding with PDF capture anyway")
-            
-            # Add a small delay to ensure all rendering is complete
-            page.wait_for_timeout(1000)
-            
-            # Save as a landscape A4 PDF
-            page.pdf(path=output_path, format="A4", landscape=True, print_background=True)
-            browser.close()
+                page = browser.new_page(viewport={"width": 1440, "height": 1000})
+                page.add_init_script("window.__FREIGHT_PRINT_CONFIG__ = " + json.dumps(print_config) + ";")
+                page.on("pageerror", lambda err: logger.error("Print view error: %s", err))
+                page.emulate_media(media="print")
+                response = page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+                if response and response.status >= 400:
+                    raise RuntimeError(f"Print view page returned HTTP {response.status}.")
+                try:
+                    page.wait_for_selector("#pdf-ready, #print-error", state="attached", timeout=60000)
+                except Exception as exc:
+                    raise RuntimeError("Report did not finish loading within 60 seconds. No PDF was generated or sent.") from exc
+                if page.locator("#print-error").count():
+                    raise RuntimeError(page.locator("#print-error").inner_text())
+                if not page.locator(".print-page-container").count():
+                    raise RuntimeError("Report has no printable pages. No PDF was generated or sent.")
+                page.pdf(path=output_path, format="A4", landscape=True, print_background=True)
+                logger.info("%s report PDF generated in %.2f seconds.", transport_mode, time.monotonic() - started)
+            finally:
+                browser.close()
     except Exception as e:
         print(f"PDF Generation Error: {str(e)}")
         raise

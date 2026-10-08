@@ -1,5 +1,7 @@
 "use client";
 
+import { freightEtdDate, freightIsoWeek, freightDayParts } from "@/lib/operational-date";
+
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -12,6 +14,7 @@ import {
   Building2, MapPin, Search, Sparkles, SlidersHorizontal, Filter, PlusCircle, CheckSquare, SendHorizontal, AtSign, Zap, CheckCheck
 } from "lucide-react";
 
+import { Ship } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -22,12 +25,17 @@ import {
 } from "@/components/ui/select";
 import { createClient } from "@supabase/supabase-js";
 
+import { TransportMode, freightText, buildFreightQuery, formatFreightQuantity } from "@/lib/freight";
+import { SeaConsolReport } from "@/components/sea-consol-report";
+import { ReportRecipientPicker, ReportRecipient, isReportEmail } from "@/components/report-recipient-picker";
+import { getApiBaseUrl } from "@/lib/api";
+
 // In production / Cloud Run / Playwright container: frontend & backend share the same host/port → use relative URLs ("").
 // In local development: Next.js dev server runs on :3000/:3001/:3002, backend on :8000 → use absolute localhost URL.
-const API = process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
-    ? (window.location.port.startsWith("300") ? "http://localhost:8000" : "")
-    : "");
+const API = getApiBaseUrl();
+
+// Both freight workspaces use the same authenticated session.
+let sharedAuthClient: ReturnType<typeof createClient> | null = null;
 
 
 // Formatting helpers matching the clean image style
@@ -298,7 +306,10 @@ function MultiSelect({
 }
 
 
-export default function Dashboard() {
+function FreightDashboard({ transportMode, onModeChange }: { transportMode: TransportMode; onModeChange: (mode: TransportMode) => void }) {
+  const isSea = transportMode === "SEA";
+  const sectorDivisor = isSea ? 1 : 1000;
+  const formatNumber = (value: number | null | undefined) => formatFreightQuantity(value, transportMode);
   const formatTonnage = (val: number | null | undefined) => {
     if (val == null || val === 0) return "-";
     return val.toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
@@ -315,7 +326,7 @@ export default function Dashboard() {
   useEffect(() => {
     // Helper to boot the Supabase client with given credentials
     const bootSupabase = (url: string, key: string) => {
-      const client = createClient(url, key);
+      const client = sharedAuthClient || (sharedAuthClient = createClient(url, key));
       setSupabase(client);
 
       client.auth.getSession().then(({ data: { session } }) => {
@@ -497,6 +508,10 @@ export default function Dashboard() {
 
   // Multiple Recipient States
   const [selectedEmails, setSelectedEmails] = useState<string[]>([]);
+  const [sqlReportRecipients, setSqlReportRecipients] = useState<Partial<Record<"weekly" | "monthly", string[]>>>({});
+  const [lastExecutedSql, setLastExecutedSql] = useState<Partial<Record<"weekly" | "monthly", string>>>({});
+  const sqlReportKey = activeSection === "weekly-reports" ? "weekly" : "monthly";
+  const activeRecipients = dashboardMode === "custom-sql" ? sqlReportRecipients[sqlReportKey] ?? [] : selectedEmails;
   const [availableEmails, setAvailableEmails] = useState<string[]>([]);
   const [customEmailInput, setCustomEmailInput] = useState("");
   const [showRecipientDropdown, setShowRecipientDropdown] = useState(false);
@@ -504,8 +519,14 @@ export default function Dashboard() {
   // Modal preview state
   const [showPdfPreview, setShowPdfPreview] = useState(false);
   const [cachedQueryId, setCachedQueryId] = useState<string | null>(null);
+  const previewGeneration = useRef(0);
+  const previewCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {if (previewCloseTimer.current) clearTimeout(previewCloseTimer.current);}, []);
 
   const openPdfPreview = async () => {
+    previewGeneration.current += 1;
+    if (previewCloseTimer.current) clearTimeout(previewCloseTimer.current);
     if (dashboardMode === "custom-sql") {
       setLoading(true);
       try {
@@ -513,7 +534,7 @@ export default function Dashboard() {
         const res = await fetch(`${API}/api/cache-query`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: activeSql }),
+          body: JSON.stringify({ query: activeSql, transport_mode: transportMode }),
         });
         const d = await res.json();
         if (d.status === "success" && d.query_id) {
@@ -538,6 +559,7 @@ export default function Dashboard() {
         // Default select the first email if nothing is selected yet
         if (d.data.length > 0) {
           setSelectedEmails((prev) => prev.length === 0 ? [d.data[0]] : prev);
+          setSqlReportRecipients(prev => ({weekly: prev.weekly ?? [d.data[0]], monthly: prev.monthly ?? [d.data[0]]}));
         }
       }
     } catch (e) {
@@ -561,6 +583,23 @@ export default function Dashboard() {
   // --- DB USERS FROM SUPABASE ---
   const [dbUsers, setDbUsers] = useState<any[]>([]);
   const [dbUsersLoading, setDbUsersLoading] = useState(false);
+  const [sqlRecipientUsers, setSqlRecipientUsers] = useState<ReportRecipient[]>([]);
+  const [sqlRecipientUsersLoading, setSqlRecipientUsersLoading] = useState(false);
+  const [sqlRecipientUsersError, setSqlRecipientUsersError] = useState("");
+
+  const fetchSqlRecipientUsers = useCallback(async (client: any) => {
+    setSqlRecipientUsersLoading(true);
+    setSqlRecipientUsersError("");
+    try {
+      const {data, error} = await client.from("users").select("email, display_name").order("display_name");
+      if (error) throw error;
+      setSqlRecipientUsers((data || []).map((user: any) => ({email: user.email, name: user.display_name || user.email})));
+    } catch {
+      setSqlRecipientUsersError("Saved users could not be loaded. You can still enter an email address.");
+    } finally {
+      setSqlRecipientUsersLoading(false);
+    }
+  }, []);
 
   const fetchDbUsers = useCallback(async (client?: any) => {
     const supabaseClient = client || supabase;
@@ -913,7 +952,7 @@ export default function Dashboard() {
           authHeader = `Bearer ${session.access_token}`;
         }
       }
-      const res = await fetch(`${API}/api/schedules`, {
+      const res = await fetch(`${API}/api/schedules?transport_mode=${transportMode}`, {
         headers: {
           "Content-Type": "application/json",
           ...(authHeader ? { "Authorization": authHeader } : {}),
@@ -925,7 +964,7 @@ export default function Dashboard() {
       }
       const d = await res.json();
       if (d.status === "success") {
-        setSchedules(d.data || []);
+        setSchedules((d.data || []).filter((schedule: any) => (schedule.filters?.transport_mode || "AIR") === transportMode));
       } else {
         console.error("fetchSchedules API error:", d.detail || d);
       }
@@ -934,7 +973,7 @@ export default function Dashboard() {
     } finally {
       setSchedulerLoading(false);
     }
-  }, [supabase]);
+  }, [supabase, transportMode]);
 
   const handleCreateSchedule = async () => {
     if (!schedRecipients.trim()) {
@@ -958,6 +997,7 @@ export default function Dashboard() {
         for (const branchCode of branchesToProcess) {
           const branchInfo = branchesList.find(b => b.code === branchCode);
           const filters: any = {
+            transport_mode: transportMode,
             mode: "standard",
             include_weekly_visual: true,
             include_weekly_ledger: true,
@@ -1020,6 +1060,7 @@ export default function Dashboard() {
         for (const stationCode of stationsToProcess) {
           const stObj = stationsList.find(s => s.code === stationCode);
           const filters: any = {
+            transport_mode: transportMode,
             mode: "standard",
             include_weekly_visual: true,
             include_weekly_ledger: true,
@@ -1266,6 +1307,26 @@ export default function Dashboard() {
     }
   }, [activeSection, supabase]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (dashboardMode === "custom-sql" && supabase) {
+      fetchSqlRecipientUsers(supabase);
+      fetchOrgUsers();
+    }
+  }, [dashboardMode, supabase, fetchSqlRecipientUsers]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const sqlRecipientOptions = (() => {
+    const people = new Map<string, ReportRecipient>();
+    const add = (email: string, name?: string) => {
+      const normalized = (email || "").trim().toLowerCase();
+      if (isReportEmail(normalized) && !DUMMY_EMAILS.includes(normalized)) people.set(normalized, {email: normalized, name: name || normalized});
+    };
+    availableEmails.forEach(email => add(email));
+    dbUsers.forEach(user => add(user.email, user.display_name));
+    sqlRecipientUsers.forEach(user => add(user.email, user.name));
+    orgUsers.forEach(user => add(user.email, user.displayName));
+    return Array.from(people.values()).sort((a, b) => a.name.localeCompare(b.name));
+  })();
+
   const [standardRecords, setStandardRecords] = useState<any[]>([]);
   const [standardWeeklyData, setStandardWeeklyData] = useState<any[]>([]);
   const [standardMonthlyData, setStandardMonthlyData] = useState<any[]>([]);
@@ -1274,6 +1335,7 @@ export default function Dashboard() {
 
   // Loading & Email Status
   const [loading, setLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState("");
   const [emailStatus, setEmailStatus] = useState("");
   const [emailSuccess, setEmailSuccess] = useState<boolean | null>(null);
   const [emailLoading, setEmailLoading] = useState(false);
@@ -1291,7 +1353,7 @@ export default function Dashboard() {
   // --- BRANCH OPTIONS & SQL QUERY GENERATORS (Uses Supabase dynamic lists)
   const BRANCH_OPTIONS = branchesList;
 
-  const getStationwiseSqlTemplate = (country = "India", companyCode = "IND", sDate = "2026-06-01", eDate = "2026-06-07") => `-- Station-wise Report Query Template
+  const getStationwiseSqlTemplate = (country = "India", companyCode = "IND", sDate = "2026-06-01", eDate = "2026-06-07") => buildFreightQuery(`-- Station-wise Report Query Template
 SELECT
     vt.ConsoleNumber AS Console_Number,
     vt.MasterBillNum AS Master_Airway_Bill,
@@ -1326,9 +1388,9 @@ GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
          COALESCE(vt.RealLoadPortCity, 'N/A'),
          COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
          COALESCE(vt.RealDisChargePortCity, 'N/A')
-ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
+ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;`, transportMode);
 
-  const getBranchwiseSqlTemplate = (country = "India", companyCode = "IND", branch = "BLR", sDate = "2026-06-01", eDate = "2026-06-07") => `-- Branch-wise Report Query Template (${branch})
+  const getBranchwiseSqlTemplate = (country = "India", companyCode = "IND", branch = "BLR", sDate = "2026-06-01", eDate = "2026-06-07") => buildFreightQuery(`-- Branch-wise Report Query Template (${branch})
 SELECT
     vt.ConsoleNumber AS Console_Number,
     vt.MasterBillNum AS Master_Airway_Bill,
@@ -1382,7 +1444,7 @@ GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.AirlineName1,
          vs.ConsigneeName,
          vs.AgentCode,
          vs.AgentName
-ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
+ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`, transportMode);
 
   // Section level report types (Station-wise vs Branch-wise)
   const [weeklyReportLevel, setWeeklyReportLevel] = useState<"station" | "branch">("station");
@@ -1457,7 +1519,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
       rows.forEach((r) => {
         const etdVal = r.ETD ?? r.etd ?? r.etd_date;
         if (!etdVal) return;
-        const date = new Date(etdVal);
+        const date = freightEtdDate(r, transportMode);
         if (isNaN(date.getTime())) return;
 
         const day = date.getUTCDay();
@@ -1530,7 +1592,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
       rows.forEach((r) => {
         const etdVal = r.ETD ?? r.etd ?? r.etd_date;
         if (!etdVal) return;
-        const date = new Date(etdVal);
+        const date = freightEtdDate(r, transportMode);
         if (isNaN(date.getTime())) return;
         const yr = date.getUTCFullYear();
         const mo = date.getUTCMonth() + 1;
@@ -1566,6 +1628,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
   };
 
   const runWeeklyCustomSqlQuery = async (overrideSql?: string) => {
+    setLastExecutedSql(prev => ({...prev, weekly: ""}));
     const activeSql = (overrideSql || weeklySqlText).trim();
     if (!activeSql) {
       setWeeklySqlError("SQL query cannot be empty. Please write a query and try again.");
@@ -1584,7 +1647,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
       const res = await fetch(`${API}/api/custom-query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: activeSql }),
+        body: JSON.stringify({ query: activeSql, transport_mode: transportMode }),
         signal: abortController.signal,
       });
 
@@ -1601,6 +1664,8 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
         }
 
         setWeeklySqlRecords(records);
+        setLastExecutedSql(prev => ({...prev, weekly: (isSea && d.effectiveQuery ? d.effectiveQuery : activeSql).trim()}));
+        if (isSea && d.effectiveQuery) setWeeklySqlText(d.effectiveQuery);
 
         const totalTonnage = records.reduce((sum: number, r: any) => sum + Number(r.Total_Tonnage ?? r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.tonnage ?? 0), 0);
         const totalRevenue = records.reduce((sum: number, r: any) => sum + Number(r.Total_Revenue ?? r.Revenue_USD ?? r.revenue ?? 0), 0);
@@ -1632,7 +1697,8 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
 
         // Resolve sector carrier distribution for custom sql
         try {
-          const secParams = new URLSearchParams({ custom_sql: activeSql });
+          if (isSea) return; // Sea summaries come from the consol records above.
+          const secParams = new URLSearchParams({ transport_mode: transportMode, custom_sql: activeSql });
           const secRes = await fetch(`${API}/api/sector-carrier-distribution?${secParams}`);
           const secData = await secRes.json();
           if (secData.status === "success") {
@@ -1669,6 +1735,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
   };
 
   const runMonthlyCustomSqlQuery = async (overrideSql?: string) => {
+    setLastExecutedSql(prev => ({...prev, monthly: ""}));
     const activeSql = (overrideSql || monthlySqlText).trim();
     if (!activeSql) {
       setMonthlySqlError("SQL query cannot be empty. Please write a query and try again.");
@@ -1687,7 +1754,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
       const res = await fetch(`${API}/api/custom-query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: activeSql }),
+        body: JSON.stringify({ query: activeSql, transport_mode: transportMode }),
         signal: abortController.signal,
       });
 
@@ -1704,6 +1771,8 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
         }
 
         setMonthlySqlRecords(records);
+        setLastExecutedSql(prev => ({...prev, monthly: (isSea && d.effectiveQuery ? d.effectiveQuery : activeSql).trim()}));
+        if (isSea && d.effectiveQuery) setMonthlySqlText(d.effectiveQuery);
 
         const totalTonnage = records.reduce((sum: number, r: any) => sum + Number(r.Total_Tonnage ?? r.Tonnage_Chargeable ?? r.Air_ChargebleWeight ?? r.tonnage ?? 0), 0);
         const totalRevenue = records.reduce((sum: number, r: any) => sum + Number(r.Total_Revenue ?? r.Revenue_USD ?? r.revenue ?? 0), 0);
@@ -1735,7 +1804,8 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
 
         // Resolve sector carrier distribution for custom sql
         try {
-          const secParams = new URLSearchParams({ custom_sql: activeSql });
+          if (isSea) return; // Sea summaries come from the consol records above.
+          const secParams = new URLSearchParams({ transport_mode: transportMode, custom_sql: activeSql });
           const secRes = await fetch(`${API}/api/sector-carrier-distribution?${secParams}`);
           const secData = await secRes.json();
           if (secData.status === "success") {
@@ -1773,7 +1843,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
   const fetchFilterOptions = useCallback(async () => {
     if (dashboardMode !== "standard") return;
     try {
-      const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
+      const params = new URLSearchParams({ transport_mode: transportMode, start_date: startDate, end_date: endDate });
       const [cRes, aRes, ccRes, dcRes] = await Promise.all([
         fetch(`${API}/api/countries?${params}`),
         fetch(`${API}/api/airlines?${params}${countryParam ? `&country=${encodeURIComponent(countryParam)}` : ""}`),
@@ -1796,8 +1866,9 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
   const fetchMainAnalytics = useCallback(async () => {
     if (dashboardMode !== "standard") return;
     setLoading(true);
+    setAnalyticsError("");
     try {
-      const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
+      const params = new URLSearchParams({ transport_mode: transportMode, start_date: startDate, end_date: endDate });
       if (countryParam) params.append("country", countryParam);
       if (airlineParam) params.append("airline", airlineParam);
       if (companyCodeParam) params.append("company_code", companyCodeParam);
@@ -1808,12 +1879,14 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
 
       const [dataRes, weekRes, monthRes, kpiRes, sectorRes] = await Promise.all([
         fetch(`${API}/api/data?${params}`),
-        fetch(`${API}/api/weekly?${params}`),
-        fetch(`${API}/api/monthly?${params}`),
-        fetch(`${API}/api/kpi?${params}`),
-        fetch(`${API}/api/sector-carrier-distribution?${params}`),
+        isSea ? Promise.resolve({json: async () => ({status: "success", data: []})}) : fetch(`${API}/api/weekly?${params}`),
+        isSea ? Promise.resolve({json: async () => ({status: "success", data: []})}) : fetch(`${API}/api/monthly?${params}`),
+        isSea ? Promise.resolve({json: async () => ({status: "success", data: null})}) : fetch(`${API}/api/kpi?${params}`),
+        isSea ? Promise.resolve({json: async () => ({status: "success", data: []})}) : fetch(`${API}/api/sector-carrier-distribution?${params}`),
       ]);
       const [d, w, m, k, sec] = await Promise.all([dataRes.json(), weekRes.json(), monthRes.json(), kpiRes.json(), sectorRes.json()]);
+      const failed = [d, w, m, k].find(result => result.status !== "success");
+      if (failed) throw new Error(failed.detail || "The freight data could not be loaded.");
       if (d.status === "success") setStandardRecords(d.data);
       if (w.status === "success") setStandardWeeklyData(w.data);
       if (m.status === "success") setStandardMonthlyData(m.data);
@@ -1821,6 +1894,12 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
       if (sec.status === "success") setStandardSectorCarrierData(sec.data);
     } catch (e) {
       console.error("Failed to sync database view", e);
+      setAnalyticsError(e instanceof Error ? e.message : "The freight data could not be loaded.");
+      setStandardRecords([]);
+      setStandardWeeklyData([]);
+      setStandardMonthlyData([]);
+      setStandardKpi({});
+      setStandardSectorCarrierData([]);
     }
     setLoading(false);
   }, [startDate, endDate, countryParam, airlineParam, companyCodeParam, originCityParam, destinationCountryParam, destinationCityParam, branchParam, dashboardMode]);
@@ -1838,7 +1917,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
     if (dashboardMode !== "standard") return;
     const updateCascadingCarriers = async () => {
       try {
-        const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
+        const params = new URLSearchParams({ transport_mode: transportMode, start_date: startDate, end_date: endDate });
         if (countryParam) params.append("country", countryParam);
         const res = await fetch(`${API}/api/airlines?${params}`);
         const d = await res.json();
@@ -1855,7 +1934,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
     if (dashboardMode !== "standard") return;
     const updateCities = async () => {
       try {
-        const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
+        const params = new URLSearchParams({ transport_mode: transportMode, start_date: startDate, end_date: endDate });
         if (countryParam) params.append("country", countryParam);
         const res = await fetch(`${API}/api/origin-cities?${params}`);
         const d = await res.json();
@@ -1872,7 +1951,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
     if (dashboardMode !== "standard") return;
     const updateCities = async () => {
       try {
-        const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
+        const params = new URLSearchParams({ transport_mode: transportMode, start_date: startDate, end_date: endDate });
         if (destinationCountryParam) params.append("country", destinationCountryParam);
         const res = await fetch(`${API}/api/destination-cities?${params}`);
         const d = await res.json();
@@ -1889,7 +1968,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
     if (dashboardMode !== "standard") return;
     const updateCountries = async () => {
       try {
-        const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
+        const params = new URLSearchParams({ transport_mode: transportMode, start_date: startDate, end_date: endDate });
         if (companyCodeParam) params.append("company_code", companyCodeParam);
         const res = await fetch(`${API}/api/countries?${params}`);
         const d = await res.json();
@@ -1906,7 +1985,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
     if (dashboardMode !== "standard") return;
     const updateBranches = async () => {
       try {
-        const params = new URLSearchParams();
+        const params = new URLSearchParams({ transport_mode: transportMode });
         if (companyCodeParam) params.append("company_code", companyCodeParam);
         const res = await fetch(`${API}/api/branches?${params}`);
         const d = await res.json();
@@ -1924,25 +2003,32 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
 
   // Trigger Playwright + graph PDF dispatch
   const handleSendEmail = async () => {
-    if (selectedEmails.length === 0) {
+    if (activeRecipients.length === 0 || activeRecipients.some(email => !isReportEmail(email))) {
       setEmailStatus("Please select or add at least one recipient email.");
       setEmailSuccess(false);
-      return;
+      return false;
+    }
+    if (dashboardMode === "custom-sql" && !sqlReportCanSend) {
+      setEmailStatus("Execute the current SQL query before sending this report.");
+      setEmailSuccess(false);
+      return false;
     }
     setEmailLoading(true);
     setEmailStatus("Rendering report layout & transmitting A4 Landscape PDF via Microsoft Graph...");
     setEmailSuccess(null);
+    let sent = false;
     try {
-      const emailString = selectedEmails.join(", ");
+      const emailString = activeRecipients.join(", ");
 
       // Build request body based on dashboard mode
       const requestBody: any = {
+        transport_mode: transportMode,
         recipient_email: emailString,
         // Pass selected sections to reduce PDF size
         include_weekly_visual: pdfSections.weeklyVisual,
         include_weekly_ledger: pdfSections.weeklyLedger,
         include_monthly_visual: pdfSections.monthlyVisual,
-        include_monthly_ledger: dashboardMode === "custom-sql" ? false : pdfSections.monthlyLedger,
+        include_monthly_ledger: !isSea && dashboardMode === "custom-sql" ? false : pdfSections.monthlyLedger,
         // Limit data rows to 100 to reduce email attachment size
         max_data_rows: 100,
         report_type: activeSection === "weekly-reports" || activeSection === "dashboard" ? "weekly" : "monthly",
@@ -1977,13 +2063,16 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
         body: JSON.stringify(requestBody),
       });
       const result = await res.json();
-      setEmailStatus(result.message || "Executive stats report successfully sent.");
+      if (!res.ok || result.status !== "success") throw new Error(result.detail || result.message || "Could not transmit PDF dashboard.");
+      setEmailStatus(`Report sent to ${emailString}.`);
       setEmailSuccess(true);
-    } catch {
-      setEmailStatus("Could not transmit PDF dashboard.");
+      sent = true;
+    } catch (error) {
+      setEmailStatus(error instanceof Error ? error.message : "Could not transmit PDF dashboard.");
       setEmailSuccess(false);
     }
     setEmailLoading(false);
+    return sent;
   };
 
   const handleSendStationEmail = async (stationCode: string, country: string) => {
@@ -2002,7 +2091,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`;
       let formattedSql = "";
       if (stationCode === "OTHER") {
         const knownCompanies = stationsList.map(s => `'${s.code}'`).join(", ");
-        formattedSql = `
+        formattedSql = buildFreightQuery(`
 SELECT
     vt.ConsoleNumber AS Console_Number,
     vt.MasterBillNum AS Master_Airway_Bill,
@@ -2039,9 +2128,9 @@ GROUP BY
     COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
     COALESCE(vt.RealDisChargePortCity, 'N/A')
 ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
-        `.trim();
+        `, transportMode).trim();
       } else {
-        formattedSql = `
+        formattedSql = buildFreightQuery(`
 SELECT
     vt.ConsoleNumber AS Console_Number,
     vt.MasterBillNum AS Master_Airway_Bill,
@@ -2079,10 +2168,11 @@ GROUP BY
     COALESCE(vt.RealDisChargePortCountryName, 'N/A'),
     COALESCE(vt.RealDisChargePortCity, 'N/A')
 ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
-        `.trim();
+        `, transportMode).trim();
       }
 
       const requestBody = {
+        transport_mode: transportMode,
         recipient_email: emailString,
         mode: "custom-sql",
         custom_sql: formattedSql,
@@ -2103,10 +2193,11 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         body: JSON.stringify(requestBody),
       });
       const result = await res.json();
+      if (!res.ok || result.status !== "success") throw new Error(result.detail || result.message || "Failed to send report.");
       setStationEmailStatus(prev => ({ ...prev, [stationCode]: result.message || "Report dispatch started." }));
       setStationEmailSuccess(prev => ({ ...prev, [stationCode]: true }));
-    } catch {
-      setStationEmailStatus(prev => ({ ...prev, [stationCode]: "Failed to send report." }));
+    } catch (error) {
+      setStationEmailStatus(prev => ({ ...prev, [stationCode]: error instanceof Error ? error.message : "Failed to send report." }));
       setStationEmailSuccess(prev => ({ ...prev, [stationCode]: false }));
     }
     setStationEmailLoading(prev => ({ ...prev, [stationCode]: false }));
@@ -2127,6 +2218,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
       const formattedSql = getBranchwiseSqlTemplate("India", "IND", branchCode, startDate, endDate);
 
       const requestBody = {
+        transport_mode: transportMode,
         recipient_email: emailString,
         mode: "custom-sql",
         custom_sql: formattedSql,
@@ -2149,10 +2241,11 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         body: JSON.stringify(requestBody),
       });
       const result = await res.json();
+      if (!res.ok || result.status !== "success") throw new Error(result.detail || result.message || "Failed to send branch report.");
       setStationEmailStatus(prev => ({ ...prev, [branchCode]: result.message || `${branchCode} Branch report dispatch started.` }));
       setStationEmailSuccess(prev => ({ ...prev, [branchCode]: true }));
-    } catch {
-      setStationEmailStatus(prev => ({ ...prev, [branchCode]: "Failed to send branch report." }));
+    } catch (error) {
+      setStationEmailStatus(prev => ({ ...prev, [branchCode]: error instanceof Error ? error.message : "Failed to send branch report." }));
       setStationEmailSuccess(prev => ({ ...prev, [branchCode]: false }));
     }
     setStationEmailLoading(prev => ({ ...prev, [branchCode]: false }));
@@ -2449,7 +2542,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
   // Intercepting the "Send Stats" button to trigger the new verification step
   const handleSendStatsClick = () => {
-    if (selectedEmails.length === 0) {
+    if (activeRecipients.length === 0) {
       alert("Please select or add at least one recipient email address first.");
       return;
     }
@@ -2463,6 +2556,10 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     : activeSection === "weekly-reports"
       ? weeklySqlRecords
       : monthlySqlRecords;
+
+  const currentSql = activeSection === "weekly-reports" ? weeklySqlText : monthlySqlText;
+  const sqlReportCanSend = Boolean(lastExecutedSql[sqlReportKey] && lastExecutedSql[sqlReportKey] === currentSql.trim())
+    && !(activeSection === "weekly-reports" ? weeklySqlIsRunning : monthlySqlIsRunning);
 
   const weeklyData = activeSection === "dashboard"
     ? standardWeeklyData
@@ -2507,14 +2604,14 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     const pct = (val: number) => total > 0 ? (val / total) * 100 : 0;
 
     return [
-      { name: "Europe", tonnage: Number((tEurope / 1000).toFixed(3)), contribution: pct(tEurope) },
-      { name: "USA", tonnage: Number((tUSA / 1000).toFixed(3)), contribution: pct(tUSA) },
-      { name: "S.East Asia", tonnage: Number((tSEAsia / 1000).toFixed(3)), contribution: pct(tSEAsia) },
-      { name: "Africa", tonnage: Number((tAfrica / 1000).toFixed(3)), contribution: pct(tAfrica) },
-      { name: "India & Sub Cont.", tonnage: Number((tIndiaSub / 1000).toFixed(3)), contribution: pct(tIndiaSub) },
-      { name: "Mid East", tonnage: Number((tMidEast / 1000).toFixed(3)), contribution: pct(tMidEast) },
-      { name: "Australia", tonnage: Number((tAustralia / 1000).toFixed(3)), contribution: pct(tAustralia) },
-      { name: "Other Sectors", tonnage: Number((tOthers / 1000).toFixed(3)), contribution: pct(tOthers) },
+      { name: "Europe", tonnage: Number((tEurope / sectorDivisor).toFixed(3)), contribution: pct(tEurope) },
+      { name: "USA", tonnage: Number((tUSA / sectorDivisor).toFixed(3)), contribution: pct(tUSA) },
+      { name: "S.East Asia", tonnage: Number((tSEAsia / sectorDivisor).toFixed(3)), contribution: pct(tSEAsia) },
+      { name: "Africa", tonnage: Number((tAfrica / sectorDivisor).toFixed(3)), contribution: pct(tAfrica) },
+      { name: "India & Sub Cont.", tonnage: Number((tIndiaSub / sectorDivisor).toFixed(3)), contribution: pct(tIndiaSub) },
+      { name: "Mid East", tonnage: Number((tMidEast / sectorDivisor).toFixed(3)), contribution: pct(tMidEast) },
+      { name: "Australia", tonnage: Number((tAustralia / sectorDivisor).toFixed(3)), contribution: pct(tAustralia) },
+      { name: "Other Sectors", tonnage: Number((tOthers / sectorDivisor).toFixed(3)), contribution: pct(tOthers) },
     ];
   };
 
@@ -2525,23 +2622,23 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
     const convertRow = (r: any) => ({
       name: r.Airline || "Unknown Carrier",
-      exp: Number((r.Air_Exp_Tong / 1000).toFixed(3)),
-      imp: Number((r.Air_Imp_Tong / 1000).toFixed(3)),
-      total: Number((r.Total_Tons / 1000).toFixed(3)),
-      europe: Number((r.Europe / 1000).toFixed(3)),
-      usa: Number((r.USA / 1000).toFixed(3)),
-      northAmericaOther: Number((r.North_America_Other / 1000).toFixed(3)),
-      centralAmerica: Number((r.Central_America / 1000).toFixed(3)),
-      southAmerica: Number((r.South_America / 1000).toFixed(3)),
-      middleEast: Number((r.Middle_East / 1000).toFixed(3)),
-      southEastAsia: Number((r.South_East_Asia / 1000).toFixed(3)),
-      indiaSubContinent: Number((r.India_Sub_Continent / 1000).toFixed(3)),
-      northernAsia: Number((r.Northern_Asia / 1000).toFixed(3)),
-      africa: Number((r.Africa / 1000).toFixed(3)),
-      southAfrica: Number((r.South_Africa / 1000).toFixed(3)),
-      australia: Number((r.Australia / 1000).toFixed(3)),
-      pacificIslands: Number((r.Pacific_Islands / 1000).toFixed(3)),
-      others: Number((r.Others / 1000).toFixed(3))
+      exp: Number((r.Air_Exp_Tong / sectorDivisor).toFixed(3)),
+      imp: Number((r.Air_Imp_Tong / sectorDivisor).toFixed(3)),
+      total: Number((r.Total_Tons / sectorDivisor).toFixed(3)),
+      europe: Number((r.Europe / sectorDivisor).toFixed(3)),
+      usa: Number((r.USA / sectorDivisor).toFixed(3)),
+      northAmericaOther: Number((r.North_America_Other / sectorDivisor).toFixed(3)),
+      centralAmerica: Number((r.Central_America / sectorDivisor).toFixed(3)),
+      southAmerica: Number((r.South_America / sectorDivisor).toFixed(3)),
+      middleEast: Number((r.Middle_East / sectorDivisor).toFixed(3)),
+      southEastAsia: Number((r.South_East_Asia / sectorDivisor).toFixed(3)),
+      indiaSubContinent: Number((r.India_Sub_Continent / sectorDivisor).toFixed(3)),
+      northernAsia: Number((r.Northern_Asia / sectorDivisor).toFixed(3)),
+      africa: Number((r.Africa / sectorDivisor).toFixed(3)),
+      southAfrica: Number((r.South_Africa / sectorDivisor).toFixed(3)),
+      australia: Number((r.Australia / sectorDivisor).toFixed(3)),
+      pacificIslands: Number((r.Pacific_Islands / sectorDivisor).toFixed(3)),
+      others: Number((r.Others / sectorDivisor).toFixed(3))
     });
 
     const rows = top20.map(convertRow);
@@ -2726,7 +2823,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     data.forEach((r: any) => {
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
       if (!etdVal) return;
-      const date = new Date(etdVal);
+      const date = freightEtdDate(r, transportMode);
       if (isNaN(date.getTime())) return;
       const dateStr = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
       const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -2772,7 +2869,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
       let recordMonth: number = 1;
 
       if (etdVal) {
-        const date = new Date(etdVal);
+        const date = freightEtdDate(r, transportMode);
         if (isNaN(date.getTime())) return;
         recordMonth = date.getUTCMonth() + 1;
         const td = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -2883,15 +2980,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     data.forEach((r: any) => {
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
       if (!etdVal) return;
-      const date = new Date(etdVal);
+      const date = freightEtdDate(r, transportMode);
       if (isNaN(date.getTime())) return;
-      const td = new Date(date.valueOf());
-      td.setHours(0, 0, 0, 0);
-      td.setDate(td.getDate() + 3 - (td.getDay() + 6) % 7);
-      const w1 = new Date(td.getFullYear(), 0, 4);
-      const wn = 1 + Math.round(((td.valueOf() - w1.valueOf()) / 86400000 - 3 + (w1.getDay() + 6) % 7) / 7);
-      const yr = date.getFullYear();
-      const sk = `${yr}-${String(wn).padStart(2, '0')}`;
+      const { year: yr, week: wn, sortKey: sk } = freightIsoWeek(date, transportMode);
       if (!weekSet.has(sk)) weekSet.set(sk, `W${wn}'${String(yr).slice(-2)}`);
     });
     const sortedWeeks = Array.from(weekSet.entries()).sort(([a], [b]) => a.localeCompare(b));
@@ -2906,15 +2997,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
       if (!topAirlines.includes(carrier)) return;
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
       if (!etdVal) return;
-      const date = new Date(etdVal);
+      const date = freightEtdDate(r, transportMode);
       if (isNaN(date.getTime())) return;
-      const td = new Date(date.valueOf());
-      td.setHours(0, 0, 0, 0);
-      td.setDate(td.getDate() + 3 - (td.getDay() + 6) % 7);
-      const w1 = new Date(td.getFullYear(), 0, 4);
-      const wn = 1 + Math.round(((td.valueOf() - w1.valueOf()) / 86400000 - 3 + (w1.getDay() + 6) % 7) / 7);
-      const yr = date.getFullYear();
-      const sk = `${yr}-${String(wn).padStart(2, '0')}`;
+      const { year: yr, week: wn, sortKey: sk } = freightIsoWeek(date, transportMode);
       const wIdx = weekSortKeys.indexOf(sk);
       if (wIdx === -1) return;
       const lbl = weekLabels[wIdx];
@@ -2935,15 +3020,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     data.forEach((r: any) => {
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
       if (!etdVal) return;
-      const date = new Date(etdVal);
+      const date = freightEtdDate(r, transportMode);
       if (isNaN(date.getTime())) return;
-      const td = new Date(date.valueOf());
-      td.setHours(0, 0, 0, 0);
-      td.setDate(td.getDate() + 3 - (td.getDay() + 6) % 7);
-      const w1 = new Date(td.getFullYear(), 0, 4);
-      const wn = 1 + Math.round(((td.valueOf() - w1.valueOf()) / 86400000 - 3 + (w1.getDay() + 6) % 7) / 7);
-      const yr = date.getFullYear();
-      const sk = `${yr}-${String(wn).padStart(2, '0')}`;
+      const { year: yr, week: wn, sortKey: sk } = freightIsoWeek(date, transportMode);
       if (!weekSet.has(sk)) weekSet.set(sk, `W${wn}'${String(yr).slice(-2)}`);
     });
     return Array.from(weekSet.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v);
@@ -3011,11 +3090,12 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     data.forEach((r: any) => {
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
       if (!etdVal) return;
-      const date = new Date(etdVal);
+      const date = freightEtdDate(r, transportMode);
       if (isNaN(date.getTime())) return;
-      const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; // YYYY-MM-DD key for sorting
+      const { year, month, day, weekday } = freightDayParts(date, transportMode);
+      const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-      const label = `${dayNames[date.getDay()]} ${date.getDate()}/${date.getMonth() + 1}`;
+      const label = `${dayNames[weekday]} ${day}/${month}`;
       if (!dayMap[dateStr]) {
         dayMap[dateStr] = { date_label: label, Total_Tonnage: 0, Total_Revenue: 0, Total_Shipments: 0 };
       }
@@ -3046,12 +3126,12 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
   // Construct print-view query params for preview window
   const getPrintViewUrl = () => {
     if (dashboardMode === "custom-sql") {
-      const params = new URLSearchParams({
+      const params = new URLSearchParams({ transport_mode: transportMode,
         mode: "custom-sql",
         include_weekly_visual: pdfSections.weeklyVisual.toString(),
         include_weekly_ledger: pdfSections.weeklyLedger.toString(),
         include_monthly_visual: pdfSections.monthlyVisual.toString(),
-        include_monthly_ledger: "false",
+        include_monthly_ledger: isSea ? pdfSections.monthlyLedger.toString() : "false",
         max_data_rows: "100",
         report_type: activeSection === "weekly-reports" ? "weekly" : "monthly",
       });
@@ -3065,7 +3145,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
       }
       return `/print-view?${params.toString()}`;
     }
-    const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
+    const params = new URLSearchParams({ transport_mode: transportMode, start_date: startDate, end_date: endDate });
     if (countryParam) params.append("country", countryParam);
     if (airlineParam) params.append("airline", airlineParam);
     if (companyCodeParam) params.append("company_code", companyCodeParam);
@@ -3126,7 +3206,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             <div className="bg-[#EBF8FF] p-4 rounded-full border border-[#BEE3F8] mb-2">
               <ShieldCheck className="w-12 h-12 text-[#3182CE]" />
             </div>
-            <h2 className="text-2xl font-black text-slate-800 tracking-tight">DGL Tonnage Dashboard</h2>
+            <h2 className="text-2xl font-black text-slate-800 tracking-tight">{freightText("DGL Tonnage Dashboard", transportMode)}</h2>
             <p className="text-xs text-slate-400 font-medium">Administrator Sign In Required</p>
           </div>
 
@@ -3208,10 +3288,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         <div className="max-w-[1400px] mx-auto px-6 h-16 flex items-center justify-between gap-6">
           <div className="flex items-center gap-2.5">
             <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain shrink-0" />
-            <h1 className="text-lg font-bold text-[#1A202C] tracking-tight">DGL Tonnage Analysis</h1>
-            <span className="text-[11px] text-slate-400 font-medium px-2 py-0.5 rounded-full bg-[#EDF2F7] border border-[#E2E8F0]">
-              Tonnage Dashboard
-            </span>
+            <h1 className="text-lg font-bold text-[#1A202C] tracking-tight">{freightText("DGL Tonnage Analysis", transportMode)}</h1>
+            <span className="text-[11px] text-slate-400 font-medium px-2 py-0.5 rounded-full bg-[#EDF2F7] border border-[#E2E8F0]">{freightText("\n              Tonnage Dashboard\n            ", transportMode)}</span>
           </div>
 
           {/* Header right: active section badge + quick actions */}
@@ -3287,6 +3365,23 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         </div>
       </div>
 
+      <div className="bg-white border-b border-slate-200 px-4 sm:px-6 lg:px-8 py-3">
+        <div className="max-w-[1400px] mx-auto flex flex-wrap items-center justify-between gap-3">
+          <div role="tablist" aria-label="Freight analysis" className="inline-flex rounded-xl bg-slate-100 p-1 gap-1">
+            {(["AIR", "SEA"] as TransportMode[]).map(mode => {
+              const Icon = mode === "SEA" ? Ship : Plane;
+              return <button key={mode} role="tab" data-mode={mode} id={`freight-tab-${transportMode}-${mode}`} aria-controls={`freight-panel-${mode}`} aria-selected={transportMode === mode} tabIndex={transportMode === mode ? 0 : -1}
+                onClick={() => onModeChange(mode)}
+                onKeyDown={event => { if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) { event.preventDefault(); const next = event.key === "Home" ? "AIR" : event.key === "End" ? "SEA" : mode === "AIR" ? "SEA" : "AIR"; onModeChange(next); requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[role="tabpanel"]:not([hidden]) [data-mode="${next}"]`)?.focus()); } }}
+                className={`flex items-center gap-2 rounded-lg px-5 py-2 text-sm font-bold transition-all ${transportMode === mode ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}>
+                <Icon className={`h-4 w-4 ${mode === "SEA" ? "text-teal-600" : "text-blue-600"}`} />{mode === "SEA" ? "Sea Freight" : "Air Freight"}
+              </button>;
+            })}
+          </div>
+          <p className="text-xs text-slate-500">{isSea ? "Shipping lines · FCL TEUs · LCL m³" : "Airlines · Chargeable weight · Revenue"}</p>
+        </div>
+      </div>
+
       {/* ── SIDEBAR + MAIN LAYOUT ── */}
       <div className="flex" style={{ minHeight: "calc(100vh - 64px)" }}>
 
@@ -3355,13 +3450,18 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
           </button>
 
           <div style={{ marginTop: "auto" }} className="px-4 pt-4 pb-2 border-t border-[#EDF2F7]">
-            <p className="text-[9px] text-slate-300 font-semibold">DGL Tonnage Analysis</p>
+            <p className="text-[9px] text-slate-300 font-semibold">{freightText("DGL Tonnage Analysis", transportMode)}</p>
             <p className="text-[9px] text-slate-300">&copy; 2026 Dart Global Logistics</p>
           </div>
         </nav>
 
         {/* ── MAIN CONTENT AREA ── */}
         <div className="flex-1 min-w-0 pb-12">
+          {analyticsError && activeSection === "dashboard" && (
+            <div role="alert" className="mx-6 mt-6 rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+              Could not load {isSea ? "sea" : "air"} freight data: {analyticsError}
+            </div>
+          )}
 
           {/* ── FILTER UTILITIES STRIP ── */}
           {activeSection !== "admin" && activeSection !== "email-scheduling" && activeSection !== "users" && (
@@ -3431,12 +3531,12 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
                       {/* Airline Carrier */}
                       <MultiSelect
-                        label="Airline Carrier"
+                        label={freightText("Airline Carrier", transportMode)}
                         options={airlines}
                         selected={selectedAirlines}
                         onChange={setSelectedAirlines}
                         placeholder="All Carriers"
-                        emoji="✈️"
+                        emoji={isSea ? "🚢" : "✈️"}
                       />
                     </div>
 
@@ -3711,6 +3811,18 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                       </div>
                     )}
 
+                    <ReportRecipientPicker key={`${transportMode}-${sqlReportKey}`}
+                      people={sqlRecipientOptions} recipient={activeRecipients[0] || ""}
+                      onChange={email => {
+                        setSqlReportRecipients(prev => ({...prev, [sqlReportKey]: email ? [email] : []}));
+                        setEmailStatus(""); setEmailSuccess(null);
+                      }}
+                      onSend={() => {setEmailStatus(""); setEmailSuccess(null); handleSendStatsClick();}}
+                      loading={sqlRecipientUsersLoading || orgUsersLoading} directoryError={sqlRecipientUsersError}
+                      canSend={sqlReportCanSend} sending={emailLoading}
+                      reportLabel={`${transportMode === "SEA" ? "Sea" : "Air"} ${sqlReportKey === "weekly" ? "Weekly" : "Monthly"}`}
+                    />
+
                     {/* Console logs & feedback */}
                     {(activeSection === "weekly-reports" ? weeklySqlExecutionStatus : monthlySqlExecutionStatus) && (
                       <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600 font-medium flex items-center gap-2">
@@ -3737,7 +3849,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
           )}
 
           {/* ── SELECTED RECIPIENTS STRIP (Dashboard only) ── */}
-          {activeSection !== "admin" && activeSection !== "email-scheduling" && activeSection !== "users" && selectedEmails.length > 0 && (
+          {activeSection === "dashboard" && selectedEmails.length > 0 && (
             <div className="w-full px-4 sm:px-6 lg:px-8 mt-3 animate-in fade-in-0 duration-200">
               <div className="flex flex-wrap items-center gap-2 p-2 bg-[#EBF8FF]/50 border border-[#BEE3F8]/60 rounded-lg shadow-sm">
                 <span className="text-[10px] font-bold text-[#2B6CB0] uppercase tracking-wider px-1">Selected Recipients:</span>
@@ -4619,7 +4731,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                     <Clock className="w-5 h-5 text-violet-600" />
                     <h2 className="text-xl font-extrabold text-[#1A202C] tracking-tight">Email Scheduling</h2>
                   </div>
-                  <p className="text-sm text-slate-400">Automate and schedule periodic tonnage report dispatches.</p>
+                  <p className="text-sm text-slate-400">{freightText("Automate and schedule periodic tonnage report dispatches.", transportMode)}</p>
                 </div>
               </div>
 
@@ -5824,6 +5936,12 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             </div>
           )}
 
+          {isSea && !["admin", "email-scheduling", "users"].includes(activeSection) && (
+            <div className="w-full px-4 sm:px-6 lg:px-8 mt-6"><SeaConsolReport records={data} loading={loading}
+              dateRange={`${startDate} to ${endDate}`} station={getSelectedCompanyNames()} viewMode={dashboardMode}
+              reportType={activeSection === "monthly-reports" ? "monthly" : "weekly"} /></div>
+          )}
+          {!isSea && <>
           {/* ── FOUR FINANCIAL & OPERATIONAL KPI CARDS ROW (Dashboard + Weekly/Monthly Reports) ── */}
           {activeSection !== "admin" && activeSection !== "email-scheduling" && activeSection !== "users" && (
             <div className="w-full px-4 sm:px-6 lg:px-8 mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -5842,13 +5960,12 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
               {/* Card 2: Total Tonnage */}
               <div className="saas-card p-5 bg-white flex flex-col justify-center h-28 relative overflow-hidden">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Tonnage</p>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{freightText("Total Tonnage", transportMode)}</p>
                 {loading ? (
                   <Skeleton className="h-8 w-28 mt-2 bg-slate-100" />
                 ) : (
                   <h3 className="text-2xl font-extrabold text-[#2D3748] tracking-tight mt-1">
-                    {formatNumber(kpi.Total_Tonnage)} kg
-                  </h3>
+                    {formatNumber(kpi.Total_Tonnage)}{freightText(" kg\n                  ", transportMode)}</h3>
                 )}
               </div>
 
@@ -5879,6 +5996,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             </div>
           )}
 
+
           {/* ── MAIN DASHBOARD CANVAS (DIVIDED SEPARATELY FOR WEEKLY & MONTHLY) ── */}
           {activeSection !== "admin" && activeSection !== "email-scheduling" && activeSection !== "users" && (
             <div className="w-full px-4 sm:px-6 lg:px-8 mt-6 space-y-12">
@@ -5900,7 +6018,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                     <div className="col-span-12 lg:col-span-8 saas-card p-6 bg-white relative">
                       <div className="flex items-center justify-between mb-4 border-b border-[#F1F5F9] pb-4">
                         <div>
-                          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Tonnage Flow</p>
+                          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">{freightText("Tonnage Flow", transportMode)}</p>
                           <h2 className="text-lg font-bold text-[#1A202C] mt-0.5">Cargo Revenue Trend - Weekly</h2>
                         </div>
                         <span className="text-xs font-bold text-[#4299E1] px-2 py-0.5 rounded-full bg-[#EBF8FF] border border-[#BEE3F8]">
@@ -5917,7 +6035,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           <ResponsiveContainer width="100%" height="100%">
                             <AreaChart data={weeklyData} margin={{ top: 15, right: 10, left: 10, bottom: 15 }}>
                               <defs>
-                                <linearGradient id="visitorAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                                <linearGradient id={`visitorAreaGrad-${transportMode}`} x1="0" y1="0" x2="0" y2="1">
                                   <stop offset="0%" stopColor="#4299E1" stopOpacity={0.25} />
                                   <stop offset="100%" stopColor="#FFFFFF" stopOpacity={0.0} />
                                 </linearGradient>
@@ -5950,9 +6068,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                       </div>
                                       <div className="flex justify-between items-center gap-4">
                                         <span className="text-slate-500 font-medium flex items-center gap-1">
-                                          <span className="w-2 h-2 rounded-full bg-[#3182CE]" /> Tonnage
-                                        </span>
-                                        <span className="text-[#3182CE] font-bold">{formatNumber(rawData.Total_Tonnage)} kg</span>
+                                          <span className="w-2 h-2 rounded-full bg-[#3182CE]" />{freightText(" Tonnage\n                                        ", transportMode)}</span>
+                                        <span className="text-[#3182CE] font-bold">{formatNumber(rawData.Total_Tonnage)}{freightText(" kg", transportMode)}</span>
                                       </div>
                                     </div>
                                   );
@@ -5964,7 +6081,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 name="Revenue"
                                 stroke="#3182CE"
                                 strokeWidth={2.5}
-                                fill="url(#visitorAreaGrad)"
+                                fill={`url(#visitorAreaGrad-${transportMode})`}
                                 dot={{ fill: "#3182CE", r: 4, stroke: "#FFFFFF", strokeWidth: 1.5 }}
                                 activeDot={{ r: 6, fill: "#3182CE", stroke: "#FFFFFF", strokeWidth: 2 }}
                               />
@@ -5978,8 +6095,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                     <div className="col-span-12 lg:col-span-8 saas-card p-6 bg-white flex flex-col justify-between min-h-[350px]">
                       <div className="flex items-center justify-between mb-4 pb-2 border-b border-[#F1F5F9]">
                         <div>
-                          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest text-[#4299E1]">Airlines Share</p>
-                          <h4 className="text-sm font-bold text-slate-800 mt-0.5">Top 10 Airlines Tonnage Share</h4>
+                          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest text-[#4299E1]">{freightText("Airlines Share", transportMode)}</p>
+                          <h4 className="text-sm font-bold text-slate-800 mt-0.5">{freightText("Top 10 Airlines Tonnage Share", transportMode)}</h4>
                         </div>
                         <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${activeSection === "monthly-reports"
                           ? "text-emerald-700 bg-emerald-50 border-emerald-100"
@@ -6020,12 +6137,12 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                   tick={{ fontSize: 8, fill: "#A0AEC0" }}
                                   axisLine={false}
                                   tickLine={false}
-                                  tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+                                  tickFormatter={(v) => isSea ? formatNumber(v) : `${(v / 1000).toFixed(0)}k`}
                                   width={36}
                                 />
                                 <Tooltip
                                   contentStyle={{ fontSize: "10px", borderRadius: "6px" }}
-                                  formatter={(value: any, name: any) => [`${Number(value).toLocaleString()} kg`, name]}
+                                  formatter={(value: any, name: any) => [`${Number(value).toLocaleString()} ${isSea ? "TEU" : "kg"}`, name]}
                                 />
                                 {top10AirlinesNames.map((airlineName, idx) => (
                                   <Bar
@@ -6060,7 +6177,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 </span>
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0 text-right">
-                                <span className="font-bold text-[#2D3748] tabular-nums">{formatNumber(entry.tonnage)} kg</span>
+                                <span className="font-bold text-[#2D3748] tabular-nums">{formatNumber(entry.tonnage)}{freightText(" kg", transportMode)}</span>
                                 <span className="text-slate-400 font-medium">({pct}%)</span>
                               </div>
                             </div>
@@ -6082,11 +6199,11 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                     <ResponsiveContainer width="100%" height="100%">
                       <AreaChart data={dailyTonnageData} margin={{ top: 15, right: 48, left: 10, bottom: dailyTonnageData.length > 10 ? 30 : 15 }}>
                         <defs>
-                          <linearGradient id="dailyTonnageGrad" x1="0" y1="0" x2="0" y2="1">
+                          <linearGradient id={`dailyTonnageGrad-${transportMode}`} x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stopColor="#4299E1" stopOpacity={0.3} />
                             <stop offset="100%" stopColor="#FFFFFF" stopOpacity={0.0} />
                           </linearGradient>
-                          <linearGradient id="dailyRevenueGrad" x1="0" y1="0" x2="0" y2="1">
+                          <linearGradient id={`dailyRevenueGrad-${transportMode}`} x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stopColor="#48BB78" stopOpacity={0.2} />
                             <stop offset="100%" stopColor="#FFFFFF" stopOpacity={0.0} />
                           </linearGradient>
@@ -6106,7 +6223,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           tick={{ fontSize: 9, fill: "#4299E1" }}
                           axisLine={false}
                           tickLine={false}
-                          tickFormatter={(v) => `${(v / 1000).toFixed(1)}t`}
+                          tickFormatter={(v) => `${(v / sectorDivisor).toFixed(isSea ? 2 : 1)}${isSea ? " TEU" : "t"}`}
                           width={42}
                         />
                         <YAxis
@@ -6129,7 +6246,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                   <span className="text-slate-500 font-medium flex items-center gap-1">
                                     <span className="w-2 h-2 rounded-full bg-[#4299E1]" /> Tonnage
                                   </span>
-                                  <span className="text-[#3182CE] font-extrabold">{formatNumber(d?.Total_Tonnage)} kg</span>
+                                  <span className="text-[#3182CE] font-extrabold">{formatNumber(d?.Total_Tonnage)} {isSea ? "TEU" : "kg"}</span>
                                 </div>
                                 <div className="flex justify-between items-center gap-4">
                                   <span className="text-slate-500 font-medium flex items-center gap-1">
@@ -6152,7 +6269,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           name="Tonnage"
                           stroke="#3182CE"
                           strokeWidth={2.5}
-                          fill="url(#dailyTonnageGrad)"
+                          fill={`url(#dailyTonnageGrad-${transportMode})`}
                           dot={{ fill: "#3182CE", r: 3, stroke: "#FFFFFF", strokeWidth: 1.5 }}
                           activeDot={{ r: 5, fill: "#3182CE", stroke: "#FFFFFF", strokeWidth: 2 }}
                         />
@@ -6163,7 +6280,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           name="Revenue"
                           stroke="#48BB78"
                           strokeWidth={2}
-                          fill="url(#dailyRevenueGrad)"
+                          fill={`url(#dailyRevenueGrad-${transportMode})`}
                           dot={{ fill: "#48BB78", r: 3, stroke: "#FFFFFF", strokeWidth: 1.5 }}
                           activeDot={{ r: 5, fill: "#48BB78", stroke: "#FFFFFF", strokeWidth: 2 }}
                         />
@@ -6177,7 +6294,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                   {/* Airline Carrier Tonnage pie chart (col-span-4) — visible on the right of Tonnage Flow in standard & custom-sql modes */}
                   <div className="col-span-12 lg:col-span-4 saas-card p-6 bg-white min-h-[350px] flex flex-col justify-between">
                     <div className="flex items-center justify-between mb-4 pb-2 border-b border-[#F1F5F9]">
-                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest text-[#4299E1]">Airline Carrier Tonnage</p>
+                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest text-[#4299E1]">{freightText("Airline Carrier Tonnage", transportMode)}</p>
                       {selectedAirlines.length > 0 && (
                         <Badge variant="outline" className="border-blue-200 text-blue-600 bg-blue-50/50 text-[8px] font-bold px-1.5 py-0.5">
                           Selection Active
@@ -6185,9 +6302,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                       )}
                     </div>
                     <div>
-                      <h4 className="text-sm font-bold text-slate-800 mb-1">Airline Tonnage Share</h4>
+                      <h4 className="text-sm font-bold text-slate-800 mb-1">{freightText("Airline Tonnage Share", transportMode)}</h4>
                       <p className="text-[10.5px] text-slate-400 leading-tight">
-                        {selectedAirlines.length > 0 ? "Showing selected carrier weights" : "Showing carrier distribution by weight"}
+                        {selectedAirlines.length > 0 ? freightText("Showing selected carrier weights", transportMode) : freightText("Showing carrier distribution by weight", transportMode)}
                       </p>
                     </div>
 
@@ -6214,10 +6331,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             </PieChart>
                           </ResponsiveContainer>
                           <div className="absolute text-center flex flex-col justify-center items-center">
-                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">Total Weight</span>
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">{freightText("Total Weight", transportMode)}</span>
                             <span className="text-[9px] font-extrabold text-[#2D3748] tracking-tight mt-0.5">
-                              {formatNumber(kpi.Total_Tonnage)} kg
-                            </span>
+                              {formatNumber(kpi.Total_Tonnage)}{freightText(" kg\n                            ", transportMode)}</span>
                           </div>
                         </>
                       )}
@@ -6231,7 +6347,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             <span className="w-2.5 h-2.5 rounded-full shrink-0 mt-0.5" style={{ backgroundColor: entry.name === "Others" ? "#718096" : getAirlineColor(entry.name, idx) }} />
                             <span className="font-semibold text-slate-700 leading-snug">{entry.name}</span>
                           </div>
-                          <span className="font-bold text-[#2D3748] tabular-nums shrink-0 mt-0.5">{formatNumber(entry.value)} kg</span>
+                          <span className="font-bold text-[#2D3748] tabular-nums shrink-0 mt-0.5">{formatNumber(entry.value)}{freightText(" kg", transportMode)}</span>
                         </div>
                       ))}
                     </div>
@@ -6246,11 +6362,11 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                     <div className="col-span-12 saas-card p-6 bg-white flex flex-col min-h-[380px]">
                       <div className="flex items-center justify-between mb-4 pb-2 border-b border-[#F1F5F9]">
                         <div>
-                          <p className="text-[11px] font-bold uppercase tracking-widest text-[#4299E1]">Airline Breakdown</p>
-                          <h4 className="text-sm font-bold text-slate-800 mt-0.5">Airline Tonnage by Week Period</h4>
+                          <p className="text-[11px] font-bold uppercase tracking-widest text-[#4299E1]">{freightText("Airline Breakdown", transportMode)}</p>
+                          <h4 className="text-sm font-bold text-slate-800 mt-0.5">{freightText("Airline Tonnage by Week Period", transportMode)}</h4>
                         </div>
                         <span className="text-xs font-bold text-emerald-700 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-100">
-                          {airlineWeeklyStackData.length} Airlines · {weekStackLabels.length} Weeks
+                          {airlineWeeklyStackData.length}{freightText(" Airlines · ", transportMode)}{weekStackLabels.length} Weeks
                         </span>
                       </div>
 
@@ -6258,8 +6374,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                         {loading ? (
                           <Skeleton className="h-full w-full rounded bg-slate-100 animate-pulse" />
                         ) : airlineWeeklyStackData.length === 0 ? (
-                          <div className="h-full flex items-center justify-center text-xs text-slate-400 text-center px-6">
-                            No airline data — ensure your SQL returns an <code className="bg-slate-100 px-1 rounded mx-1">Airline</code> and <code className="bg-slate-100 px-1 rounded">ETD</code> column.
+                          <div className="h-full flex items-center justify-center text-xs text-slate-400 text-center px-6">{freightText("\n                            No airline data — ensure your SQL returns an ", transportMode)}<code className="bg-slate-100 px-1 rounded mx-1">{freightText("Airline", transportMode)}</code> and <code className="bg-slate-100 px-1 rounded">ETD</code> column.
                           </div>
                         ) : (
                           <ResponsiveContainer width="100%" height={Math.max(240, airlineWeeklyStackData.length * 34 + 20)}>
@@ -6274,7 +6389,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 tick={{ fontSize: 8, fill: "#A0AEC0" }}
                                 axisLine={false}
                                 tickLine={false}
-                                tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+                                tickFormatter={(v) => isSea ? formatNumber(v) : `${(v / 1000).toFixed(0)}k`}
                               />
                               <YAxis
                                 dataKey="airline"
@@ -6286,7 +6401,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               />
                               <Tooltip
                                 contentStyle={{ fontSize: "10px", borderRadius: "6px", maxWidth: "240px" }}
-                                formatter={(value: any, name: any) => [`${Number(value).toLocaleString()} kg`, name]}
+                                formatter={(value: any, name: any) => [`${Number(value).toLocaleString()} ${isSea ? "TEU" : "kg"}`, name]}
                               />
                               {weekStackLabels.map((wkLabel, wIdx) => (
                                 <Bar
@@ -6330,7 +6445,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                       <div className="flex items-center justify-between mb-3 pb-2 border-b border-[#F1F5F9] shrink-0">
                         <div>
                           <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Route Distribution</p>
-                          <h4 className="text-sm font-bold text-slate-800 mt-0.5">Trade Routes by Tonnage (Top 5)</h4>
+                          <h4 className="text-sm font-bold text-slate-800 mt-0.5">{freightText("Trade Routes by Tonnage (Top 5)", transportMode)}</h4>
                         </div>
                         <span className="text-xs font-bold text-[#4299E1] px-2 py-0.5 rounded-full bg-[#EBF8FF] border border-[#BEE3F8] shrink-0">
                           {tradeRouteData.length} Routes
@@ -6386,8 +6501,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                         </div>
                                         <div className="space-y-1">
                                           <div className="flex justify-between items-center gap-4">
-                                            <span className="text-slate-500">Tonnage</span>
-                                            <span className="font-extrabold text-[#2D3748] tabular-nums">{Number(item.value).toLocaleString()} kg</span>
+                                            <span className="text-slate-500">{freightText("Tonnage", transportMode)}</span>
+                                            <span className="font-extrabold text-[#2D3748] tabular-nums">{Number(item.value).toLocaleString()}{freightText(" kg", transportMode)}</span>
                                           </div>
                                           <div className="flex justify-between items-center gap-4">
                                             <span className="text-slate-500">Share</span>
@@ -6404,8 +6519,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                               <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Total</span>
                               <span className="text-sm font-extrabold text-[#2D3748] mt-0.5">
-                                {formatNumber(tradeRouteData.reduce((s, r) => s + r.value, 0))} kg
-                              </span>
+                                {formatNumber(tradeRouteData.reduce((s, r) => s + r.value, 0))}{freightText(" kg\n                              ", transportMode)}</span>
                             </div>
                           </div>
 
@@ -6434,7 +6548,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                           </span>
                                         </div>
                                       )}
-                                      <span className="text-[11px] font-bold text-slate-800 tabular-nums shrink-0">{formatNumber(entry.value)} kg</span>
+                                      <span className="text-[11px] font-bold text-slate-800 tabular-nums shrink-0">{formatNumber(entry.value)}{freightText(" kg", transportMode)}</span>
                                     </div>
                                     <div className="mt-1.5 h-1 bg-slate-100 rounded-full overflow-hidden">
                                       <div
@@ -6461,7 +6575,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                   <div className="flex items-center justify-between mb-4 pb-2 border-b border-[#F1F5F9]">
                     <div>
                       <h4 className="text-sm font-bold text-[#1A202C]">Trade Route Performance Summary — Top 10</h4>
-                      <p className="text-xs text-slate-400 mt-0.5">Aggregated by origin &amp; destination · ranked by chargeable tonnage</p>
+                      <p className="text-xs text-slate-400 mt-0.5">{freightText("Aggregated by origin & destination · ranked by chargeable tonnage", transportMode)}</p>
                     </div>
                   </div>
 
@@ -6605,7 +6719,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               <th className="px-3 py-3">Origin City</th>
                               <th className="px-3 py-3">Destination Country</th>
                               <th className="px-3 py-3">Destination City</th>
-                              <th className="px-3 py-3 text-right">Tonnage (kg)</th>
+                              <th className="px-3 py-3 text-right">{freightText("Tonnage (kg)", transportMode)}</th>
                               <th className="px-3 py-3 text-right">No of Masters</th>
                               <th className="px-3 py-3 text-right">Shipments</th>
                               <th className="px-3 py-3 text-right">Shipment Revenue (USD)</th>
@@ -6655,7 +6769,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                   <td className="px-3 py-3 text-slate-600 font-medium">{row.destCity}</td>
                                   <td className="px-3 py-3 text-right tabular-nums">
                                     <div className="flex flex-col items-end gap-0.5">
-                                      <span className="font-bold text-[#319795]">{formatNumber(row.tonnage)} kg</span>
+                                      <span className="font-bold text-[#319795]">{formatNumber(row.tonnage)}{freightText(" kg", transportMode)}</span>
                                       <div className="h-1 rounded-full bg-slate-100 w-16 overflow-hidden">
                                         <div
                                           className="h-full rounded-full"
@@ -6685,7 +6799,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               <td className="px-3 py-3" />
                               <td className="px-3 py-3" />
                               <td className="px-3 py-3" />
-                              <td className="px-3 py-3 text-right text-[#319795] tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
+                              <td className="px-3 py-3 text-right text-[#319795] tabular-nums">{formatNumber(grandTotal.tonnage)}{freightText(" kg", transportMode)}</td>
                               <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.masters)}</td>
                               <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                               <td className="px-3 py-3 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
@@ -6721,7 +6835,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                     <div className="col-span-12 lg:col-span-8 saas-card p-6 bg-white relative">
                       <div className="flex items-center justify-between mb-4 border-b border-[#F1F5F9] pb-4">
                         <div>
-                          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Tonnage Flow</p>
+                          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">{freightText("Tonnage Flow", transportMode)}</p>
                           <h2 className="text-lg font-bold text-[#1A202C] mt-0.5">Cargo Revenue Trend - Monthly</h2>
                         </div>
                         <span className="text-xs font-bold text-[#319795] px-2 py-0.5 rounded-full bg-[#E6FFFA] border border-[#B2F5EA]">
@@ -6738,7 +6852,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           <ResponsiveContainer width="100%" height="100%">
                             <AreaChart data={monthlyData} margin={{ top: 15, right: 10, left: 10, bottom: 15 }}>
                               <defs>
-                                <linearGradient id="monthlyAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                                <linearGradient id={`monthlyAreaGrad-${transportMode}`} x1="0" y1="0" x2="0" y2="1">
                                   <stop offset="0%" stopColor="#319795" stopOpacity={0.25} />
                                   <stop offset="100%" stopColor="#FFFFFF" stopOpacity={0.0} />
                                 </linearGradient>
@@ -6771,9 +6885,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                       </div>
                                       <div className="flex justify-between items-center gap-4">
                                         <span className="text-slate-500 font-medium flex items-center gap-1">
-                                          <span className="w-2 h-2 rounded-full bg-teal-600" /> Tonnage
-                                        </span>
-                                        <span className="text-teal-600 font-bold">{formatNumber(rawData.Total_Tonnage)} kg</span>
+                                          <span className="w-2 h-2 rounded-full bg-teal-600" />{freightText(" Tonnage\n                                        ", transportMode)}</span>
+                                        <span className="text-teal-600 font-bold">{formatNumber(rawData.Total_Tonnage)}{freightText(" kg", transportMode)}</span>
                                       </div>
                                     </div>
                                   );
@@ -6785,7 +6898,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 name="Revenue"
                                 stroke="#319795"
                                 strokeWidth={2.5}
-                                fill="url(#monthlyAreaGrad)"
+                                fill={`url(#monthlyAreaGrad-${transportMode})`}
                                 dot={{ fill: "#319795", r: 4, stroke: "#FFFFFF", strokeWidth: 1.5 }}
                                 activeDot={{ r: 6, fill: "#319795", stroke: "#FFFFFF", strokeWidth: 2 }}
                               />
@@ -6854,7 +6967,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                   <div className="saas-card bg-white p-6">
                     <div className="flex items-center justify-between mb-4 pb-2 border-b border-[#F1F5F9]">
                       <div>
-                        <h4 className="text-sm font-bold text-[#1A202C]">Monthly Tonnage & Financial Summary Table</h4>
+                        <h4 className="text-sm font-bold text-[#1A202C]">{freightText("Monthly Tonnage & Financial Summary Table", transportMode)}</h4>
                         <p className="text-xs text-slate-400 mt-0.5">Dynamic monthly aggregations filtered by selected date range</p>
                       </div>
                       <Badge variant="outline" className="border-[#E2E8F0] text-[#319795] font-semibold px-2 py-0.5">
@@ -6869,7 +6982,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             <th className="px-4 py-2.5">Year</th>
                             <th className="px-4 py-2.5">Month</th>
                             <th className="px-4 py-2.5 text-right">Revenue (USD)</th>
-                            <th className="px-4 py-2.5 text-right">Tonnage</th>
+                            <th className="px-4 py-2.5 text-right">{freightText("Tonnage", transportMode)}</th>
                             <th className="px-4 py-2.5 text-right">Shipments</th>
                           </tr>
                         </thead>
@@ -6882,7 +6995,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 {row.Total_Revenue != null ? formatCurrency(row.Total_Revenue) : "$0"}
                               </td>
                               <td className="px-4 py-3 text-right text-slate-600 font-semibold tabular-nums">
-                                {row.Total_Tonnage != null ? `${formatNumber(row.Total_Tonnage)} kg` : "0 kg"}
+                                {row.Total_Tonnage != null ? freightText(`${formatNumber(row.Total_Tonnage)} ${isSea ? "TEU" : "kg"}`, transportMode) : freightText("0 kg", transportMode)}
                               </td>
                               <td className="px-4 py-3 text-right text-slate-500 font-semibold tabular-nums">
                                 {row.Total_Shipments != null ? formatNumber(row.Total_Shipments) : "0"}
@@ -6907,7 +7020,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
               <div className="space-y-4 pt-4 border-t border-[#E2E8F0]">
                 <div className="flex items-center gap-2 pb-2 border-b border-[#E2E8F0]">
                   <span className="h-5 w-1.5 bg-violet-600 rounded-full animate-pulse" />
-                  <h2 className="text-base font-bold text-[#1A202C]">Sector-wise Carrier & Geographical Tonnage Performance</h2>
+                  <h2 className="text-base font-bold text-[#1A202C]">{freightText("Sector-wise Carrier & Geographical Tonnage Performance", transportMode)}</h2>
                   <span className="text-[10px] text-violet-700 bg-violet-50 font-semibold px-2 py-0.5 rounded-full border border-violet-100">
                     Carrier & Sector Performance
                   </span>
@@ -6919,11 +7032,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                     <div className="flex items-center justify-between mb-4 border-b border-[#F1F5F9] pb-4">
                       <div>
                         <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Geographical contribution</p>
-                        <h2 className="text-lg font-bold text-[#1A202C] mt-0.5">Air Exports - Geographical Tonnage Contribution</h2>
+                        <h2 className="text-lg font-bold text-[#1A202C] mt-0.5">{freightText("Air Exports - Geographical Tonnage Contribution", transportMode)}</h2>
                       </div>
-                      <span className="text-xs font-bold text-violet-600 px-2 py-0.5 rounded-full bg-violet-50 border border-violet-100">
-                        Tons vs Contribution %
-                      </span>
+                      <span className="text-xs font-bold text-violet-600 px-2 py-0.5 rounded-full bg-violet-50 border border-violet-100">{freightText("\n                        Tons vs Contribution %\n                      ", transportMode)}</span>
                     </div>
 
                     <div className="h-80 w-full">
@@ -6940,7 +7051,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           <ComposedChart data={getSectorChartData()} margin={{ top: 20, right: 30, left: 10, bottom: 5 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} />
                             <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#718096", fontWeight: 600 }} axisLine={{ stroke: "#E2E8F0" }} tickLine={false} />
-                            <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v} t`} width={45} />
+                            <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v} ${isSea ? "TEU" : "t"}`} width={45} />
                             <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} width={35} />
                             <Tooltip
                               content={({ active, payload, label }) => {
@@ -6949,8 +7060,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                   <div className="bg-white border border-[#CBD5E0] shadow-xl p-3 rounded-lg text-xs space-y-1">
                                     <p className="font-bold text-slate-800 border-b border-[#F1F5F9] pb-1 mb-1">{label}</p>
                                     <div className="flex justify-between gap-4">
-                                      <span className="text-slate-500 font-medium">Tonnage:</span>
-                                      <span className="text-blue-600 font-bold">{payload[0].value} Tons</span>
+                                      <span className="text-slate-500 font-medium">{freightText("Tonnage:", transportMode)}</span>
+                                      <span className="text-blue-600 font-bold">{payload[0].value}{freightText(" Tons", transportMode)}</span>
                                     </div>
                                     <div className="flex justify-between gap-4">
                                       <span className="text-slate-500 font-medium">Contribution:</span>
@@ -6960,7 +7071,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 );
                               }}
                             />
-                            <Bar yAxisId="left" dataKey="tonnage" fill="#3182CE" radius={[4, 4, 0, 0]} barSize={40} name="Tonnage (Tons)" />
+                            <Bar yAxisId="left" dataKey="tonnage" fill="#3182CE" radius={[4, 4, 0, 0]} barSize={40} name={freightText("Tonnage (Tons)", transportMode)} />
                             <Line yAxisId="right" type="monotone" dataKey="contribution" stroke="#E53E3E" strokeWidth={2.5} dot={{ fill: "#E53E3E", r: 4 }} activeDot={{ r: 6 }} name="Contribution %">
                               <LabelList dataKey="contribution" position="top" formatter={(v: number) => `${v.toFixed(0)}%`} style={{ fontSize: 10, fill: "#E53E3E", fontWeight: 700 }} />
                             </Line>
@@ -6992,7 +7103,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: index === 0 ? "#3182CE" : index === 1 ? "#4299E1" : index === 2 ? "#63B3ED" : "#90CDF4" }} />
                                 {sector.name}
                               </span>
-                              <span>{sector.tonnage} Tons ({sector.contribution.toFixed(1)}%)</span>
+                              <span>{sector.tonnage}{freightText(" Tons (", transportMode)}{sector.contribution.toFixed(1)}%)</span>
                             </div>
                             <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
                               <div className="h-full rounded-full" style={{ width: `${sector.contribution}%`, backgroundColor: index === 0 ? "#3182CE" : index === 1 ? "#4299E1" : index === 2 ? "#63B3ED" : "#90CDF4" }} />
@@ -7007,8 +7118,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                   <div className="col-span-12 saas-card bg-white p-6">
                     <div className="flex items-center justify-between mb-4 pb-2 border-b border-[#F1F5F9]">
                       <div>
-                        <h4 className="text-sm font-bold text-[#1A202C]">TOP 20 AIR CARRIERS & Total Tonnage - Sector wise (Tons)</h4>
-                        <p className="text-xs text-slate-400 mt-0.5">Tonnage contribution broken down by carrier and sector (Rounded to nearest Ton)</p>
+                        <h4 className="text-sm font-bold text-[#1A202C]">{freightText("TOP 20 AIR CARRIERS & Total Tonnage - Sector wise (Tons)", transportMode)}</h4>
+                        <p className="text-xs text-slate-400 mt-0.5">{freightText("Tonnage contribution broken down by carrier and sector (Rounded to nearest Ton)", transportMode)}</p>
                       </div>
                       <Badge variant="outline" className="border-[#E2E8F0] text-violet-700 bg-violet-50 font-semibold px-2 py-0.5">
                         Sector-wise Distribution
@@ -7021,8 +7132,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           <tr className="border-b border-[#E2E8F0] text-slate-500 uppercase font-bold text-[9px] tracking-wider bg-slate-50/50 sticky top-0 z-10">
                             <th rowSpan={2} className="px-2 py-2 first:rounded-l-md border-r border-[#E2E8F0] align-middle text-center">SL</th>
                             <th rowSpan={2} className="px-2 py-2 border-r border-[#E2E8F0] align-middle">CARRIER NAME</th>
-                            <th colSpan={2} className="px-2 py-1 text-center bg-slate-100/80 border-b border-r border-[#E2E8F0] text-slate-700 font-extrabold">TONNAGE (Tons)</th>
-                            <th colSpan={14} className="px-2 py-1 text-center text-slate-700 font-extrabold border-b border-[#E2E8F0]">GEOGRAPHICAL SECTOR TONNAGE (Tons)</th>
+                            <th colSpan={2} className="px-2 py-1 text-center bg-slate-100/80 border-b border-r border-[#E2E8F0] text-slate-700 font-extrabold">{freightText("TONNAGE (Tons)", transportMode)}</th>
+                            <th colSpan={14} className="px-2 py-1 text-center text-slate-700 font-extrabold border-b border-[#E2E8F0]">{freightText("GEOGRAPHICAL SECTOR TONNAGE (Tons)", transportMode)}</th>
                           </tr>
                           <tr className="border-b border-[#E2E8F0] text-slate-500 uppercase font-bold text-[9px] tracking-wider bg-slate-50/50 sticky top-[28px] z-10">
                             <th className="px-2 py-1 text-right bg-blue-50/40 text-blue-700 border-r border-[#E2E8F0]">EXP</th>
@@ -7088,8 +7199,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                 {/* Full-width: Top 10 Airlines Summary Table */}
                 <div className="flex items-center justify-between mb-4 pb-2 border-b border-[#F1F5F9]">
                   <div>
-                    <h4 className="text-sm font-bold text-[#1A202C]">Airline Performance Summary — Top 10</h4>
-                    <p className="text-xs text-slate-400 mt-0.5">Aggregated by airline · ranked by chargeable tonnage</p>
+                    <h4 className="text-sm font-bold text-[#1A202C]">{freightText("Airline Performance Summary — Top 10", transportMode)}</h4>
+                    <p className="text-xs text-slate-400 mt-0.5">{freightText("Aggregated by airline · ranked by chargeable tonnage", transportMode)}</p>
                   </div>
                 </div>
 
@@ -7234,7 +7345,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                       return (
                         <div className="py-14 flex flex-col items-center gap-2 text-slate-400">
                           <span className="text-3xl">✈️</span>
-                          <p className="text-xs font-medium text-center">No airline data available.<br />Run a SQL query that returns <code className="bg-slate-100 px-1 rounded">Airline</code>, <code className="bg-slate-100 px-1 rounded">Revenue_USD</code> columns.</p>
+                          <p className="text-xs font-medium text-center">{freightText("No airline data available.", transportMode)}<br />Run a SQL query that returns <code className="bg-slate-100 px-1 rounded">{freightText("Airline", transportMode)}</code>, <code className="bg-slate-100 px-1 rounded">Revenue_USD</code> columns.</p>
                         </div>
                       );
                     }
@@ -7244,8 +7355,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                         <thead>
                           <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[10px] tracking-wider bg-slate-50/70">
                             <th className="px-3 py-3 w-8">#</th>
-                            <th className="px-3 py-3">Airline</th>
-                            <th className="px-3 py-3 text-right">Tonnage (kg)</th>
+                            <th className="px-3 py-3">{freightText("Airline", transportMode)}</th>
+                            <th className="px-3 py-3 text-right">{freightText("Tonnage (kg)", transportMode)}</th>
                             <th className="px-3 py-3 text-right">No of Masters</th>
                             <th className="px-3 py-3 text-right">Shipments</th>
                             <th className="px-3 py-3 text-right">Shipment Revenue (USD)</th>
@@ -7287,7 +7398,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                   </td>
                                   <td className="px-3 py-3 text-right tabular-nums">
                                     <div className="flex flex-col items-end gap-0.5">
-                                      <span className="font-bold text-[#3182CE]">{formatNumber(row.tonnage)} kg</span>
+                                      <span className="font-bold text-[#3182CE]">{formatNumber(row.tonnage)}{freightText(" kg", transportMode)}</span>
                                       <div className="h-1 rounded-full bg-slate-100 w-16 overflow-hidden">
                                         <div
                                           className="h-full rounded-full"
@@ -7317,7 +7428,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                         <td className="px-3 py-2 pl-8">
                                           <span className="font-semibold text-slate-950">{route.originCity} → {route.destCity}</span>
                                         </td>
-                                        <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatNumber(route.tonnage)} kg</td>
+                                        <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatNumber(route.tonnage)}{freightText(" kg", transportMode)}</td>
                                         <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatNumber(routeMasters)}</td>
                                         <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-semibold">{formatNumber(route.shipments)}</td>
                                         <td className="px-3 py-2 text-right tabular-nums text-slate-950 font-bold">{formatCurrency(route.revenue)}</td>
@@ -7340,7 +7451,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                         <tfoot>
                           <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-xs">
                             <td className="px-3 py-3 text-slate-500" colSpan={2}>TOTAL</td>
-                            <td className="px-3 py-3 text-right text-[#3182CE] tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
+                            <td className="px-3 py-3 text-right text-[#3182CE] tabular-nums">{formatNumber(grandTotal.tonnage)}{freightText(" kg", transportMode)}</td>
                             <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.masters)}</td>
                             <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                             <td className="px-3 py-3 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
@@ -7360,6 +7471,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
               </div>
             </div>
           )}
+
+          </>}
 
         </div>{/* end main content area */}
       </div>{/* end sidebar+main flex */}
@@ -7572,6 +7685,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
             {/* Modal Body */}
             <div className="px-6 py-6 space-y-4">
+              <p className="text-xs text-slate-600"><span className="font-semibold">Send to:</span> {activeRecipients.join(", ")}</p>
               <div className="grid grid-cols-1 gap-3">
                 {/* Weekly Visual */}
                 <div className="flex items-center gap-3 p-3 border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer transition-colors"
@@ -7587,12 +7701,12 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                   />
                   <div className="flex-1">
                     <h4 className="text-sm font-semibold text-slate-800">
-                      {dashboardMode === "custom-sql" ? "Weekly Operational Performance" : "Weekly Revenue Trend Chart"}
+                      {isSea ? "Weekly Operational Performance" : dashboardMode === "custom-sql" ? "Weekly Operational Performance" : "Weekly Revenue Trend Chart"}
                     </h4>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      {dashboardMode === "custom-sql"
-                        ? "Operational charts including Top 10 Airlines share, Weekly tonnage period and Trade routes"
-                        : "Area chart showing weekly revenue flow and airline metrics"}
+                      {isSea ? "Shipping-line share and daily FCL TEU charts" : dashboardMode === "custom-sql"
+                        ? freightText("Operational charts including Top 10 Airlines share, Weekly tonnage period and Trade routes", transportMode)
+                        : freightText("Area chart showing weekly revenue flow and airline metrics", transportMode)}
                     </p>
                   </div>
                   <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded font-semibold">
@@ -7614,11 +7728,11 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                   />
                   <div className="flex-1">
                     <h4 className="text-sm font-semibold text-slate-800">
-                      {dashboardMode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Carrier Metrics Table"}
+                      {isSea ? "Shipping Line Consol Summary" : dashboardMode === "custom-sql" ? freightText("Airline Performance Summary — Top 10", transportMode) : "Weekly Carrier Metrics Table"}
                     </h4>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      {dashboardMode === "custom-sql"
-                        ? "Top 10 airlines tonnage, shipments, revenue, cost, and margin summary table"
+                      {isSea ? "Consols, FCL TEUs, LCL volume and revenue by shipping line" : dashboardMode === "custom-sql"
+                        ? freightText("Top 10 airlines tonnage, shipments, revenue, cost, and margin summary table", transportMode)
                         : "Detailed breakdown of carrier metrics by week"}
                     </p>
                   </div>
@@ -7639,11 +7753,11 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                   />
                   <div className="flex-1">
                     <h4 className="text-sm font-semibold text-slate-800">
-                      {dashboardMode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Financial Summary Chart"}
+                      {isSea ? "Trade Route Consol Summary" : dashboardMode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Financial Summary Chart"}
                     </h4>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      {dashboardMode === "custom-sql"
-                        ? "Top 10 trade routes tonnage, shipments, revenue, cost, and margin summary table"
+                      {isSea ? "Consols, FCL TEUs, LCL volume and revenue by origin and destination" : dashboardMode === "custom-sql"
+                        ? freightText("Top 10 trade routes tonnage, shipments, revenue, cost, and margin summary table", transportMode)
                         : "Pie chart showing revenue distribution by company"}
                     </p>
                   </div>
@@ -7653,7 +7767,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                 </div>
 
                 {/* Monthly Ledger */}
-                {dashboardMode !== "custom-sql" && (
+                {(isSea || dashboardMode !== "custom-sql") && (
                   <div className="flex items-center gap-3 p-3 border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer transition-colors"
                     onClick={() => setPdfSections({ ...pdfSections, monthlyLedger: !pdfSections.monthlyLedger })}>
                     <input
@@ -7666,8 +7780,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                       className="w-5 h-5 rounded border-slate-300 text-[#4299E1] cursor-pointer"
                     />
                     <div className="flex-1">
-                      <h4 className="text-sm font-semibold text-slate-800">Monthly Financial Summary Table</h4>
-                      <p className="text-xs text-slate-500 mt-0.5">Monthly revenue, tonnage, and shipment metrics</p>
+                      <h4 className="text-sm font-semibold text-slate-800">{isSea ? "Consol Ledger" : "Monthly Financial Summary Table"}</h4>
+                      <p className="text-xs text-slate-500 mt-0.5">{isSea ? "One row per consol with FCL TEUs, LCL volume and revenue" : freightText("Monthly revenue, tonnage, and shipment metrics", transportMode)}</p>
                     </div>
                     <span className="text-xs bg-teal-100 text-teal-700 px-2 py-1 rounded font-semibold">Table</span>
                   </div>
@@ -7689,7 +7803,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-xs text-slate-500">
                 <span>
-                  Sections selected: {dashboardMode === "custom-sql"
+                  Sections selected: {!isSea && dashboardMode === "custom-sql"
                     ? `${[pdfSections.weeklyVisual, pdfSections.weeklyLedger, pdfSections.monthlyVisual].filter(Boolean).length} / 3`
                     : `${Object.values(pdfSections).filter(Boolean).length} / 4`
                   }
@@ -7734,7 +7848,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                   </h3>
                   <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[11px] text-slate-500">
                     <span className="font-semibold text-slate-400">Sending to:</span>
-                    {selectedEmails.map((e) => (
+                    {activeRecipients.map((e) => (
                       <span key={e} className="bg-white border border-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-semibold text-[9px] shadow-sm">
                         {e}
                       </span>
@@ -7756,26 +7870,27 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                 )}
 
                 {/* Clean "Confirm & Send Email" button inside preview header when recipient is active */}
-                {selectedEmails.length > 0 && !emailSuccess && (
+                {activeRecipients.length > 0 && !emailSuccess && (
                   <Button
                     onClick={async () => {
-                      await handleSendEmail();
+                      const generation = previewGeneration.current;
+                      const sent = await handleSendEmail();
                       // Auto-close modal after 2.5 seconds on successful send
-                      setTimeout(() => {
-                        setShowPdfPreview(false);
+                      if (sent && previewGeneration.current === generation) previewCloseTimer.current = setTimeout(() => {
+                        if (previewGeneration.current === generation) setShowPdfPreview(false);
                       }, 2500);
                     }}
-                    disabled={emailLoading}
+                    disabled={emailLoading || (dashboardMode === "custom-sql" && !sqlReportCanSend)}
                     className="h-8 px-3.5 bg-[#4299E1] hover:bg-[#3182CE] text-white text-xs font-semibold rounded-md flex items-center gap-1.5 transition-all shadow-md"
                   >
                     {emailLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                    Confirm & Send to ({selectedEmails.length})
+                    Confirm & Send to ({activeRecipients.length})
                   </Button>
                 )}
 
                 <Button
                   onClick={() => {
-                    const iframe = document.getElementById("pdf-iframe") as HTMLIFrameElement;
+                    const iframe = document.getElementById(`pdf-iframe-${transportMode}`) as HTMLIFrameElement;
                     if (iframe && iframe.contentWindow) {
                       iframe.contentWindow.print();
                     }
@@ -7788,10 +7903,13 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                 <button
                   onClick={() => {
                     // Reset status when closing
+                    previewGeneration.current += 1;
+                    if (previewCloseTimer.current) clearTimeout(previewCloseTimer.current);
                     setEmailStatus("");
                     setEmailSuccess(null);
                     setShowPdfPreview(false);
                   }}
+                  aria-label="Close PDF preview"
                   className="p-1 rounded-full hover:bg-slate-200 text-slate-500 hover:text-slate-800 transition-colors"
                 >
                   <X className="w-5 h-5" />
@@ -7803,7 +7921,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             <div className="flex-1 bg-slate-100 p-6 flex justify-center overflow-y-auto">
               <div className="bg-white shadow-lg rounded-md border border-slate-200 overflow-hidden w-[1125px] h-[1620px] flex-shrink-0 origin-top transform scale-[0.8] lg:scale-[0.88] xl:scale-[0.95]">
                 <iframe
-                  id="pdf-iframe"
+                  id={`pdf-iframe-${transportMode}`}
                   key={getPrintViewUrl()}
                   src={getPrintViewUrl()}
                   className="w-full h-full border-none"
@@ -7855,8 +7973,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
             <p className="text-xs text-slate-600 mt-4 leading-relaxed bg-slate-50/70 p-3.5 rounded-xl border border-slate-100">
               {schedulesToDelete.length > 1
-                ? `Are you sure you want to permanently delete these ${schedulesToDelete.length} schedules? Automated tonnage report emails will no longer be dispatched for these configurations.`
-                : "Are you sure you want to delete this schedule? Automated tonnage report emails will no longer be dispatched for this configuration."}
+                ? freightText(`Are you sure you want to permanently delete these ${schedulesToDelete.length} schedules? Automated tonnage report emails will no longer be dispatched for these configurations.`, transportMode)
+                : freightText("Are you sure you want to delete this schedule? Automated tonnage report emails will no longer be dispatched for this configuration.", transportMode)}
             </p>
 
             {/* Schedules list preview */}
@@ -7930,4 +8048,22 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
     </div>
   );
+}
+
+/** Keep each workspace mounted after its first visit to preserve independent work. */
+export default function Dashboard() {
+  const [transportMode, setTransportMode] = useState<TransportMode>("AIR");
+  const [visitedSea, setVisitedSea] = useState(false);
+  const switchMode = (mode: TransportMode) => {
+    if (mode === "SEA") setVisitedSea(true);
+    setTransportMode(mode);
+  };
+  return <>
+    <div id="freight-panel-AIR" role="tabpanel" aria-labelledby="freight-tab-AIR-AIR" hidden={transportMode !== "AIR"}>
+      <FreightDashboard transportMode="AIR" onModeChange={switchMode} />
+    </div>
+    {visitedSea && <div id="freight-panel-SEA" role="tabpanel" aria-labelledby="freight-tab-SEA-SEA" hidden={transportMode !== "SEA"}>
+      <FreightDashboard transportMode="SEA" onModeChange={switchMode} />
+    </div>}
+  </>;
 }

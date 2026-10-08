@@ -1,12 +1,32 @@
+# Python dependencies for the AIR/SEA API, report mailer, utilities, and tests.
+# Local setup: Python 3.12
+# Install: python -m pip install -r requirements.txt
+# PDF browser setup: python -m playwright install chromium
+# Linux browser/system dependencies: python -m playwright install --with-deps chromium
+# Direct database access also requires Microsoft ODBC Driver 17 for SQL Server.
+# Frontend dependencies are managed separately: cd frontend; npm ci
+
+# API server, request validation, and static file serving
 fastapi==0.109.2
 uvicorn==0.27.1
-pandas==2.2.0
-sqlalchemy==2.0.25
-playwright==1.41.0
-python-dotenv==1.0.1
-msal==1.26.0
-requests==2.31.0
 pydantic==2.6.1
-google-cloud-scheduler==2.13.3
-jinja2==3.1.3
 aiofiles==23.2.1
+
+# Configuration and HTTP clients (database gateway, Supabase, Microsoft Graph)
+python-dotenv==1.0.1
+requests==2.31.0
+
+# SQL Server access and AIR/SEA data aggregation
+sqlalchemy==2.0.25
+pyodbc==5.1.0
+numpy==1.26.4
+pandas==2.2.0
+
+# PDF reports, HTML templates, and browser smoke tests
+# Keep Playwright aligned with the browser image version in Dockerfile.
+playwright==1.41.0
+jinja2==3.1.3
+
+# Microsoft Graph authentication and scheduled report delivery
+msal==1.26.0
+google-cloud-scheduler==2.13.3

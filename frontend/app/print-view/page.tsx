@@ -1,5 +1,7 @@
 "use client";
 
+import { freightEtdDate, freightDayParts } from "@/lib/operational-date";
+
 import { useState, useEffect, useCallback, Suspense, Fragment } from "react";
 import { useSearchParams } from "next/navigation";
 import {
@@ -9,12 +11,18 @@ import {
 import { Plane, Globe, CheckSquare, Square, Printer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
+import { TransportMode, freightText, formatFreightQuantity } from "@/lib/freight";
+import { SeaConsolReport } from "@/components/sea-consol-report";
+import { getApiBaseUrl } from "@/lib/api";
+
 // In production / Cloud Run / Playwright container: frontend & backend share the same host/port → use relative URLs ("").
 // In local development: Next.js dev server runs on :3000/:3001/:3002, backend on :8000 → use absolute localhost URL.
-const API = process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
-    ? (window.location.port.startsWith("300") ? "http://localhost:8000" : "")
-    : "");
+declare global {
+  interface Window {
+    __FREIGHT_PRINT_CONFIG__?: { apiBaseUrl: string; customSql?: string };
+  }
+}
+const API = (typeof window !== "undefined" ? window.__FREIGHT_PRINT_CONFIG__?.apiBaseUrl : undefined) ?? getApiBaseUrl();
 
 
 const formatCurrency = (val: number | null | undefined) => {
@@ -54,7 +62,7 @@ const getAirlineColor = (airlineName: string, fallbackIdx: number): string => {
 };
 
 // Parse weekly trend data dynamically from custom SQL result rows
-const parseWeeklyData = (rows: any[]) => {
+const parseWeeklyData = (rows: any[], transportMode: TransportMode) => {
   const hasWeek = rows.some((r) => r.Week !== undefined || r.week !== undefined || r.Week_Number !== undefined);
   if (hasWeek) {
     const weeklyMap: { [key: string]: any } = {};
@@ -85,7 +93,7 @@ const parseWeeklyData = (rows: any[]) => {
     rows.forEach((r) => {
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
       if (!etdVal) return;
-      const date = new Date(etdVal);
+      const date = freightEtdDate(r, transportMode);
       if (isNaN(date.getTime())) return;
 
       const day = date.getUTCDay();
@@ -122,7 +130,7 @@ const parseWeeklyData = (rows: any[]) => {
 };
 
 // Parse monthly trend data dynamically from custom SQL result rows
-const parseMonthlyData = (rows: any[]) => {
+const parseMonthlyData = (rows: any[], transportMode: TransportMode) => {
   const monthsNames: { [key: number]: string } = {
     1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
     7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
@@ -158,7 +166,7 @@ const parseMonthlyData = (rows: any[]) => {
     rows.forEach((r) => {
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
       if (!etdVal) return;
-      const date = new Date(etdVal);
+      const date = freightEtdDate(r, transportMode);
       if (isNaN(date.getTime())) return;
       const yr = date.getUTCFullYear();
       const mo = date.getUTCMonth() + 1;
@@ -185,6 +193,10 @@ const parseMonthlyData = (rows: any[]) => {
 
 function PrintViewContent() {
   const searchParams = useSearchParams();
+  const transportMode: TransportMode = searchParams?.get("transport_mode") === "SEA" ? "SEA" : "AIR";
+  const isSea = transportMode === "SEA";
+  const sectorDivisor = isSea ? 1 : 1000;
+  const formatNumber = (value: number | null | undefined) => formatFreightQuantity(value, transportMode);
   const formatTonnage = (val: number | null | undefined) => {
     if (val == null || val === 0) return "-";
     return val.toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
@@ -230,7 +242,7 @@ function PrintViewContent() {
     // 2. If SQL query is available, extract date range from ETD filters in SQL
     if (sqlQuery) {
       const startMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*>\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
-      const endMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*<\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
+      const endMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*<\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i) || sqlQuery.match(/ETD\s*<\s*DATEADD\(day,\s*1,\s*CAST\('([^']+)'\s+AS\s+date\)\)/i);
       const betweenMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s+between\s+['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?\s+and\s+['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
 
       const standardizeDate = (dStr: string) => dStr.replace(/[_/.]/g, '-');
@@ -246,14 +258,18 @@ function PrintViewContent() {
       const dates = data.map(r => {
         const etdVal = r.ETD ?? r.etd ?? r.etd_date;
         if (!etdVal) return null;
-        const d = new Date(etdVal);
+        const d = freightEtdDate(r, transportMode);
         return isNaN(d.getTime()) ? null : d;
       }).filter(Boolean) as Date[];
       if (dates.length > 0) {
         const minD = new Date(Math.min(...dates.map(d => d.getTime())));
         const maxD = new Date(Math.max(...dates.map(d => d.getTime())));
         const pad = (n: number) => String(n).padStart(2, '0');
-        return `${minD.getFullYear()}-${pad(minD.getMonth() + 1)}-${pad(minD.getDate())} to ${maxD.getFullYear()}-${pad(maxD.getMonth() + 1)}-${pad(maxD.getDate())}`;
+        const label = (d: Date) => {
+          const { year, month, day } = freightDayParts(d, transportMode);
+          return `${year}-${pad(month)}-${pad(day)}`;
+        };
+        return `${label(minD)} to ${label(maxD)}`;
       }
     }
 
@@ -348,7 +364,7 @@ function PrintViewContent() {
     }
 
     if (branchStr) {
-      if (resolvedCountry) {
+      if (resolvedCountry || isSea) {
         return `${resolvedCountry} - ${branchStr} Branch`;
       }
       return `${branchStr} Branch`;
@@ -374,6 +390,8 @@ function PrintViewContent() {
   const [sectorCarrierData, setSectorCarrierData] = useState<any[]>([]);
   const [kpi, setKpi] = useState<any>({});
   const [loading, setLoading] = useState(true);
+  const [printError, setPrintError] = useState("");
+  const [renderReady, setRenderReady] = useState(false);
   const [sqlQuery, setSqlQuery] = useState<string>("");
   const [showRouteBreakdown, setShowRouteBreakdown] = useState(searchParams?.get("show_route_breakdown") !== "false");
 
@@ -418,38 +436,54 @@ function PrintViewContent() {
 
   const fetchPrintData = useCallback(async () => {
     setLoading(true);
+    setPrintError("");
+    setRenderReady(false);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+    const loadJson = async (url: string, options: RequestInit = {}) => {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      const result = await response.json();
+      if (!response.ok || result.status !== "success") throw new Error(result.detail || "Could not load report data.");
+      return result;
+    };
+    const sectorParams = new URLSearchParams({ transport_mode: transportMode, start_date: startDate, end_date: endDate });
+    for (const [key, value] of Object.entries({ country, airline, company_code: companyCode, origin_city: originCity,
+      destination_country: destinationCountry, destination_city: destinationCity, branch })) {
+      if (value) sectorParams.set(key, value);
+    }
+    let sectorTask: Promise<any> | undefined;
+    const startSectors = (customSql?: string) => {
+      if (isSea || searchParams?.get("include_sector_distribution") === "false") return;
+      // Start in parallel with the main report query. Attach the rejection
+      // handler immediately so a failed sector request is never unhandled.
+      sectorTask = (customSql
+        ? loadJson(`${API}/api/sector-carrier-distribution`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...Object.fromEntries(sectorParams), custom_sql: customSql }),
+        })
+        : loadJson(`${API}/api/sector-carrier-distribution?${sectorParams}`))
+        .then(result => ({ result }), error => ({ error }));
+    };
     try {
       const mode = searchParams?.get("mode");
       const queryId = searchParams?.get("query_id");
-      let customSql = searchParams?.get("custom_sql");
-
-      let resolvedCountry = country;
-      let resolvedCompanyCode = companyCode;
-      let resolvedStart = startDate;
-      let resolvedEnd = endDate;
+      let customSql = window.__FREIGHT_PRINT_CONFIG__?.customSql || searchParams?.get("custom_sql");
 
       if (mode === "custom-sql") {
-        if (queryId) {
-          try {
-            const cacheRes = await fetch(`${API}/api/get-cached-query/${queryId}`);
-            const cacheData = await cacheRes.json();
-            if (cacheRes.status === 200 && cacheData.status === "success") {
-              customSql = cacheData.query;
-            }
-          } catch (e) {
-            console.error("Failed to fetch cached custom query", e);
-          }
+        if (queryId && !customSql) {
+          const cacheData = await loadJson(`${API}/api/get-cached-query/${queryId}`);
+          customSql = cacheData.query;
         }
-
+        if (!customSql) throw new Error("Report query is missing or expired. Reopen the preview and try again.");
         if (customSql) {
+          startSectors(customSql);
           setSqlQuery(customSql);
-          const res = await fetch(`${API}/api/custom-query`, {
+          const d = await loadJson(`${API}/api/custom-query`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: customSql }),
+            body: JSON.stringify({ query: customSql, transport_mode: transportMode }),
           });
-          const d = await res.json();
-          if (res.status === 200 && d.status === "success") {
+          if (d.status === "success") {
             const records = d.data;
             setData(records);
 
@@ -479,28 +513,14 @@ function PrintViewContent() {
             });
 
             // Dynamic Date Groupings using same logic
-            setWeeklyData(parseWeeklyData(records));
-            setMonthlyData(parseMonthlyData(records));
+            setWeeklyData(parseWeeklyData(records, transportMode));
+            setMonthlyData(parseMonthlyData(records, transportMode));
 
-            // Extract values for sector query
-            const companyMatch = customSql.match(/(?:[a-zA-Z0-9_]+\.)?Company\s*=\s*['"]([^'"]+)['"]/i);
-            if (companyMatch) resolvedCompanyCode = companyMatch[1];
-            const countryMatch = customSql.match(/(?:[a-zA-Z0-9_]+\.)?ConLoadPortCountryName\s*=\s*['"]([^'"]+)['"]/i);
-            if (countryMatch) resolvedCountry = countryMatch[1];
-
-            const startMatch = customSql.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*>\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
-            if (startMatch) resolvedStart = startMatch[1].replace(/[_/.]/g, '-');
-            const endMatch = customSql.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*<\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
-            if (endMatch) resolvedEnd = endMatch[1].replace(/[_/.]/g, '-');
-            const betweenMatch = customSql.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s+between\s+['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?\s+and\s+['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
-            if (betweenMatch) {
-              resolvedStart = betweenMatch[1].replace(/[_/.]/g, '-');
-              resolvedEnd = betweenMatch[2].replace(/[_/.]/g, '-');
-            }
           }
         }
       } else {
-        const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
+        startSectors();
+        const params = new URLSearchParams({ transport_mode: transportMode, start_date: startDate, end_date: endDate });
         if (country) params.append("country", country);
         if (airline) params.append("airline", airline);
         if (companyCode) params.append("company_code", companyCode);
@@ -509,47 +529,55 @@ function PrintViewContent() {
         if (destinationCity) params.append("destination_city", destinationCity);
         if (branch) params.append("branch", branch);
 
-        const [dataRes, weekRes, monthRes, kpiRes] = await Promise.all([
-          fetch(`${API}/api/data?${params}`),
-          fetch(`${API}/api/weekly?${params}`),
-          fetch(`${API}/api/monthly?${params}`),
-          fetch(`${API}/api/kpi?${params}`),
+        const [d, w, m, k] = await Promise.all([
+          loadJson(`${API}/api/data?${params}`),
+          isSea ? Promise.resolve({status: "success", data: []}) : loadJson(`${API}/api/weekly?${params}`),
+          isSea ? Promise.resolve({status: "success", data: []}) : loadJson(`${API}/api/monthly?${params}`),
+          isSea ? Promise.resolve({status: "success", data: null}) : loadJson(`${API}/api/kpi?${params}`),
         ]);
-        const [d, w, m, k] = await Promise.all([dataRes.json(), weekRes.json(), monthRes.json(), kpiRes.json()]);
+        const failed = [d, w, m, k].find(result => result.status !== "success");
+        if (failed) throw new Error(failed.detail || "Could not load report data.");
         if (d.status === "success") setData(d.data);
         if (w.status === "success") setWeeklyData(w.data);
         if (m.status === "success") setMonthlyData(m.data);
         if (k.status === "success") setKpi(k.data);
       }
 
-      // Fetch sector distribution if we have a resolved country
-      if (resolvedCountry) {
-        const sectorParams = new URLSearchParams({
-          start_date: resolvedStart,
-          end_date: resolvedEnd,
-          country: resolvedCountry
-        });
-        if (resolvedCompanyCode) sectorParams.append("company_code", resolvedCompanyCode);
-
-        try {
-          const sectorRes = await fetch(`${API}/api/sector-carrier-distribution?${sectorParams}`);
-          const sectorD = await sectorRes.json();
-          if (sectorD.status === "success") {
-            setSectorCarrierData(sectorD.data);
-          }
-        } catch (sectorErr) {
-          console.error("Failed to fetch sector distribution data", sectorErr);
-        }
+      if (sectorTask) {
+        const outcome = await sectorTask;
+        if (outcome.error) throw outcome.error;
+        if (outcome.result.warning) throw new Error(outcome.result.warning);
+        setSectorCarrierData(outcome.result.data);
+      } else {
+        setSectorCarrierData([]);
       }
     } catch (e) {
       console.error("Failed to load print preview", e);
+      setPrintError(controller.signal.aborted ? "Report data took longer than 45 seconds. Please retry or reduce the date range."
+        : e instanceof Error ? e.message : "Could not load report data.");
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+      setLoading(false);
     }
-    setLoading(false);
-  }, [startDate, endDate, country, airline, companyCode, originCity, destinationCountry, destinationCity, branch, searchParams]);
+  }, [startDate, endDate, country, airline, companyCode, originCity, destinationCountry, destinationCity, branch, transportMode, searchParams]);
 
   useEffect(() => {
     fetchPrintData();
   }, [fetchPrintData]);
+
+  useEffect(() => {
+    if (loading || printError) return;
+    let cancelled = false;
+    // Signal only after fonts and the chart layout have rendered; the PDF
+    // service can capture immediately without a fixed one-second sleep.
+    Promise.race([document.fonts.ready, new Promise(resolve => setTimeout(resolve, 5000))]).then(() => {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (!cancelled) setRenderReady(true);
+      }));
+    });
+    return () => { cancelled = true; };
+  }, [loading, printError]);
 
   // Update selected sections when URL parameters change (from parent preview modal)
   useEffect(() => {
@@ -643,7 +671,7 @@ function PrintViewContent() {
     data.forEach((r: any) => {
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
       if (!etdVal) return;
-      const date = new Date(etdVal);
+      const date = freightEtdDate(r, transportMode);
       if (isNaN(date.getTime())) return;
       const td = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
       td.setUTCDate(td.getUTCDate() + 3 - (td.getUTCDay() + 6) % 7);
@@ -665,7 +693,7 @@ function PrintViewContent() {
       if (!topAirlines.includes(carrier)) return;
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
       if (!etdVal) return;
-      const date = new Date(etdVal);
+      const date = freightEtdDate(r, transportMode);
       if (isNaN(date.getTime())) return;
       const td = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
       td.setUTCDate(td.getUTCDate() + 3 - (td.getUTCDay() + 6) % 7);
@@ -708,14 +736,14 @@ function PrintViewContent() {
     const pct = (val: number) => total > 0 ? (val / total) * 100 : 0;
 
     return [
-      { name: "Europe", tonnage: Number((tEurope / 1000).toFixed(1)), contribution: pct(tEurope) },
-      { name: "USA", tonnage: Number((tUSA / 1000).toFixed(1)), contribution: pct(tUSA) },
-      { name: "S.East Asia", tonnage: Number((tSEAsia / 1000).toFixed(1)), contribution: pct(tSEAsia) },
-      { name: "Africa", tonnage: Number((tAfrica / 1000).toFixed(1)), contribution: pct(tAfrica) },
-      { name: "India & Sub Cont.", tonnage: Number((tIndiaSub / 1000).toFixed(1)), contribution: pct(tIndiaSub) },
-      { name: "Mid East", tonnage: Number((tMidEast / 1000).toFixed(1)), contribution: pct(tMidEast) },
-      { name: "Australia", tonnage: Number((tAustralia / 1000).toFixed(1)), contribution: pct(tAustralia) },
-      { name: "Other Sectors", tonnage: Number((tOthers / 1000).toFixed(1)), contribution: pct(tOthers) },
+      { name: "Europe", tonnage: Number((tEurope / sectorDivisor).toFixed(1)), contribution: pct(tEurope) },
+      { name: "USA", tonnage: Number((tUSA / sectorDivisor).toFixed(1)), contribution: pct(tUSA) },
+      { name: "S.East Asia", tonnage: Number((tSEAsia / sectorDivisor).toFixed(1)), contribution: pct(tSEAsia) },
+      { name: "Africa", tonnage: Number((tAfrica / sectorDivisor).toFixed(1)), contribution: pct(tAfrica) },
+      { name: "India & Sub Cont.", tonnage: Number((tIndiaSub / sectorDivisor).toFixed(1)), contribution: pct(tIndiaSub) },
+      { name: "Mid East", tonnage: Number((tMidEast / sectorDivisor).toFixed(1)), contribution: pct(tMidEast) },
+      { name: "Australia", tonnage: Number((tAustralia / sectorDivisor).toFixed(1)), contribution: pct(tAustralia) },
+      { name: "Other Sectors", tonnage: Number((tOthers / sectorDivisor).toFixed(1)), contribution: pct(tOthers) },
     ];
   };
 
@@ -726,23 +754,23 @@ function PrintViewContent() {
 
     const convertRow = (r: any) => ({
       name: r.Airline || "Unknown Carrier",
-      exp: Number((r.Air_Exp_Tong / 1000).toFixed(3)),
-      imp: Number((r.Air_Imp_Tong / 1000).toFixed(3)),
-      total: Number((r.Total_Tons / 1000).toFixed(3)),
-      europe: Number((r.Europe / 1000).toFixed(3)),
-      usa: Number((r.USA / 1000).toFixed(3)),
-      northAmericaOther: Number((r.North_America_Other / 1000).toFixed(3)),
-      centralAmerica: Number((r.Central_America / 1000).toFixed(3)),
-      southAmerica: Number((r.South_America / 1000).toFixed(3)),
-      middleEast: Number((r.Middle_East / 1000).toFixed(3)),
-      southEastAsia: Number((r.South_East_Asia / 1000).toFixed(3)),
-      indiaSubContinent: Number((r.India_Sub_Continent / 1000).toFixed(3)),
-      northernAsia: Number((r.Northern_Asia / 1000).toFixed(3)),
-      africa: Number((r.Africa / 1000).toFixed(3)),
-      southAfrica: Number((r.South_Africa / 1000).toFixed(3)),
-      australia: Number((r.Australia / 1000).toFixed(3)),
-      pacificIslands: Number((r.Pacific_Islands / 1000).toFixed(3)),
-      others: Number((r.Others / 1000).toFixed(3))
+      exp: Number((r.Air_Exp_Tong / sectorDivisor).toFixed(3)),
+      imp: Number((r.Air_Imp_Tong / sectorDivisor).toFixed(3)),
+      total: Number((r.Total_Tons / sectorDivisor).toFixed(3)),
+      europe: Number((r.Europe / sectorDivisor).toFixed(3)),
+      usa: Number((r.USA / sectorDivisor).toFixed(3)),
+      northAmericaOther: Number((r.North_America_Other / sectorDivisor).toFixed(3)),
+      centralAmerica: Number((r.Central_America / sectorDivisor).toFixed(3)),
+      southAmerica: Number((r.South_America / sectorDivisor).toFixed(3)),
+      middleEast: Number((r.Middle_East / sectorDivisor).toFixed(3)),
+      southEastAsia: Number((r.South_East_Asia / sectorDivisor).toFixed(3)),
+      indiaSubContinent: Number((r.India_Sub_Continent / sectorDivisor).toFixed(3)),
+      northernAsia: Number((r.Northern_Asia / sectorDivisor).toFixed(3)),
+      africa: Number((r.Africa / sectorDivisor).toFixed(3)),
+      southAfrica: Number((r.South_Africa / sectorDivisor).toFixed(3)),
+      australia: Number((r.Australia / sectorDivisor).toFixed(3)),
+      pacificIslands: Number((r.Pacific_Islands / sectorDivisor).toFixed(3)),
+      others: Number((r.Others / sectorDivisor).toFixed(3))
     });
 
     const rows = top20.map(convertRow);
@@ -850,7 +878,7 @@ function PrintViewContent() {
     data.forEach((r: any) => {
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
       if (!etdVal) return;
-      const date = new Date(etdVal);
+      const date = freightEtdDate(r, transportMode);
       if (isNaN(date.getTime())) return;
       const td = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
       td.setUTCDate(td.getUTCDate() + 3 - (td.getUTCDay() + 6) % 7);
@@ -927,7 +955,7 @@ function PrintViewContent() {
     data.forEach((r: any) => {
       const etdVal = r.ETD ?? r.etd ?? r.etd_date;
       if (!etdVal) return;
-      const date = new Date(etdVal);
+      const date = freightEtdDate(r, transportMode);
       if (isNaN(date.getTime())) return;
       const dateStr = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
       const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -958,7 +986,7 @@ function PrintViewContent() {
 
     if (sqlQuery) {
       const startMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*>\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
-      const endMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*<\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
+      const endMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s*<\s*=\s*['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i) || sqlQuery.match(/ETD\s*<\s*DATEADD\(day,\s*1,\s*CAST\('([^']+)'\s+AS\s+date\)\)/i);
       const betweenMatch = sqlQuery.match(/(?:[a-zA-Z0-9_]+\.)?(?:etd|etd_date)\s+between\s+['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?\s+and\s+['"]?(\d{4}[-/._]\d{2}[-/._]\d{2})['"]?/i);
 
       const standardizeDate = (dStr: string) => dStr.replace(/[_/.]/g, '-');
@@ -976,7 +1004,7 @@ function PrintViewContent() {
       const dates = data.map(r => {
         const etdVal = r.ETD ?? r.etd ?? r.etd_date;
         if (!etdVal) return null;
-        const d = new Date(etdVal);
+        const d = freightEtdDate(r, transportMode);
         return isNaN(d.getTime()) ? null : d;
       }).filter(Boolean) as Date[];
       if (dates.length > 0) {
@@ -1038,7 +1066,7 @@ function PrintViewContent() {
       let recordMonth: number = 1;
 
       if (etdVal) {
-        const date = new Date(etdVal);
+        const date = freightEtdDate(r, transportMode);
         if (isNaN(date.getTime())) return;
         recordMonth = date.getUTCMonth() + 1;
         const td = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -1157,18 +1185,34 @@ function PrintViewContent() {
     );
   }
 
+  if (printError) return <div id="print-error" role="alert" className="p-8 text-rose-700">Report could not be generated: {printError}</div>;
+
   return (
-    <div className="flex flex-col items-center bg-slate-150 py-4 gap-8 print:block print:p-0 print:gap-0 print:bg-transparent select-none">
+    <div className="flex flex-col items-center bg-white py-4 print:block print:p-0 select-none">
       <style dangerouslySetInnerHTML={{
         __html: `
+        .print-page-container {
+          height: auto !important;
+          min-height: 0 !important;
+          overflow: visible !important;
+          display: block !important;
+          padding-top: 16px;
+          padding-bottom: 16px;
+        }
+        .sea-print-volume table { font-size: 11px; }
+        .sea-print-volume th, .sea-print-volume td {
+          padding-top: 4px;
+          padding-bottom: 4px;
+        }
         @media print {
           @page {
             size: A4 landscape;
-            margin: 0;
+            margin: 8mm;
           }
           body {
             margin: 0;
             padding: 0;
+            background: white !important;
           }
           * {
             -webkit-print-color-adjust: exact !important;
@@ -1178,17 +1222,32 @@ function PrintViewContent() {
             display: inline-block !important;
           }
           .print-page-container {
-            break-inside: avoid !important;
-            page-break-inside: avoid !important;
+            width: 100% !important;
+            padding: 12px 0 !important;
+            break-inside: auto !important;
+            page-break-inside: auto !important;
+            break-after: auto !important;
+            page-break-after: auto !important;
+            box-shadow: none !important;
           }
-          .print-page-container:last-child {
-            page-break-after: avoid !important;
+          .print-page-container > .border-b-2,
+          .report-heading {
+            break-inside: avoid !important;
             break-after: avoid !important;
           }
+          .print-page-container .overflow-x-auto,
+          .print-page-container .overflow-y-auto {
+            overflow: visible !important;
+            max-height: none !important;
+          }
+          .print-page-container thead { display: table-header-group; }
+          .print-page-container tr,
+          .print-page-container .recharts-wrapper { break-inside: avoid; }
+          .print-page-container tbody tr:last-child { break-before: avoid; }
         }
       `}} />
       {/* Hidden indicator for PDF capture readiness */}
-      <div id="pdf-ready" className="opacity-0 pointer-events-none absolute" style={{ width: '1px', height: '1px' }}>ready</div>
+      {renderReady && <div id="pdf-ready" className="opacity-0 pointer-events-none absolute" style={{ width: '1px', height: '1px' }}>ready</div>}
 
       {/* ── SECTIONS STATUS INDICATOR ── */}
       <div className="print:hidden w-full max-w-[1123px] bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg shadow-sm p-3 mx-auto">
@@ -1198,20 +1257,17 @@ function PrintViewContent() {
             <p className="text-xs font-semibold text-blue-900">
               PDF Sections:
               <span className="ml-2">
-                {selectedSections.weeklyVisual && <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{mode === "custom-sql" ? "Weekly Operational Performance" : "Weekly Charts"}</span>}
-                {selectedSections.weeklyLedger && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Tables"}</span>}
-                {selectedSections.monthlyVisual && <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Charts"}</span>}
-                {selectedSections.monthlyLedger && mode !== "custom-sql" && <span className="bg-teal-100 text-teal-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">Monthly Tables</span>}
+                {selectedSections.weeklyVisual && <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{isSea ? "Weekly Operational Performance" : mode === "custom-sql" ? "Weekly Operational Performance" : "Weekly Charts"}</span>}
+                {selectedSections.weeklyLedger && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{isSea ? "Shipping Line Summary" : mode === "custom-sql" ? freightText("Airline Performance Summary — Top 10", transportMode) : "Weekly Tables"}</span>}
+                {selectedSections.monthlyVisual && <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{isSea ? "Trade Route Summary" : mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Charts"}</span>}
+                {selectedSections.monthlyLedger && (isSea || mode !== "custom-sql") && <span className="bg-teal-100 text-teal-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{isSea ? "Consol Ledger" : "Monthly Tables"}</span>}
               </span>
             </p>
           </div>
           <span className="text-[9px] font-bold text-blue-600 bg-white px-2.5 py-1 rounded-full border border-blue-200">
-            {mode === "custom-sql"
-              ? `${[selectedSections.weeklyVisual, selectedSections.weeklyLedger, selectedSections.monthlyVisual].filter(Boolean).length} / 3 Sections (${(selectedSections.weeklyVisual ? 3 : 0) +
-              (selectedSections.weeklyLedger ? 1 : 0) +
-              (selectedSections.monthlyVisual ? 1 : 0)
-              } Pages)`
-              : `${Object.values(selectedSections).filter(Boolean).length} / 4 Sections (${Object.values(selectedSections).filter(Boolean).length} Pages)`
+            {isSea ? `${Object.values(selectedSections).filter(Boolean).length} / 5 Sections · Continuous layout` : mode === "custom-sql"
+              ? `${[selectedSections.weeklyVisual, selectedSections.weeklyLedger, selectedSections.monthlyVisual].filter(Boolean).length} / 3 Sections · Continuous layout`
+              : `${Object.values(selectedSections).filter(Boolean).length} / 4 Sections · Continuous layout`
             }
           </span>
         </div>
@@ -1261,10 +1317,10 @@ function PrintViewContent() {
                 )}
                 <div>
                   <p className="font-semibold text-sm text-slate-800">
-                    {mode === "custom-sql" ? "Weekly Operational Performance" : "Weekly Dashboard"}
+                    {isSea ? "Weekly Operational Performance" : mode === "custom-sql" ? "Weekly Operational Performance" : "Weekly Dashboard"}
                   </p>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    {mode === "custom-sql" ? "All 4 Visuals" : "Charts & KPIs"}
+                    {isSea ? "Shipping-line share and daily FCL charts" : mode === "custom-sql" ? "All 4 Visuals" : "Charts & KPIs"}
                   </p>
                 </div>
               </div>
@@ -1286,10 +1342,10 @@ function PrintViewContent() {
                 )}
                 <div>
                   <p className="font-semibold text-sm text-slate-800">
-                    {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Ledger"}
+                    {isSea ? "Shipping Line Consol Summary" : mode === "custom-sql" ? freightText("Airline Performance Summary — Top 10", transportMode) : "Weekly Ledger"}
                   </p>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    {mode === "custom-sql" ? "Airline details & metrics" : "Carrier details"}
+                    {isSea ? "FCL TEUs, LCL volume and revenue" : mode === "custom-sql" ? freightText("Airline details & metrics", transportMode) : "Carrier details"}
                   </p>
                 </div>
               </div>
@@ -1311,17 +1367,17 @@ function PrintViewContent() {
                 )}
                 <div>
                   <p className="font-semibold text-sm text-slate-800">
-                    {mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Dashboard"}
+                    {isSea ? "Trade Route Consol Summary" : mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Dashboard"}
                   </p>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    {mode === "custom-sql" ? "Route details & metrics" : "Trends & insights"}
+                    {isSea ? "Consol totals by origin and destination" : mode === "custom-sql" ? "Route details & metrics" : "Trends & insights"}
                   </p>
                 </div>
               </div>
             </button>
 
             {/* Section 4: Monthly Ledger */}
-            {mode !== "custom-sql" && (
+            {(isSea || mode !== "custom-sql") && (
               <button
                 onClick={() => toggleSection('monthlyLedger')}
                 className={`p-3 rounded-lg border-2 transition-all text-left ${selectedSections.monthlyLedger
@@ -1336,8 +1392,8 @@ function PrintViewContent() {
                     <Square className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
                   )}
                   <div>
-                    <p className="font-semibold text-sm text-slate-800">Monthly Ledger</p>
-                    <p className="text-xs text-slate-500 mt-0.5">Financial summary</p>
+                    <p className="font-semibold text-sm text-slate-800">{isSea ? "Consol Ledger" : "Monthly Ledger"}</p>
+                    <p className="text-xs text-slate-500 mt-0.5">{isSea ? "One row per consol" : "Financial summary"}</p>
                   </div>
                 </div>
               </button>
@@ -1358,8 +1414,8 @@ function PrintViewContent() {
                   <Square className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
                 )}
                 <div>
-                  <p className="font-semibold text-sm text-slate-800">Sector Distribution</p>
-                  <p className="text-xs text-slate-500 mt-0.5">Top 20 carriers & sectors</p>
+                  <p className="font-semibold text-sm text-slate-800">{isSea ? "Destination Consol Summary" : "Sector Distribution"}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">{isSea ? "Consol TEUs, volume and revenue by destination" : "Top 20 carriers & sectors"}</p>
                 </div>
               </div>
             </button>
@@ -1374,9 +1430,7 @@ function PrintViewContent() {
                 onChange={(e) => setShowRouteBreakdown(e.target.checked)}
                 className="w-3.5 h-3.5 text-indigo-600 rounded border-slate-300 cursor-pointer"
               />
-              <label htmlFor="show-route-breakdown" className="text-xs font-semibold text-slate-600 cursor-pointer select-none">
-                Include detailed Route Breakdowns (Origin Country → Destination Country) under each Airline row
-              </label>
+              <label htmlFor="show-route-breakdown" className="text-xs font-semibold text-slate-600 cursor-pointer select-none">{freightText("\n                Include detailed Route Breakdowns (Origin Country → Destination Country) under each Airline row\n              ", transportMode)}</label>
             </div>
           )}
 
@@ -1386,19 +1440,24 @@ function PrintViewContent() {
         </div>
       </div>
 
+      {isSea && <div className="print-page-container bg-white p-8 w-[1123px]">
+        <SeaConsolReport records={data} print showRouteBreakdown={showRouteBreakdown} dateRange={getSqlDateRange()} station={`Station: ${getStationLabel()}`}
+          sections={selectedSections} maxRows={maxDataRows} viewMode={mode === "custom-sql" ? "custom-sql" : "standard"} reportType={reportType} />
+      </div>}
+      {!isSea && <>
       {/* ── SECTION 1: WEEKLY VISUAL DASHBOARD (Page 1 & 2 for custom SQL, or Page 1 for Standard) ── */}
       {selectedSections.weeklyVisual && (
         mode === "custom-sql" ? (
           <>
             {/* PAGE 1: Operational Visuals - Airlines */}
-            <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+            <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none">
               {/* Print Header */}
               <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
                 {/* Top Row: Logo & Main Title (left) + Branch & Dest Badges (right) */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
                     <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                    <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+                    <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">{freightText("DGL Tonnage Analysis", transportMode)}</h1>
                   </div>
                   <div className="flex gap-1 justify-end items-center">
                     {destinationCountry && (
@@ -1412,8 +1471,7 @@ function PrintViewContent() {
                 {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
                 <div className="flex items-baseline justify-between mt-1">
                   <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
-                    Dart Global Logistics · {reportType === "monthly" ? "Monthly" : "Weekly"} Operational Performance — Airline Breakdown
-                  </p>
+                    Dart Global Logistics · {reportType === "monthly" ? "Monthly" : "Weekly"}{freightText(" Operational Performance — Airline Breakdown\n                  ", transportMode)}</p>
                   <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
                     {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
                   </span>
@@ -1427,8 +1485,8 @@ function PrintViewContent() {
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
                 </div>
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
-                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Tonnage</span>
-                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">{freightText("Total Tonnage", transportMode)}</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)}{freightText(" kg", transportMode)}</h3>
                 </div>
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">No of Shipments</span>
@@ -1445,7 +1503,7 @@ function PrintViewContent() {
                 {/* Left: Top 10 Airlines Tonnage Share */}
                 <div className="col-span-8 border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-full">
                   <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-1 shrink-0">
-                    <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Top 10 Airlines Tonnage Share</span>
+                    <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">{freightText("Top 10 Airlines Tonnage Share", transportMode)}</span>
                     <span className="text-[9px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border">
                       Day-by-Day Stack
                     </span>
@@ -1471,7 +1529,7 @@ function PrintViewContent() {
                           tick={{ fontSize: 13.5, fill: "#A0AEC0" }}
                           axisLine={false}
                           tickLine={false}
-                          tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+                          tickFormatter={(v) => isSea ? formatNumber(v) : `${(v / 1000).toFixed(0)}k`}
                           width={55}
                         />
                         {top10AirlinesNames.map((airlineName, idx) => (
@@ -1522,7 +1580,7 @@ function PrintViewContent() {
                                   </span>
                                 </div>
                                 <div className="flex items-start gap-1 shrink-0 text-right mt-0.5">
-                                  <span className="font-bold text-[#2D3748] tabular-nums">{formatNumber(entry.tonnage)} kg</span>
+                                  <span className="font-bold text-[#2D3748] tabular-nums">{formatNumber(entry.tonnage)}{freightText(" kg", transportMode)}</span>
                                   <span className="text-slate-400 font-medium">({pct}%)</span>
                                 </div>
                               </div>
@@ -1539,7 +1597,7 @@ function PrintViewContent() {
                                   </span>
                                 </div>
                                 <div className="flex items-start gap-1 shrink-0 text-right mt-0.5">
-                                  <span className="font-bold text-[#2D3748] tabular-nums">{formatNumber(othersTonnage)} kg</span>
+                                  <span className="font-bold text-[#2D3748] tabular-nums">{formatNumber(othersTonnage)}{freightText(" kg", transportMode)}</span>
                                   <span className="text-slate-400 font-medium">({othersPct}%)</span>
                                 </div>
                               </div>
@@ -1554,7 +1612,7 @@ function PrintViewContent() {
                 {/* Right: Airline Tonnage Share (Pie) */}
                 <div className="col-span-4 border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-between h-full">
                   <div className="border-b border-[#F1F5F9] pb-1 shrink-0">
-                    <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Airline Tonnage Share</span>
+                    <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">{freightText("Airline Tonnage Share", transportMode)}</span>
                   </div>
                   <div className="relative h-[220px] flex items-center justify-center mt-1 shrink-0">
                     <ResponsiveContainer width="100%" height="100%">
@@ -1578,8 +1636,7 @@ function PrintViewContent() {
                     <div className="absolute text-center flex flex-col justify-center items-center pointer-events-none">
                       <span className="text-[9px] font-bold text-slate-400 uppercase">Total</span>
                       <span className="text-lg font-extrabold text-[#2D3748] tracking-tight">
-                        {formatNumber(kpi.Total_Tonnage)} kg
-                      </span>
+                        {formatNumber(kpi.Total_Tonnage)}{freightText(" kg\n                      ", transportMode)}</span>
                     </div>
                   </div>
                   <div className="space-y-1 mt-1 overflow-hidden flex-1">
@@ -1591,7 +1648,7 @@ function PrintViewContent() {
                             <span className="w-2 h-2 rounded-full flex-shrink-0 mt-1" style={{ backgroundColor: entry.name === "Others" ? "#718096" : getAirlineColor(entry.name, idx) }} />
                             <span className="font-semibold text-slate-700 leading-snug">{entry.name}</span>
                           </div>
-                          <span className="font-bold text-slate-700 shrink-0 text-[12.5px] text-right mt-0.5">{formatNumber(entry.value)} kg ({pct}%)</span>
+                          <span className="font-bold text-slate-700 shrink-0 text-[12.5px] text-right mt-0.5">{formatNumber(entry.value)}{freightText(" kg (", transportMode)}{pct}%)</span>
                         </div>
                       );
                     })}
@@ -1602,19 +1659,19 @@ function PrintViewContent() {
               {/* Print Footer */}
               <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[12.5px] text-slate-400 shrink-0">
                 <span></span>
-                <span>© 2026 Dart Global Logistics · Operational Performance — Airline Breakdown Page</span>
+                <span>{freightText("© 2026 Dart Global Logistics · Operational Performance — Airline Breakdown Page", transportMode)}</span>
               </div>
             </div>
 
             {/* PAGE 2: Operational Visuals - Airline Tonnage by Week Period */}
-            <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+            <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none">
               {/* Print Header */}
               <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
                 {/* Top Row: Logo & Main Title (left) + Branch & Dest Badges (right) */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
                     <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                    <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+                    <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">{freightText("DGL Tonnage Analysis", transportMode)}</h1>
                   </div>
                   <div className="flex gap-1 justify-end items-center">
                     {destinationCountry && (
@@ -1628,8 +1685,7 @@ function PrintViewContent() {
                 {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
                 <div className="flex items-baseline justify-between mt-1">
                   <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
-                    Dart Global Logistics · {reportType === "monthly" ? "Monthly" : "Weekly"} Operational Performance — Weekly Airline Trend
-                  </p>
+                    Dart Global Logistics · {reportType === "monthly" ? "Monthly" : "Weekly"}{freightText(" Operational Performance — Weekly Airline Trend\n                  ", transportMode)}</p>
                   <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
                     {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
                   </span>
@@ -1639,10 +1695,9 @@ function PrintViewContent() {
               {/* Weekly Trend Chart in Large Container */}
               <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between h-[540px] mt-4 flex-1">
                 <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-1.5 shrink-0">
-                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Airline Tonnage by Week Period</span>
+                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">{freightText("Airline Tonnage by Week Period", transportMode)}</span>
                   <span className="bg-indigo-50 text-indigo-700 text-[12.5px] px-2 py-0.5 rounded font-black uppercase shrink-0">
-                    {airlineWeeklyStackData.length} Airlines
-                  </span>
+                    {airlineWeeklyStackData.length}{freightText(" Airlines\n                  ", transportMode)}</span>
                 </div>
                 <div className="h-[360px] w-full mt-2">
                   <ResponsiveContainer width="100%" height="100%">
@@ -1657,7 +1712,7 @@ function PrintViewContent() {
                         tick={{ fontSize: 14, fill: "#A0AEC0" }}
                         axisLine={false}
                         tickLine={false}
-                        tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+                        tickFormatter={(v) => isSea ? formatNumber(v) : `${(v / 1000).toFixed(0)}k`}
                       />
                       <YAxis
                         dataKey="airline"
@@ -1701,7 +1756,7 @@ function PrintViewContent() {
                           </span>
                         </div>
                         <div className="flex items-start gap-1 shrink-0 text-right mt-0.5">
-                          <span className="font-bold text-[#2D3748] tabular-nums">{formatNumber(entry.tonnage)} kg</span>
+                          <span className="font-bold text-[#2D3748] tabular-nums">{formatNumber(entry.tonnage)}{freightText(" kg", transportMode)}</span>
                           <span className="text-slate-400 font-medium">({pct}%)</span>
                         </div>
                       </div>
@@ -1713,19 +1768,19 @@ function PrintViewContent() {
               {/* Print Footer */}
               <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[12.5px] text-slate-400 shrink-0 mt-4">
                 <span></span>
-                <span>© 2026 Dart Global Logistics · Operational Performance — Airline Tonnage by Week Period Page</span>
+                <span>{freightText("© 2026 Dart Global Logistics · Operational Performance — Airline Tonnage by Week Period Page", transportMode)}</span>
               </div>
             </div>
 
             {/* PAGE 3: Operational Visuals - Trade Routes */}
-            <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+            <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none">
               {/* Print Header */}
               <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
                 {/* Top Row: Logo & Main Title (left) + Branch & Dest Badges (right) */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
                     <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                    <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+                    <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">{freightText("DGL Tonnage Analysis", transportMode)}</h1>
                   </div>
                   <div className="flex gap-1 justify-end items-center">
                     {destinationCountry && (
@@ -1750,7 +1805,7 @@ function PrintViewContent() {
               {/* Row 3: Route Distribution Trade Routes by Tonnage (Top 5 + Others) */}
               <div className="border border-slate-200 rounded-xl p-6 bg-white shadow-sm flex flex-row items-center justify-between h-[540px] gap-12 mt-6 flex-1">
                 <div className="flex flex-col justify-between h-full shrink-0 w-[350px]">
-                  <span className="text-lg uppercase tracking-wider font-bold text-slate-400">Trade Routes by Tonnage (Top 5)</span>
+                  <span className="text-lg uppercase tracking-wider font-bold text-slate-400">{freightText("Trade Routes by Tonnage (Top 5)", transportMode)}</span>
                   <div className="relative h-[430px] w-full flex items-center justify-center mt-4">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
@@ -1771,10 +1826,9 @@ function PrintViewContent() {
                       </PieChart>
                     </ResponsiveContainer>
                     <div className="absolute text-center flex flex-col justify-center items-center pointer-events-none">
-                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Total Weight</span>
+                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{freightText("Total Weight", transportMode)}</span>
                       <span className="text-xl font-extrabold text-[#2D3748] tracking-tight">
-                        {formatNumber(tradeRouteData.reduce((s, r) => s + r.value, 0))} kg
-                      </span>
+                        {formatNumber(tradeRouteData.reduce((s, r) => s + r.value, 0))}{freightText(" kg\n                      ", transportMode)}</span>
                     </div>
                   </div>
                 </div>
@@ -1800,7 +1854,7 @@ function PrintViewContent() {
                           )}
                         </div>
                         <span className="font-bold text-slate-800 shrink-0 text-right text-[17px] leading-normal">
-                          <div>{formatNumber(entry.value)} kg</div>
+                          <div>{formatNumber(entry.value)}{freightText(" kg", transportMode)}</div>
                           <div className="text-[12.5px] font-semibold text-slate-400">{pct}%</div>
                         </span>
                       </div>
@@ -1818,14 +1872,14 @@ function PrintViewContent() {
           </>
         ) : (
           /* Standard Page 1 */
-          <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+          <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none">
             {/* Print Header */}
             <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
               {/* Top Row: Logo & Main Title (left) + Branch & Dest Badges (right) */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                  <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+                  <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">{freightText("DGL Tonnage Analysis", transportMode)}</h1>
                 </div>
                 <div className="flex gap-1 justify-end items-center">
                   {destinationCountry && (
@@ -1854,8 +1908,8 @@ function PrintViewContent() {
                 <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
               </div>
               <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
-                <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Tonnage</span>
-                <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
+                <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">{freightText("Total Tonnage", transportMode)}</span>
+                <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)}{freightText(" kg", transportMode)}</h3>
               </div>
               <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                 <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">No of Shipments</span>
@@ -1893,7 +1947,7 @@ function PrintViewContent() {
               {/* Right: Airline wise Tonnage Chart */}
               <div className="col-span-4 border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between h-[450px]">
                 <div className="flex items-center justify-between">
-                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">Airline Carrier Tonnage</span>
+                  <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">{freightText("Airline Carrier Tonnage", transportMode)}</span>
                   {selectedAirlines.length > 0 && (
                     <Badge variant="outline" className="border-blue-200 text-blue-600 bg-blue-50/50 text-[9px] font-bold px-1 py-0.2 rounded shrink-0">
                       Selection Active
@@ -1913,7 +1967,7 @@ function PrintViewContent() {
                         tick={{ fontSize: 14, fill: "#A0AEC0" }}
                         axisLine={false}
                         tickLine={false}
-                        tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+                        tickFormatter={(v) => isSea ? formatNumber(v) : `${(v / 1000).toFixed(0)}k`}
                       />
                       <YAxis
                         dataKey="name"
@@ -1948,7 +2002,7 @@ function PrintViewContent() {
 
       {/* ── SECTION 3: MONTHLY VISUAL DASHBOARD / Trade Route Performance Summary (Page 3) ── */}
       {selectedSections.monthlyVisual && (
-        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none">
 
           {/* Print Header */}
           <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
@@ -1956,7 +2010,7 @@ function PrintViewContent() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+                <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">{freightText("DGL Tonnage Analysis", transportMode)}</h1>
               </div>
               <div className="flex gap-1 justify-end items-center">
                 {destinationCountry && (
@@ -1994,7 +2048,7 @@ function PrintViewContent() {
                       <th className="px-3 py-1.5">Origin City</th>
                       <th className="px-3 py-1.5">Destination Country</th>
                       <th className="px-3 py-1.5">Destination City</th>
-                      <th className="px-3 py-1.5 text-right">Tonnage (kg)</th>
+                      <th className="px-3 py-1.5 text-right">{freightText("Tonnage (kg)", transportMode)}</th>
                       <th className="px-3 py-1.5 text-right">No of Masters</th>
                       <th className="px-3 py-1.5 text-right">Shipments</th>
                       <th className="px-3 py-1.5 text-right">Shipment Revenue (USD)</th>
@@ -2173,7 +2227,7 @@ function PrintViewContent() {
                                 <td className="px-3 py-1.5 text-slate-600 font-medium">{row.destCity}</td>
                                 <td className="px-3 py-1.5 text-right tabular-nums">
                                   <div className="flex flex-col items-end gap-0.5">
-                                    <span className="font-semibold text-[#319795]">{formatNumber(row.tonnage)} kg</span>
+                                    <span className="font-semibold text-[#319795]">{formatNumber(row.tonnage)}{freightText(" kg", transportMode)}</span>
                                     <div className="h-0.5 rounded-full bg-slate-100 w-10 overflow-hidden">
                                       <div
                                         className="h-full rounded-full"
@@ -2201,7 +2255,7 @@ function PrintViewContent() {
                             <td className="px-3 py-1.5" />
                             <td className="px-3 py-1.5" />
                             <td className="px-3 py-1.5" />
-                            <td className="px-3 py-1.5 text-right text-[#319795] tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
+                            <td className="px-3 py-1.5 text-right text-[#319795] tabular-nums">{formatNumber(grandTotal.tonnage)}{freightText(" kg", transportMode)}</td>
                             <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.masters)}</td>
                             <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                             <td className="px-3 py-1.5 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
@@ -2230,8 +2284,8 @@ function PrintViewContent() {
                   <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatCurrency(kpi.Total_Revenue)}</h3>
                 </div>
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
-                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">Total Tonnage</span>
-                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)} kg</h3>
+                  <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">{freightText("Total Tonnage", transportMode)}</span>
+                  <h3 className="text-2xl font-extrabold text-slate-800 leading-none">{formatNumber(kpi.Total_Tonnage)}{freightText(" kg", transportMode)}</h3>
                 </div>
                 <div className="border border-slate-200 rounded-xl p-3 bg-white shadow-sm flex flex-col justify-center gap-1.5 h-[80px]">
                   <span className="text-[11.5px] uppercase tracking-wider font-extrabold text-slate-400">No of Shipments</span>
@@ -2321,7 +2375,7 @@ function PrintViewContent() {
 
       {/* ── SECTION 4: MONTHLY DETAILED FINANCIAL LEDGER / Detailed Raw Query Ledger (Page 4+, Dynamic Flow) ── */}
       {selectedSections.monthlyLedger && mode !== "custom-sql" && (
-        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0">
+        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] flex flex-col print:block justify-between shadow-lg print:shadow-none">
 
           <div className="flex flex-col print:block gap-6 flex-1">
             {/* Print Header */}
@@ -2330,7 +2384,7 @@ function PrintViewContent() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                  <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+                  <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">{freightText("DGL Tonnage Analysis", transportMode)}</h1>
                 </div>
                 <div className="flex gap-1 justify-end items-center">
                   {destinationCountry && (
@@ -2368,9 +2422,9 @@ function PrintViewContent() {
                     <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[12.5px] tracking-wider bg-slate-50/55">
                       {mode === "custom-sql" ? (
                         data.length > 0 ? (
-                          Object.keys(data[0]).map((key) => (
+                          Object.keys(data[0]).filter(key => !isSea || !["Airline", "Total_Tonnage", "Total_Volume_M3", "Total_Revenue"].includes(key)).map((key) => (
                             <th key={key} className="px-3 py-1.5 first:rounded-l-md last:rounded-r-md">
-                              {key.replace(/_/g, " ")}
+                              {freightText(key.replace(/_/g, " "), transportMode)}
                             </th>
                           ))
                         ) : (
@@ -2381,7 +2435,7 @@ function PrintViewContent() {
                           <th className="px-3 py-1.5">Year</th>
                           <th className="px-3 py-1.5">Month</th>
                           <th className="px-3 py-1.5 text-right">Revenue (USD)</th>
-                          <th className="px-3 py-1.5 text-right">Tonnage</th>
+                          <th className="px-3 py-1.5 text-right">{freightText("Tonnage", transportMode)}</th>
                           <th className="px-3 py-1.5 text-right">Shipments</th>
                         </>
                       )}
@@ -2391,7 +2445,7 @@ function PrintViewContent() {
                     {mode === "custom-sql" ? (
                       data.slice(0, maxDataRows).map((row: any, i: number) => (
                         <tr key={i} className="hover:bg-slate-50/50">
-                          {Object.entries(row).map(([key, val]: any, cellIdx) => {
+                          {Object.entries(row).filter(([key]) => !isSea || !["Airline", "Total_Tonnage", "Total_Volume_M3", "Total_Revenue"].includes(key)).map(([key, val]: any, cellIdx) => {
                             const isPrice = key.toLowerCase().includes("revenue") || key.toLowerCase().includes("cost") || key.toLowerCase().includes("profit") || key.toLowerCase().includes("amount") || key.toLowerCase().includes("usd");
                             const isWeight = key.toLowerCase().includes("tonnage") || key.toLowerCase().includes("weight");
                             const isNumeric = typeof val === "number";
@@ -2402,7 +2456,7 @@ function PrintViewContent() {
                             } else if (isPrice && isNumeric) {
                               displayVal = formatCurrency(val);
                             } else if (isWeight && isNumeric) {
-                              displayVal = `${formatNumber(val)} kg`;
+                              displayVal = `${formatNumber(val)} ${isSea ? "TEU" : "kg"}`;
                             } else if (isNumeric) {
                               displayVal = formatNumber(val);
                             }
@@ -2428,7 +2482,7 @@ function PrintViewContent() {
                             {row.Total_Revenue != null ? formatCurrency(row.Total_Revenue) : "$0"}
                           </td>
                           <td className="px-3 py-1.5 text-right text-slate-700 font-semibold">
-                            {row.Total_Tonnage != null ? `${formatNumber(row.Total_Tonnage)} kg` : "0 kg"}
+                            {row.Total_Tonnage != null ? freightText(`${formatNumber(row.Total_Tonnage)} ${isSea ? "TEU" : "kg"}`, transportMode) : freightText("0 kg", transportMode)}
                           </td>
                           <td className="px-3 py-1.5 text-right text-slate-700 font-semibold">
                             {row.Total_Shipments != null ? formatNumber(row.Total_Shipments) : "0"}
@@ -2457,22 +2511,20 @@ function PrintViewContent() {
 
       {/* ── SECTION 5A: SECTOR TONNAGE DISTRIBUTION — CHART (Page at the end of the report) ── */}
       {selectedSections.sectorDistribution && (
-        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none">
           {/* Print Header */}
           <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+                <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">{freightText("DGL Tonnage Analysis", transportMode)}</h1>
               </div>
               <div className="flex gap-1 justify-end items-center">
               </div>
             </div>
 
             <div className="flex items-baseline justify-between mt-1">
-              <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
-                Dart Global Logistics · Sector-wise Carrier & Geographical Tonnage Performance — Chart
-              </p>
+              <p className="text-[12.5px] font-semibold text-slate-400 leading-none">{freightText("\n                Dart Global Logistics · Sector-wise Carrier & Geographical Tonnage Performance — Chart\n              ", transportMode)}</p>
               <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
                 {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
               </span>
@@ -2484,18 +2536,16 @@ function PrintViewContent() {
             {/* Top Chart Area */}
             <div className="h-[480px] border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between shrink-0">
               <div className="border-b border-[#F1F5F9] pb-2 flex justify-between items-center shrink-0 mb-3">
-                <span className="text-[11px] uppercase tracking-wider font-extrabold text-slate-400">
-                  AIR EXPORTS - Geographical Tonnage Contribution (Tons vs Contribution %)
-                </span>
+                <span className="text-[11px] uppercase tracking-wider font-extrabold text-slate-400">{freightText("\n                  AIR EXPORTS - Geographical Tonnage Contribution (Tons vs Contribution %)\n                ", transportMode)}</span>
               </div>
               <div className="h-[410px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={chartData} margin={{ top: 20, right: 35, left: 15, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} />
                     <XAxis dataKey="name" tick={{ fontSize: 11.5, fill: "#718096", fontWeight: 600 }} axisLine={{ stroke: "#E2E8F0" }} tickLine={false} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 11.5, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v} t`} width={50} />
+                    <YAxis yAxisId="left" tick={{ fontSize: 11.5, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v} ${isSea ? "TEU" : "t"}`} width={50} />
                     <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11.5, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} width={40} />
-                    <Bar yAxisId="left" dataKey="tonnage" fill="#3182CE" radius={[4, 4, 0, 0]} barSize={40} name="Tonnage (Tons)" isAnimationActive={false} />
+                    <Bar yAxisId="left" dataKey="tonnage" fill="#3182CE" radius={[4, 4, 0, 0]} barSize={40} name={freightText("Tonnage (Tons)", transportMode)} isAnimationActive={false} />
                     <Line yAxisId="right" type="monotone" dataKey="contribution" stroke="#E53E3E" strokeWidth={3} dot={{ fill: "#E53E3E", r: 4.5 }} activeDot={{ r: 6 }} name="Contribution %" isAnimationActive={false}>
                       <LabelList dataKey="contribution" position="top" formatter={(v: number) => `${v.toFixed(0)}%`} style={{ fontSize: 11, fill: "#E53E3E", fontWeight: 700 }} />
                     </Line>
@@ -2508,29 +2558,27 @@ function PrintViewContent() {
           {/* Print Footer */}
           <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[11px] text-slate-400 shrink-0">
             <span></span>
-            <span>© 2026 Dart Global Logistics · Sector-wise Carrier & Geographical Tonnage Performance — Chart Page</span>
+            <span>{freightText("© 2026 Dart Global Logistics · Sector-wise Carrier & Geographical Tonnage Performance — Chart Page", transportMode)}</span>
           </div>
         </div>
       )}
 
       {/* ── SECTION 5B: SECTOR TONNAGE DISTRIBUTION — DETAIL TABLE (Page at the end of the report) ── */}
       {selectedSections.sectorDistribution && (
-        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] h-[794px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] overflow-hidden flex flex-col justify-between shadow-lg print:shadow-none">
           {/* Print Header */}
           <div className="border-b-2 border-slate-200 pb-3 flex flex-col gap-1 shrink-0">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+                <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">{freightText("DGL Tonnage Analysis", transportMode)}</h1>
               </div>
               <div className="flex gap-1 justify-end items-center">
               </div>
             </div>
 
             <div className="flex items-baseline justify-between mt-1">
-              <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
-                Dart Global Logistics · Sector-wise Carrier & Geographical Tonnage Performance — Detail Table
-              </p>
+              <p className="text-[12.5px] font-semibold text-slate-400 leading-none">{freightText("\n                Dart Global Logistics · Sector-wise Carrier & Geographical Tonnage Performance — Detail Table\n              ", transportMode)}</p>
               <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
                 {getSqlDateRange() || `${startDate} to ${endDate}`} | Station: {getStationLabel()}
               </span>
@@ -2542,9 +2590,7 @@ function PrintViewContent() {
             {/* Table Container */}
             <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex-1 flex flex-col justify-between overflow-hidden">
               <div className="border-b border-[#F1F5F9] pb-2 flex justify-between items-center shrink-0 mb-2">
-                <span className="text-[11px] uppercase tracking-wider font-extrabold text-slate-400">
-                  TOP 20 AIR CARRIERS & Total Tonnage - Sector wise (Tons)
-                </span>
+                <span className="text-[11px] uppercase tracking-wider font-extrabold text-slate-400">{freightText("\n                  TOP 20 AIR CARRIERS & Total Tonnage - Sector wise (Tons)\n                ", transportMode)}</span>
               </div>
               <div className="flex-1 overflow-hidden">
                 <table className="w-full text-left text-[10px] leading-tight border-collapse">
@@ -2552,8 +2598,8 @@ function PrintViewContent() {
                     <tr className="border-b border-[#E2E8F0] text-slate-500 uppercase font-bold text-[9px] tracking-wider bg-slate-50/50">
                       <th rowSpan={2} className="px-1.5 py-1.5 first:rounded-l-md border-r border-[#E2E8F0] align-middle text-center">SL</th>
                       <th rowSpan={2} className="px-1.5 py-1.5 border-r border-[#E2E8F0] align-middle">CARRIER NAME</th>
-                      <th colSpan={2} className="px-2 py-1 text-center bg-slate-100/80 border-b border-r border-[#E2E8F0] text-slate-700 font-extrabold">TONNAGE (Tons)</th>
-                      <th colSpan={14} className="px-1 py-1 text-center text-slate-700 font-extrabold border-b border-[#E2E8F0]">GEOGRAPHICAL SECTOR TONNAGE (Tons)</th>
+                      <th colSpan={2} className="px-2 py-1 text-center bg-slate-100/80 border-b border-r border-[#E2E8F0] text-slate-700 font-extrabold">{freightText("TONNAGE (Tons)", transportMode)}</th>
+                      <th colSpan={14} className="px-1 py-1 text-center text-slate-700 font-extrabold border-b border-[#E2E8F0]">{freightText("GEOGRAPHICAL SECTOR TONNAGE (Tons)", transportMode)}</th>
                     </tr>
                     <tr className="border-b border-[#E2E8F0] text-slate-500 uppercase font-bold text-[9px] tracking-wider bg-slate-50/50">
                       <th className="px-2 py-1 text-right bg-blue-50/40 text-blue-700 border-r border-[#E2E8F0]">EXP</th>
@@ -2610,14 +2656,15 @@ function PrintViewContent() {
           {/* Print Footer */}
           <div className="border-t border-slate-200 pt-2 flex items-center justify-between text-[11px] text-slate-400 shrink-0">
             <span></span>
-            <span>© 2026 Dart Global Logistics · Sector-wise Carrier & Geographical Tonnage Performance — Detail Table Page</span>
+            <span>{freightText("© 2026 Dart Global Logistics · Sector-wise Carrier & Geographical Tonnage Performance — Detail Table Page", transportMode)}</span>
           </div>
         </div>
       )}
 
+
       {/* ── SECTION 2: WEEKLY DETAILED CARRIER LEDGER / Airline Performance Summary (Page 2+, Dynamic Flow) ── */}
       {selectedSections.weeklyLedger && (
-        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] min-h-[794px] flex flex-col print:block justify-between shadow-lg print:shadow-none print:min-h-0" style={{ pageBreakAfter: "always", breakAfter: "page" }}>
+        <div className="print-page-container bg-white text-slate-900 p-8 w-[1123px] flex flex-col print:block justify-between shadow-lg print:shadow-none">
 
           <div className="flex flex-col print:block gap-6 flex-1">
             {/* Print Header */}
@@ -2626,7 +2673,7 @@ function PrintViewContent() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain" />
-                  <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">DGL Tonnage Analysis</h1>
+                  <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight leading-none">{freightText("DGL Tonnage Analysis", transportMode)}</h1>
                 </div>
                 <div className="flex gap-1 justify-end items-center">
                   {destinationCountry && (
@@ -2640,7 +2687,7 @@ function PrintViewContent() {
               {/* Bottom Row: Subtitle (left) and Date / Station (right) aligned baseline */}
               <div className="flex items-baseline justify-between mt-1">
                 <p className="text-[12.5px] font-semibold text-slate-400 leading-none">
-                  Dart Global Logistics · {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Carrier Metrics Detailed Ledger"}
+                  Dart Global Logistics · {mode === "custom-sql" ? freightText("Airline Performance Summary — Top 10", transportMode) : "Weekly Carrier Metrics Detailed Ledger"}
                 </p>
                 <span className="text-slate-700 font-bold text-[12.5px] tabular-nums whitespace-nowrap leading-none">
                   {mode === "custom-sql" ? (getSqlDateRange() || `${startDate} to ${endDate}`) : `${startDate} to ${endDate}`} | Station: {getStationLabel()}
@@ -2652,10 +2699,10 @@ function PrintViewContent() {
             <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex-1">
               <div className="flex items-center justify-between mb-2 pb-1 border-b border-[#F1F5F9]">
                 <span className="text-[9px] uppercase tracking-wider font-bold text-slate-400">
-                  {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Weekly Carrier Ledger"}
+                  {mode === "custom-sql" ? freightText("Airline Performance Summary — Top 10", transportMode) : "Weekly Carrier Ledger"}
                 </span>
                 <span className="text-[12.5px] text-slate-400 font-bold">
-                  {mode === "custom-sql" ? "Top 10 Airlines" : `All Carrier Records (${data.length})`}
+                  {mode === "custom-sql" ? freightText("Top 10 Airlines", transportMode) : `All Carrier Records (${data.length})`}
                 </span>
               </div>
               <div>
@@ -2665,8 +2712,8 @@ function PrintViewContent() {
                       {mode === "custom-sql" ? (
                         <>
                           <th className="px-3 py-1.5 w-8">#</th>
-                          <th className="px-3 py-1.5">Airline</th>
-                          <th className="px-3 py-1.5 text-right">Tonnage (kg)</th>
+                          <th className="px-3 py-1.5">{freightText("Airline", transportMode)}</th>
+                          <th className="px-3 py-1.5 text-right">{freightText("Tonnage (kg)", transportMode)}</th>
                           <th className="px-3 py-1.5 text-right">No of Masters</th>
                           <th className="px-3 py-1.5 text-right">Shipments</th>
                           <th className="px-3 py-1.5 text-right">Shipment Revenue (USD)</th>
@@ -2677,11 +2724,11 @@ function PrintViewContent() {
                       ) : (
                         <>
                           <th className="px-3 py-1.5">Branch</th>
-                          <th className="px-3 py-1.5">Airline Name</th>
+                          <th className="px-3 py-1.5">{freightText("Airline Name", transportMode)}</th>
                           <th className="px-3 py-1.5">Origin</th>
                           <th className="px-3 py-1.5">Destination</th>
                           <th className="px-3 py-1.5 text-right">Revenue</th>
-                          <th className="px-3 py-1.5 text-right">Tonnage</th>
+                          <th className="px-3 py-1.5 text-right">{freightText("Tonnage", transportMode)}</th>
                           <th className="px-3 py-1.5 text-right">Shipments</th>
                         </>
                       )}
@@ -2828,7 +2875,7 @@ function PrintViewContent() {
                         if (rows.length === 0) {
                           return (
                             <tr>
-                              <td colSpan={8} className="text-center py-6 text-slate-400">No airline aggregate data available.</td>
+                              <td colSpan={8} className="text-center py-6 text-slate-400">{freightText("No airline aggregate data available.", transportMode)}</td>
                             </tr>
                           );
                         }
@@ -2866,7 +2913,7 @@ function PrintViewContent() {
                                     </td>
                                     <td className="px-3 py-1.5 text-right tabular-nums">
                                       <div className="flex flex-col items-end gap-0.5">
-                                        <span className="font-bold text-blue-600">{formatNumber(row.tonnage)} kg</span>
+                                        <span className="font-bold text-blue-600">{formatNumber(row.tonnage)}{freightText(" kg", transportMode)}</span>
                                         <div className="h-0.5 rounded-full bg-slate-100 w-10 overflow-hidden">
                                           <div
                                             className="h-full rounded-full"
@@ -2896,7 +2943,7 @@ function PrintViewContent() {
                                           <td className="px-3 py-1 pl-8">
                                             <span className="font-semibold text-slate-800">{route.originCity} → {route.destCity}</span>
                                           </td>
-                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(route.tonnage)} kg</td>
+                                          <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(route.tonnage)}{freightText(" kg", transportMode)}</td>
                                           <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(routeMasters)}</td>
                                           <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatNumber(route.shipments)}</td>
                                           <td className="px-3 py-1 text-right tabular-nums text-slate-700 font-semibold">{formatCurrency(route.revenue)}</td>
@@ -2917,7 +2964,7 @@ function PrintViewContent() {
                             {/* Grand Total Row */}
                             <tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-[13px]">
                               <td className="px-3 py-1.5 text-slate-500" colSpan={2}>TOTAL</td>
-                              <td className="px-3 py-1.5 text-right text-blue-600 tabular-nums">{formatNumber(grandTotal.tonnage)} kg</td>
+                              <td className="px-3 py-1.5 text-right text-blue-600 tabular-nums">{formatNumber(grandTotal.tonnage)}{freightText(" kg", transportMode)}</td>
                               <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.masters)}</td>
                               <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{formatNumber(grandTotal.shipments)}</td>
                               <td className="px-3 py-1.5 text-right text-emerald-600 tabular-nums">{formatCurrency(grandTotal.revenue)}</td>
@@ -2947,7 +2994,7 @@ function PrintViewContent() {
                             {row.Total_Revenue != null ? formatCurrency(row.Total_Revenue) : "—"}
                           </td>
                           <td className="px-3 py-1.5 text-right text-slate-700 font-semibold">
-                            {row.Total_Tonnage != null ? `${formatNumber(row.Total_Tonnage)} kg` : "—"}
+                            {row.Total_Tonnage != null ? freightText(`${formatNumber(row.Total_Tonnage)} ${isSea ? "TEU" : "kg"}`, transportMode) : "—"}
                           </td>
                           <td className="px-3 py-1.5 text-right text-slate-700 font-semibold">
                             {row.Total_Shipments != null ? formatNumber(row.Total_Shipments) : "—"}
@@ -2969,11 +3016,12 @@ function PrintViewContent() {
           {/* Print Footer */}
           <div className="border-t border-slate-200 pt-2 mt-4 flex items-center justify-between text-[12.5px] text-slate-400">
             <span></span>
-            <span>© 2026 Dart Global Logistics · {mode === "custom-sql" ? "Airline Performance Summary — Top 10" : "Carrier Ledger"} Page</span>
+            <span>© 2026 Dart Global Logistics · {mode === "custom-sql" ? freightText("Airline Performance Summary — Top 10", transportMode) : "Carrier Ledger"} Page</span>
           </div>
         </div>
       )}
 
+      </>}
     </div>
   );
 }
