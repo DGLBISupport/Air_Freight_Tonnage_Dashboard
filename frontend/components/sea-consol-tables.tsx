@@ -57,15 +57,13 @@ function Total({rows, span, label = "TOTAL"}: {rows: SeaConsol[]; span: number; 
 export function SeaShippingTable({rows, print = false, showRouteBreakdown = true}: {rows: SeaConsol[]; print?: boolean; showRouteBreakdown?: boolean}) {
   const lines = seaSummary(rows, row => row.line).sort((a, b) => b.teu - a.teu || b.volume - a.volume);
   const total = seaTotals(rows);
-  return <TablePanel title="Shipping Line Consol Summary" description="Aggregated by shipping line · ranked by FCL TEUs" count={`${lines.length} Shipping Lines`} print={print}>
-    <table className={table}><thead><tr className={head}><th className={`${cell} w-8`}>#</th><th className={cell}>Shipping Line</th><MetricHead /></tr></thead>
+  return <TablePanel title="Shipping Line Consol Summary" description="Aggregated by shipping line group · ranked by FCL TEUs" count={`${lines.length} Shipping Line Groups`} print={print}>
+    <table className={table}><thead><tr className={head}><th className={`${cell} w-8`}>#</th><th className={cell}>Shipping Line Group</th><MetricHead /></tr></thead>
       <tbody className="divide-y divide-[#F1F5F9]">{lines.map((line, index) => {
         const lineRows = rows.filter(row => row.line === line.name);
-        const groups = Array.from(new Set(lineRows.map(row => row.group).filter(group => group !== "—"))).join(", ");
         const routes = seaSummary(lineRows, routeKey).sort((a, b) => b.teu - a.teu || b.volume - a.volume);
         return <Fragment key={line.name}><tr data-summary-row className="hover:bg-slate-50/60 transition-colors">
-          <Rank index={index} color={colors[index % colors.length]} /><td className={`${cell} font-bold text-[#2D3748]`}>{line.name}
-            {groups && <span className="block text-[10px] print:text-[9px] font-normal text-slate-400 mt-0.5">{groups}</span>}</td>
+          <Rank index={index} color={colors[index % colors.length]} /><td className={`${cell} w-[28%] font-bold text-[#2D3748] whitespace-normal [overflow-wrap:anywhere]`}>{line.name}</td>
           <Metrics row={line} total={total} color={colors[index % colors.length]} share />
         </tr>{showRouteBreakdown && routes.map(route => {
           const [, originCity, , destinationCity] = JSON.parse(route.name);
@@ -116,10 +114,10 @@ export function SeaLedgerTable({rows, print = false, maxRows}: {rows: SeaConsol[
   const visible = print && maxRows ? rows.slice(0, maxRows) : rows;
   const total = seaTotals(visible);
   return <TablePanel title="Consol Ledger" description="One row per consol · departure, route and cargo details" count={`${visible.length} of ${rows.length} consols`} print={print}>
-    <table className={table}><thead><tr className={head}>{["Consol", "Master Bill of Lading", "Shipping Line / Group", "ETD", "Origin", "Destination", "Company", "FCL TEUs", "LCL (m³)", "Revenue (USD)"].map((label, i) => <th key={label} className={`${cell} ${i >= 7 ? "text-right" : ""}`}>{label}</th>)}</tr></thead>
+    <table className={table}><thead><tr className={head}>{["Consol", "Master Bill of Lading", "Shipping Line Group", "ETD", "Origin", "Destination", "Company", "FCL TEUs", "LCL (m³)", "Revenue (USD)"].map((label, i) => <th key={label} className={`${cell} ${i >= 7 ? "text-right" : ""}`}>{label}</th>)}</tr></thead>
       <tbody className="divide-y divide-[#F1F5F9]">{visible.map(row => <tr key={row.console} className="hover:bg-slate-50/60 transition-colors">
         <td className={`${cell} font-bold text-[#2D3748]`}>{row.console}</td><td className={`${cell} text-slate-600`}>{row.master ?? "—"}</td>
-        <td className={`${cell} font-semibold text-[#2D3748]`}>{row.line}<span className="block text-[10px] print:text-[9px] font-normal text-slate-400">{row.group}</span></td>
+        <td className={`${cell} font-semibold text-[#2D3748]`}>{row.line}</td>
         <td className={`${cell} text-slate-600 whitespace-nowrap`}>{row.day || "—"}</td><td className={`${cell} text-slate-600`}>{row.origin}</td><td className={`${cell} text-slate-600`}>{row.destination}</td><td className={`${cell} text-slate-600`}>{row.company}</td>
         <td className={`${cell} text-right tabular-nums font-bold text-[#3182CE]`}>{quantity(row.teu)}</td><td className={`${cell} text-right tabular-nums font-semibold text-slate-700`}>{quantity(row.volume)}</td><td className={`${cell} text-right tabular-nums font-bold text-emerald-600 whitespace-nowrap`}>{money(row.revenue)}</td>
       </tr>)}</tbody><tfoot style={{display: "table-row-group"}}><tr className="border-t-2 border-[#E2E8F0] bg-slate-50/80 font-extrabold text-xs print:text-[10px]">

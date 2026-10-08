@@ -10,6 +10,14 @@ STATION_ZONES = {"IND": "Asia/Kolkata", "CMB": "Asia/Colombo", "VNM": "Asia/Ho_C
                  "DAC": "Asia/Dhaka", "PKI": "Asia/Karachi", "NYC": "America/New_York"}
 COUNTRY_ZONES = {"india": "Asia/Kolkata", "sri lanka": "Asia/Colombo", "vietnam": "Asia/Ho_Chi_Minh",
                  "bangladesh": "Asia/Dhaka", "pakistan": "Asia/Karachi"}
+SEA_GROUP_SQL = "COALESCE(NULLIF(vt.ShippingLineGroup, ''), 'Unknown Group')"
+
+
+def sea_shipping_group(row):
+    for column in ("ShippinglineGroup", "shippinglineGroup", "ShippingLineGroup"):
+        if row.get(column) is not None:
+            return str(row[column]) if row[column] != "" else "Unknown Group"
+    return "Unknown Group"
 
 
 def sea_operational_date(row):
@@ -35,7 +43,7 @@ def build_sea_query(start_date, end_date, country=None, airline=None,
         build_multi_in_clause(column, value, params, prefix)
         for column, value, prefix in [
             ("vt.ConLoadPortCountryName", country, "country"),
-            ("vt.ShippinLine", airline, "carrier"),
+            (SEA_GROUP_SQL, airline, "carrier"),
             ("vs.Company", company_code, "company"),
             ("COALESCE(vt.RealLoadPortCity, 'N/A')", origin_city, "origin_city"),
             ("COALESCE(vt.RealDisChargePortCountryName, 'N/A')", destination_country, "destination_country"),
@@ -47,7 +55,6 @@ def build_sea_query(start_date, end_date, country=None, airline=None,
 SELECT
     vt.ConsoleNumber AS Console_Number,
     vt.MasterBillNum AS Master_Bill_of_Lading,
-    vt.ShippinLine AS Shippingline,
     vt.ShippingLineGroup AS ShippinglineGroup,
     vt.ETD,
     COALESCE(vt.RealLoadPortCountryName, 'N/A') AS Origin_Country,
@@ -67,7 +74,7 @@ WHERE vt.TransportMode = 'SEA'
     AND vt.ETD >= :start_date
     AND vt.ETD <= :end_date
     {filters}
-GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.ShippinLine, vt.ShippingLineGroup,
+GROUP BY vt.ConsoleNumber, vt.MasterBillNum, vt.ShippingLineGroup,
     vt.ConsolTransportMode, vt.ETD,
     COALESCE(vt.RealLoadPortCountryName, 'N/A'),
     COALESCE(vt.RealLoadPortCity, 'N/A'),
@@ -110,8 +117,7 @@ def normalize_sea_records(records):
                 "ETD", "Origin_Country", "Origin_City", "Destination_Country", "Destination_City", "Company_Code")}
             consols[number].update(Console_Number=number,
                 Master_Bill_of_Lading=sea_master_number(source),
-                Shippingline=source.get("Shippingline") or source.get("ShippingLine") or source.get("Airline") or "Unknown",
-                ShippinglineGroup=source.get("ShippinglineGroup", source.get("shippinglineGroup", source.get("ShippingLineGroup"))),
+                ShippinglineGroup=sea_shipping_group(source),
                 FCL_TEU_Count=0, LCL_Volume=0, Revenue_USD=0)
             if "Destination_Sector" in source:
                 consols[number]["Destination_Sector"] = source["Destination_Sector"]
@@ -122,7 +128,7 @@ def normalize_sea_records(records):
         row["LCL_Volume"] = max(row["LCL_Volume"], volume)
         row["Revenue_USD"] += revenue
     for row in consols.values():
-        row.update(Airline=row["Shippingline"], Total_Tonnage=row["FCL_TEU_Count"],
+        row.update(Airline=row["ShippinglineGroup"], Total_Tonnage=row["FCL_TEU_Count"],
                    Total_Volume_M3=row["LCL_Volume"], Total_Revenue=round(row["Revenue_USD"], 2))
     return list(consols.values())
 
@@ -218,7 +224,7 @@ def get_sea_trends(period, *args, **kwargs):
 def get_sea_options(kind, start_date, end_date, country=None, company_code=None):
     columns = {
         "countries": "vt.ConLoadPortCountryName",
-        "airlines": "vt.ShippinLine",
+        "airlines": SEA_GROUP_SQL,
         "origin-cities": "COALESCE(vt.RealLoadPortCity, 'N/A')",
         "destination-countries": "COALESCE(vt.RealDisChargePortCountryName, 'N/A')",
         "destination-cities": "COALESCE(vt.RealDisChargePortCity, 'N/A')",
@@ -277,7 +283,7 @@ def get_sea_sector_distribution(start_date, end_date, country=None, company_code
     sql = f"""
 WITH SeaConsols AS ({query}),
 Countries AS (SELECT CountryName, MAX(Sector) AS Sector FROM [DartBIDW].[dbo].[DimCountry] GROUP BY CountryName)
-SELECT c.Shippingline AS Airline,
+SELECT COALESCE(NULLIF(c.ShippinglineGroup, ''), 'Unknown Group') AS Airline,
     SUM(COALESCE(c.FCL_TEU_Count, 0)) AS Air_Exp_Tong,
     0 AS Air_Imp_Tong,
     SUM(COALESCE(c.FCL_TEU_Count, 0)) AS Total_Tons,
@@ -286,7 +292,7 @@ SELECT c.Shippingline AS Airline,
     SUM(CASE WHEN dc.Sector NOT IN ({known}) OR dc.Sector IS NULL THEN COALESCE(c.FCL_TEU_Count, 0) ELSE 0 END) AS Others
 FROM SeaConsols c
 LEFT JOIN Countries dc ON dc.CountryName = c.Destination_Country
-GROUP BY c.Shippingline
+GROUP BY COALESCE(NULLIF(c.ShippinglineGroup, ''), 'Unknown Group')
 ORDER BY Total_Tons DESC
 """
     return to_clean_records(run_query(sql, params))

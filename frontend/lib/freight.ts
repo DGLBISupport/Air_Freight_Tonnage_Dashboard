@@ -10,11 +10,12 @@ export function freightText(text: string, mode: TransportMode): string {
     .replace(/Air Freight/g, "Sea Freight")
     .replace(/Air Exports/g, "Sea Exports")
     .replace(/AIR EXPORTS/g, "SEA EXPORTS")
-    .replace(/AIR CARRIERS/g, "SHIPPING LINES")
-    .replace(/Airlines/g, "Shipping Lines")
-    .replace(/Airline/g, "Shipping Line")
-    .replace(/airlines/g, "shipping lines")
-    .replace(/airline/g, "shipping line")
+    .replace(/AIR CARRIERS/g, "SHIPPING LINE GROUPS")
+    .replace(/Airline Carrier/g, "Shipping Line Group")
+    .replace(/Airlines/g, "Shipping Line Groups")
+    .replace(/Airline/g, "Shipping Line Group")
+    .replace(/airlines/g, "shipping line groups")
+    .replace(/airline/g, "shipping line group")
     .replace(/chargeable tonnage/gi, "FCL TEUs")
     .replace(/Total Tonnage/g, "FCL TEUs")
     .replace(/TONNAGE/g, "FCL TEUs")
@@ -30,8 +31,8 @@ export function freightText(text: string, mode: TransportMode): string {
 export function buildFreightQuery(sql: string, mode: TransportMode): string {
   if (mode === "AIR") return sql;
   let seaSql = sql
-    .replace(/vt\.AirlineName1 AS Airline,/g, "vt.ShippinLine AS Shippingline,\n    vt.ShippingLineGroup AS ShippinglineGroup,")
-    .replace(/vt\.AirlineName1,/g, "vt.ShippinLine, vt.ShippingLineGroup,")
+    .replace(/vt\.AirlineName1 AS Airline,/g, "vt.ShippingLineGroup AS ShippinglineGroup,")
+    .replace(/vt\.AirlineName1\b/g, "vt.ShippingLineGroup")
     .replace(/Master_Airway_Bill/g, "Master_Bill_of_Lading")
     .replace(/vt\.Air_ChargebleWeight/g, "vt.FCLTEU")
     .replace(/vt\.Air_ActualWeight/g, "vt.LCLVolume")

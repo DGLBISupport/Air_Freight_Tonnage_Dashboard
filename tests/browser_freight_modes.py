@@ -287,7 +287,7 @@ def main():
         assert not errors, errors
         original_rows = list(sea_rows)
         try:
-            sea_rows[:] = [dict(original_rows[0], Console_Number=f"PIE-{i}", Shippingline=f"Line {i:02}",
+            sea_rows[:] = [dict(original_rows[0], Console_Number=f"PIE-{i}", ShippinglineGroup=f"Line {i:02}",
                 FCL_TEU_Count=i / 4) for i in range(1, 8)]
             dashboard_page = context.new_page()
             dashboard_page.goto(BASE, wait_until="networkidle")

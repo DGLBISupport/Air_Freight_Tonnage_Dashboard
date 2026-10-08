@@ -4,25 +4,23 @@ import { useMemo } from "react";
 import { Ship } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { operationalDay } from "@/lib/operational-date";
-import { seaMasterKey, seaMasterNumber } from "@/lib/sea-consols";
+import { seaMasterKey, seaMasterNumber, seaShippingGroup } from "@/lib/sea-consols";
 
 const quantity = (value: number) => value.toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 /** LCL chart and consol-level shipping-line summary. */
 export function SeaVolumePanel({ records, print = false, showSummary = true, chartHeight }: { records: any[]; print?: boolean; showSummary?: boolean; chartHeight?: number }) {
   const { volume, lines, days } = useMemo(() => {
-    const lines = new Map<string, { name: string; teu: number; volume: number; revenue: number; masters: Set<string>; groups: Set<string> }>();
+    const lines = new Map<string, { name: string; teu: number; volume: number; revenue: number; masters: Set<string> }>();
     const days = new Map<string, number>();
     let volume = 0;
     for (const row of records) {
-      const name = row.Shippingline || row.ShippingLine || row.Airline || "Unknown";
+      const name = seaShippingGroup(row);
       const cbm = Number(row.LCL_Volume ?? row.Volume_M3 ?? row.Total_Volume_M3 ?? 0);
       volume += cbm;
-      const line = lines.get(name) || { name, teu: 0, volume: 0, revenue: 0, masters: new Set<string>(), groups: new Set<string>() };
+      const line = lines.get(name) || { name, teu: 0, volume: 0, revenue: 0, masters: new Set<string>() };
       const master = seaMasterKey(seaMasterNumber(row));
       if (master !== null) line.masters.add(master);
-      const group = row.ShippinglineGroup || row.shippinglineGroup || row.ShippingLineGroup;
-      if (group) line.groups.add(String(group));
       line.teu += Number(row.FCL_TEU_Count ?? row.TEUCount ?? row.Total_Tonnage ?? 0);
       line.volume += cbm;
       line.revenue += Number(row.Revenue_USD ?? row.Total_Revenue ?? 0);
@@ -51,8 +49,8 @@ export function SeaVolumePanel({ records, print = false, showSummary = true, cha
       {showSummary && <div className="overflow-x-auto">
         <h2 className="report-heading text-sm font-bold text-slate-800 mb-2">Shipping Line Consol Summary</h2>
         <table className="w-full text-xs text-left">
-          <thead className="text-slate-500 border-b"><tr><th className="py-2"><span className="flex items-center gap-1"><Ship className="w-3 h-3" />Shipping Line</span></th><th className="py-2">Group</th><th className="py-2 text-right">No of Masters</th><th className="py-2 text-right">FCL (TEU)</th><th className="py-2 text-right">LCL (m³)</th><th className="py-2 text-right">Revenue (USD)</th></tr></thead>
-          <tbody>{lines.map(line => <tr key={line.name} className="border-b border-slate-100"><td className="py-2 font-semibold">{line.name}</td><td className="py-2 text-slate-500">{Array.from(line.groups).join(", ") || "—"}</td><td data-sea-master-count className="py-2 text-right">{line.masters.size}</td><td className="py-2 text-right tabular-nums">{quantity(line.teu)}</td><td className="py-2 text-right tabular-nums text-teal-700">{quantity(line.volume)}</td><td className="py-2 text-right tabular-nums">${quantity(line.revenue)}</td></tr>)}</tbody>
+          <thead className="text-slate-500 border-b"><tr><th className="py-2"><span className="flex items-center gap-1"><Ship className="w-3 h-3" />Shipping Line Group</span></th><th className="py-2 text-right">No of Masters</th><th className="py-2 text-right">FCL (TEU)</th><th className="py-2 text-right">LCL (m³)</th><th className="py-2 text-right">Revenue (USD)</th></tr></thead>
+          <tbody>{lines.map(line => <tr key={line.name} className="border-b border-slate-100"><td className="py-2 font-semibold">{line.name}</td><td data-sea-master-count className="py-2 text-right">{line.masters.size}</td><td className="py-2 text-right tabular-nums">{quantity(line.teu)}</td><td className="py-2 text-right tabular-nums text-teal-700">{quantity(line.volume)}</td><td className="py-2 text-right tabular-nums">${quantity(line.revenue)}</td></tr>)}</tbody>
         </table>
         {lines.length === 0 && <p className="py-4 text-xs text-slate-400 text-center">No sea freight data for the selected period.</p>}
       </div>}

@@ -13,11 +13,11 @@ function moduleFrom(path, dependencies = {}) {
 const dates = moduleFrom('frontend/lib/operational-date.ts');
 const sea = moduleFrom('frontend/lib/sea-consols.ts', {'./operational-date': dates});
 const rows = sea.seaConsols([
-  {Console_Number: 'C1', Master_Airway_Bill: 'B1', Shippingline: 'MSC', shippinglineGroup: 'MSC',
+  {Console_Number: 'C1', Master_Airway_Bill: 'B1', ShippinglineGroup: 'MSC', shippinglineGroup: 'MSC',
     FCL_TEU_Count: 2.5, LCL_Volume: 10.25, Revenue_USD: 100, Company_Code: 'IND', ETD: '2026-09-30T19:00:00Z',
     Origin_Country: 'India', Origin_City: 'Mumbai', Destination_Country: 'Singapore', Destination_City: 'Singapore'},
   {Console_Number: 'C1', FCL_TEU_Count: 2.5, LCL_Volume: 10.25, Revenue_USD: 200, Total_Shipments: 4},
-  {Console_Number: 'C2', Shippingline: 'MSC', TEUCount: 1, Volume_M3: 5.5, Revenue_USD: 20}
+  {Console_Number: 'C2', ShippinglineGroup: 'MSC', TEUCount: 1, Volume_M3: 5.5, Revenue_USD: 20}
 ]);
 assert.equal(rows.length, 2);
 assert.equal(rows[0].master, 'B1');
@@ -37,11 +37,11 @@ assert.equal(sea.seaSummary(rows, row => row.line)[0].consols, 2);
 assert(!('Total_Shipments' in rows[0]));
 console.log('PASS: Sea consol totals, query aliases, duplicate customer rows and station dates.');
 const masterRows = sea.seaConsols([
-  {Console_Number: 'M1', Master_Bill_of_Lading: ' BOL-1 ', Shippingline: 'MSC', Destination_City: 'Singapore', FCL_TEU_Count: 2},
-  {Console_Number: 'M1', Master_Bill_of_Lading: 'BOL-1', Shippingline: 'MSC', FCL_TEU_Count: 2},
-  {Console_Number: 'M2', Master_Airway_Bill: 'bol-1', Shippingline: 'MSC', Destination_City: 'Singapore', FCL_TEU_Count: 3},
-  {Console_Number: 'M3', MasterBillNum: 'BOL-1', Shippingline: 'Other line', Destination_City: 'Dubai', FCL_TEU_Count: 4},
-  {Console_Number: 'M4', MasterBillNum: 'BOL-2', Shippingline: 'MSC', Destination_City: 'Dubai', FCL_TEU_Count: 1},
+  {Console_Number: 'M1', Master_Bill_of_Lading: ' BOL-1 ', ShippinglineGroup: 'MSC', Destination_City: 'Singapore', FCL_TEU_Count: 2},
+  {Console_Number: 'M1', Master_Bill_of_Lading: 'BOL-1', ShippinglineGroup: 'MSC', FCL_TEU_Count: 2},
+  {Console_Number: 'M2', Master_Airway_Bill: 'bol-1', ShippinglineGroup: 'MSC', Destination_City: 'Singapore', FCL_TEU_Count: 3},
+  {Console_Number: 'M3', MasterBillNum: 'BOL-1', ShippinglineGroup: 'Other line', Destination_City: 'Dubai', FCL_TEU_Count: 4},
+  {Console_Number: 'M4', MasterBillNum: 'BOL-2', ShippinglineGroup: 'MSC', Destination_City: 'Dubai', FCL_TEU_Count: 1},
   ...[null, '', ' ', 'N/A', '—', 'Unknown'].map((master, i) => ({Console_Number: `BLANK-${i}`, Master_Bill_of_Lading: master})),
   {Console_Number: 'LATE', Master_Bill_of_Lading: ''},
   {Console_Number: 'LATE', Master_Bill_of_Lading: ' ', Master_Airway_Bill: 'BOL-2'},
@@ -62,8 +62,27 @@ assert.equal(sea.seaTotals(exactRows).masters, 15);
 assert.equal(sea.seaSummary(exactRows, row => row.line)[0].masters, 15);
 console.log('PASS: Only NULL master bills excluded; exact duplicates counted once; all other values preserved.');
 const sectors = moduleFrom('frontend/lib/sea-sectors.ts');
+const groupRows = sea.seaConsols([
+  {Console_Number: 'GROUP-1', Shippingline: 'Individual A', ShippinglineGroup: 'Shared Group', FCL_TEU_Count: 2, LCL_Volume: 3, Revenue_USD: 100, Destination_Sector: 'USA', Master_Bill_of_Lading: 'ONE'},
+  {Console_Number: 'GROUP-2', Shippingline: 'Individual B', shippinglineGroup: 'Shared Group', FCL_TEU_Count: 4, LCL_Volume: 5, Revenue_USD: 200, Destination_Sector: 'Europe Other', Master_Bill_of_Lading: 'ONE'},
+  {Console_Number: 'GROUP-3', Shippingline: 'Individual A', ShippingLineGroup: 'Different Group', FCL_TEU_Count: 1},
+  {Console_Number: 'GROUP-4', Shippingline: 'Individual without a group', FCL_TEU_Count: 1},
+]);
+const groupTotals = sea.seaSummary(groupRows, row => row.line);
+assert.equal(groupTotals.length, 3);
+const sharedGroup = groupTotals.find(row => row.name === 'Shared Group');
+assert.equal(sharedGroup.teu, 6);
+assert.equal(sharedGroup.volume, 8);
+assert.equal(sharedGroup.revenue, 300);
+assert.equal(sharedGroup.masters, 1);
+assert(groupTotals.some(row => row.name === 'Unknown Group'));
+const groupSectors = sectors.seaSectorSummary(groupRows);
+assert.equal(groupSectors.rows[0].name, 'Shared Group');
+assert.equal(groupSectors.rows[0].sectors[1].teu, 2);
+assert.equal(groupSectors.rows[0].sectors[0].teu, 4);
+console.log('PASS: Shipping-line group aliases combine carriers across charts/tables/sectors without changing cargo or master counts.');
 const sectorRecords = Array.from({length: 21}, (_, index) => ({Console_Number: `C${index + 1}`,
-  Shippingline: `Line ${index + 1}`, FCL_TEU_Count: index + 1, LCL_Volume: (index + 1) / 4,
+  ShippinglineGroup: `Line ${index + 1}`, FCL_TEU_Count: index + 1, LCL_Volume: (index + 1) / 4,
   Destination_Sector: index % 2 === 0 ? 'USA' : 'Unmapped sector'}));
 sectorRecords.push({...sectorRecords[20]});
 const summary = sectors.seaSectorSummary(sea.seaConsols(sectorRecords));
@@ -81,7 +100,7 @@ assert.equal(summary.total.sectors.reduce((sum, sector) => sum + sector.teu, 0),
 assert.equal(summary.total.sectors.reduce((sum, sector) => sum + sector.volume, 0), summary.total.volume);
 assert.equal(summary.rows.reduce((sum, row) => sum + row.teu, 0), summary.total.teu);
 assert.equal(summary.rows.reduce((sum, row) => sum + row.volume, 0), summary.total.volume);
-const volumeOnly = sectors.seaSectorSummary(sea.seaConsols([{Console_Number: 'LCL-1', Shippingline: 'LCL Line',
+const volumeOnly = sectors.seaSectorSummary(sea.seaConsols([{Console_Number: 'LCL-1', ShippinglineGroup: 'LCL Line',
   FCL_TEU_Count: 0, LCL_Volume: 9.75, Destination_Sector: 'Australia'}]));
 assert.equal(volumeOnly.rows.length, 1);
 assert.equal(volumeOnly.total.sectors[11].volume, 9.75);

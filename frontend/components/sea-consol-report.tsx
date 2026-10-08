@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { seaConsols, seaSummary, seaTotals } from "@/lib/sea-consols";
 import { freightIsoWeek } from "@/lib/operational-date";
+import { wrapSeaGroupLabel } from "@/lib/sea-group-label";
 import { SeaShippingTable, SeaRouteTable } from "./sea-consol-tables";
 import { Skeleton } from "./ui/skeleton";
 import { SeaLineLegendTable } from "./sea-line-legend-table";
@@ -131,8 +132,24 @@ export function SeaConsolReport({records, print = false, loading = false, dateRa
     };
   }, [rows]);
 
-  const fclChartHeight = print ? 320 : Math.max(200, fclStackData.length * 28 + 20);
-  const lclChartHeight = print ? 320 : Math.max(200, lclStackData.length * 28 + 20);
+  const groupAxisWidth = print ? 120 : 150;
+  const groupFontSize = print ? 8 : 10;
+  const groupLineHeight = groupFontSize + 2;
+  const groupLabels = useMemo(() => new Map([...fclStackData, ...lclStackData].map(row =>
+    [row.line, wrapSeaGroupLabel(row.line, groupAxisWidth - 12, groupFontSize)])), [fclStackData, lclStackData, groupAxisWidth, groupFontSize]);
+  const groupChartHeight = (data: typeof fclStackData) => Math.max(print ? 320 : 200,
+    data.length * Math.max(28, ...data.map(row => (groupLabels.get(row.line)?.length ?? 1) * groupLineHeight + 8)) + 36);
+  const fclChartHeight = groupChartHeight(fclStackData);
+  const lclChartHeight = groupChartHeight(lclStackData);
+  const groupTick = ({x = 0, y = 0, payload}: {x?: number; y?: number; payload?: {value: string}}) => {
+    const name = payload?.value ?? "";
+    const labelLines = groupLabels.get(name) ?? [name];
+    return <g data-sea-group-tick={name} transform={`translate(${x},${y})`}>
+      <text textAnchor="end" dominantBaseline="central" fill="#4A5568" fontFamily="Arial" fontWeight={600} fontSize={groupFontSize} aria-label={name}>
+        {labelLines.map((line, index) => <tspan key={index} x={0} y={(index - (labelLines.length - 1) / 2) * groupLineHeight}>{line}</tspan>)}
+      </text>
+    </g>;
+  };
 
   const panel = print ? "border border-slate-200 rounded-xl p-4 bg-white shadow-sm" : "saas-card p-6 bg-white";
   const tick = {fontSize: 11, fill: "#718096", fontWeight: 500};
@@ -200,7 +217,7 @@ export function SeaConsolReport({records, print = false, loading = false, dateRa
                     <BarChart data={fclStackData} layout="vertical" margin={{top: 4, right: print ? 10 : 20, left: 0, bottom: 4}}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={true} horizontal={false} />
                       <XAxis type="number" tick={tick} axisLine={false} tickLine={false} tickFormatter={v => quantity(v)} />
-                      <YAxis dataKey="line" type="category" tick={{fontSize: print ? 8 : 10, fill: "#4A5568", fontWeight: 600}} axisLine={{stroke: "#E2E8F0"}} tickLine={false} width={print ? 110 : 130} tickFormatter={v => (typeof v === "string" && v.length > 20 ? `${v.slice(0, 18)}…` : v)} />
+                      <YAxis dataKey="line" type="category" interval={0} tick={groupTick} axisLine={{stroke: "#E2E8F0"}} tickLine={false} width={groupAxisWidth} />
                       <Tooltip contentStyle={{fontSize: "10px", borderRadius: "6px", maxWidth: "240px"}} formatter={(value: any, name: any) => [`${quantity(Number(value))} TEU`, name]} />
                       {fclStackKeys.map((wkLabel, wIdx) => (
                         <Bar key={wkLabel} dataKey={wkLabel} stackId="fcl_stack" radius={wIdx === fclStackKeys.length - 1 ? [0, 3, 3, 0] : [0, 0, 0, 0]} isAnimationActive={!print}>
@@ -229,7 +246,7 @@ export function SeaConsolReport({records, print = false, loading = false, dateRa
                     <BarChart data={lclStackData} layout="vertical" margin={{top: 4, right: print ? 10 : 20, left: 0, bottom: 4}}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={true} horizontal={false} />
                       <XAxis type="number" tick={tick} axisLine={false} tickLine={false} tickFormatter={v => quantity(v)} />
-                      <YAxis dataKey="line" type="category" tick={{fontSize: print ? 8 : 10, fill: "#4A5568", fontWeight: 600}} axisLine={{stroke: "#E2E8F0"}} tickLine={false} width={print ? 110 : 130} tickFormatter={v => (typeof v === "string" && v.length > 20 ? `${v.slice(0, 18)}…` : v)} />
+                      <YAxis dataKey="line" type="category" interval={0} tick={groupTick} axisLine={{stroke: "#E2E8F0"}} tickLine={false} width={groupAxisWidth} />
                       <Tooltip contentStyle={{fontSize: "10px", borderRadius: "6px", maxWidth: "240px"}} formatter={(value: any, name: any) => [`${quantity(Number(value))} m³`, name]} />
                       {lclStackKeys.map((wkLabel, wIdx) => (
                         <Bar key={wkLabel} dataKey={wkLabel} stackId="lcl_stack" radius={wIdx === lclStackKeys.length - 1 ? [0, 3, 3, 0] : [0, 0, 0, 0]} isAnimationActive={!print}>

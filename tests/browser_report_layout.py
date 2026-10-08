@@ -16,7 +16,7 @@ def main():
         for mode, only_volume, count in (("SEA", True, 15), ("SEA", True, 20),
                                         ("SEA", False, 20), ("AIR", False, 20)):
             sea_rows[:] = [dict(original, Console_Number=f"SEA-{i:02}",
-                               Shippingline=f"Shipping Line {i:02}", Airline=f"Shipping Line {i:02}",
+                               ShippinglineGroup=f"Shipping Line {i:02}", Airline=f"Shipping Line {i:02}",
                                ETD=f"2026-09-{21 + i % 7:02}T10:00:00") for i in range(1, count + 1)]
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
             page.route("**/*", intercept)
@@ -83,7 +83,7 @@ def main():
         # Long line names and six legend rows must still keep both route charts
         # on page three. Tables may continue onto further pages naturally.
         sea_rows[:] = [dict(original, Console_Number=f"LONG-{i:02}",
-                           Shippingline=f"MEDITERRANEAN SHIPPING COMPANY S.A. {i:02}",
+                           ShippinglineGroup=f"MEDITERRANEAN SHIPPING COMPANY S.A. {i:02}",
                            Origin_City="Visakhapatnam", Destination_Country="United Kingdom",
                            Destination_City=f"Newcastle upon Tyne {i:02}") for i in range(1, 13)]
         page = browser.new_page(viewport={"width": 1440, "height": 1000})

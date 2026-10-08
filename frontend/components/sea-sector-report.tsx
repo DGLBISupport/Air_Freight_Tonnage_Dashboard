@@ -9,7 +9,7 @@ export function SeaSectorReport({consols, print = false}: {consols: SeaConsol[];
   return <section data-sea-sector-report className="space-y-4">
     <div className="report-heading border-b border-slate-200 pb-2">
       <h2 className="text-base print:text-sm font-bold text-slate-800">TOP 20 SHIPPING LINES &amp; Total FCL / LCL - Sector wise (TEUs and Volume)</h2>
-      <p className="text-xs print:text-[9px] text-slate-500 mt-1">Destination sectors · Ranked by FCL TEUs, then LCL volume · {summary.lineCount} shipping lines. Remaining lines are included in Others.</p>
+      <p className="text-xs print:text-[9px] text-slate-500 mt-1">Destination sectors · Ranked by FCL TEUs, then LCL volume · {summary.lineCount} shipping line groups. Remaining groups are included in Others.</p>
     </div>
     {metrics.map((metric, metricIndex) => {
       const rowCells = (row: SeaSectorRow, rank?: number, total = false) => <tr key={total ? "grand-total" : row.name}
@@ -28,7 +28,7 @@ export function SeaSectorReport({consols, print = false}: {consols: SeaConsol[];
             <colgroup><col className="w-[2.5%]" /><col className="w-[14%]" /><col className="w-[7%]" />{seaSectors.map(sector => <col key={sector.key} />)}</colgroup>
             <thead className="bg-slate-50 text-[10px] print:text-[9px] text-slate-500 uppercase">
               <tr className="border-b border-slate-200">
-                <th rowSpan={2} className="px-1 py-2 text-center">SL</th><th rowSpan={2} className="px-2 py-2 text-left">Shipping Line</th>
+                <th rowSpan={2} className="px-1 py-2 text-center">SL</th><th rowSpan={2} className="px-2 py-2 text-left">Shipping Line Group</th>
                 <th rowSpan={2} className={`px-1 py-2 text-right ${metric.tint} ${metric.color}`}>Total ({metric.unit})</th>
                 <th colSpan={seaSectors.length} className="py-1 text-center font-bold text-slate-700">Geographical Sector {metric.title} ({metric.unit})</th>
               </tr>

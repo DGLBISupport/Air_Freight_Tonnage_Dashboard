@@ -11,10 +11,10 @@ import weekly_report_mailer as mailer
 
 
 ROWS = [
-    {"Console_Number": "SEA-1", "Shippingline": "Maersk", "TEUCount": 2.5,
+    {"Console_Number": "SEA-1", "Shippingline": "Maersk individual", "ShippinglineGroup": "Maersk", "TEUCount": 2.5,
      "Volume_M3": 10.25, "Revenue_USD": 100, "Cost_USD": 60, "Profit_USD": 40,
      "Origin_Country": "India", "ETD": "2026-09-27T18:00:00", "Total_Shipments": 2},
-    {"Console_Number": "SEA-2", "Shippingline": "MSC", "TEUCount": 1,
+    {"Console_Number": "SEA-2", "Shippingline": "MSC individual", "ShippinglineGroup": "MSC", "TEUCount": 1,
      "Volume_M3": 5.5, "Revenue_USD": 200, "Cost_USD": 150, "Profit_USD": 50,
      "Origin_Country": "India", "ETD": "2026-09-28T08:00:00", "Total_Shipments": 1},
 ]
@@ -38,6 +38,28 @@ class FreightModesTest(unittest.TestCase):
         self.assertIn("vt.ETD <= :end_date", sql)
         self.assertEqual(params["company_0"], "IND")
         self.assertEqual(params["carrier_1"], "Maersk")
+        self.assertIn("vt.ShippingLineGroup AS ShippinglineGroup", sql)
+        self.assertIn(sea.SEA_GROUP_SQL + " IN (:carrier_0, :carrier_1)", sql)
+        self.assertNotIn("vt.ShippinLine", sql)
+
+    def test_sea_shipping_groups_drive_normalization_filters_and_sector_totals(self):
+        records = [dict(ROWS[0], Console_Number="G1", Shippingline="Individual A", ShippinglineGroup="Shared"),
+                   dict(ROWS[1], Console_Number="G2", Shippingline="Individual B", ShippinglineGroup="Shared")]
+        normalized = sea.normalize_sea_records(records)
+        self.assertEqual([row["Airline"] for row in normalized], ["Shared", "Shared"])
+        self.assertTrue(all("Shippingline" not in row for row in normalized))
+        with patch.object(sea, "get_sea_data", return_value=normalized):
+            self.assertEqual(sea.get_sea_kpi("2026-09-21", "2026-09-28")["Unique_Airlines"], 1)
+        self.assertEqual(sea.sea_shipping_group({"Shippingline": "Individual only"}), "Unknown Group")
+        self.assertEqual(sea.sea_shipping_group({"shippinglineGroup": "Alias group"}), "Alias group")
+        self.assertEqual(sea.sea_shipping_group({"ShippingLineGroup": "Other alias"}), "Other alias")
+        with patch.object(sea, "run_query", return_value=pd.DataFrame({"value": ["Shared"]})) as query:
+            self.assertEqual(sea.get_sea_options("airlines", "2026-09-21", "2026-09-28"), ["Shared"])
+            self.assertIn(sea.SEA_GROUP_SQL + " AS value", query.call_args.args[0])
+        with patch.object(sea, "run_query", return_value=pd.DataFrame()) as query:
+            sea.get_sea_sector_distribution("2026-09-21", "2026-09-28")
+            self.assertIn("GROUP BY COALESCE(NULLIF(c.ShippinglineGroup, ''), 'Unknown Group')", query.call_args.args[0])
+        self.assertNotIn("vt.ShippinLine", sea.render_sea_query(start_date="2026-09-21", end_date="2026-09-28"))
 
     def test_multi_select_binding_handles_more_than_ten_carriers(self):
         sql, params = sea.build_sea_query("2026-09-21", "2026-09-27", airline=",".join(f"Line{i}" for i in range(12)))

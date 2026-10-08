@@ -8,6 +8,12 @@ export type SeaConsol = {
 };
 export type SeaTotals = { teu: number; volume: number; revenue: number; consols: number; masters: number };
 
+/** All Sea carrier charts and tables use the shipping-line group. */
+export function seaShippingGroup(row: any): string {
+  const group = row.ShippinglineGroup ?? row.shippinglineGroup ?? row.ShippingLineGroup;
+  return group === undefined || group === null || group === "" ? "Unknown Group" : String(group);
+}
+
 // Only NULL is excluded. Every other value is compared exactly as supplied.
 export function seaMasterKey(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value);
@@ -42,8 +48,7 @@ export function seaConsols(records: any[]): SeaConsol[] {
       const route = (city: any, country: any) => [city, country].filter(v => v && v !== "N/A").join(", ") || "N/A";
       map.set(number, {
         console: number, master: seaMasterNumber(row),
-        line: row.Shippingline ?? row.ShippingLine ?? row.Airline ?? "Unknown",
-        group: row.shippinglineGroup ?? row.ShippinglineGroup ?? row.ShippingLineGroup ?? "—",
+        line: seaShippingGroup(row), group: seaShippingGroup(row),
         day: operationalDay(row.ETD, row.Company_Code ?? row.Company, row.Origin_Country),
         origin: route(row.Origin_City, row.Origin_Country), destination: route(row.Destination_City, row.Destination_Country),
         originCountry: row.Origin_Country || "N/A", originCity: row.Origin_City || "N/A",

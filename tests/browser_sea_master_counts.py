@@ -16,11 +16,14 @@ from browser_freight_modes import BASE, intercept, sea_rows
 def check_counts(report):
     assert report.locator('[data-sea-page="departures"]').count() == 0
     assert 'Departure Trend' not in report.inner_text()
+    assert 'Individual carrier' not in report.inner_text()
+    assert report.locator('[data-sea-sector-metric="teu"] [data-sea-sector-row="line"]').count() == 3
     expect(report.locator('[data-sea-master-count="total"]')).to_have_text('17')
     shipping = report.locator('[data-sea-table="Shipping Line Consol Summary"]')
     expect(shipping.locator('tfoot [data-sea-master-count]')).to_have_text('17')
     msc = shipping.locator('[data-summary-row]').filter(has_text='MSC')
     expect(msc.locator('[data-sea-master-count]')).to_have_text('11')
+    assert msc.locator('td').all_text_contents()[-4:] == ['78.5', '0', '11', '$0.00']
     missing = shipping.locator('[data-summary-row]').filter(has_text='Missing bill')
     expect(missing.locator('[data-sea-master-count]')).to_have_text('1')
     formats = shipping.locator('[data-summary-row]').filter(has_text='Format values')
@@ -37,22 +40,22 @@ def check_counts(report):
 
 def main():
     original = dict(sea_rows[0])
-    sea_rows[:] = [dict(original, Console_Number=f'COUNT-{i}', Shippingline='MSC',
+    sea_rows[:] = [dict(original, Console_Number=f'COUNT-{i}', Shippingline=f'Individual carrier {i}',
         ShippinglineGroup='MSC', Destination_City=f'Destination {i}',
         Master_Bill_of_Lading=' BOL-SHARED ' if i in (0, 10, 11) else f'BOL-{i}',
         FCL_TEU_Count=12-i, LCL_Volume=0, Revenue_USD=0) for i in range(12)]
     sea_rows.extend([
         dict(sea_rows[1], Console_Number='ALIAS-1', Master_Bill_of_Lading=' ',
              Master_Airway_Bill=' bol-1 ', FCL_TEU_Count=0.5),
-        dict(original, Console_Number='BLANK-1', Shippingline='Missing bill',
+        dict(original, Console_Number='BLANK-1', ShippinglineGroup='Missing bill',
              Master_Bill_of_Lading=None, Destination_City='Missing', FCL_TEU_Count=0,
              LCL_Volume=0, Revenue_USD=0),
-        dict(original, Console_Number='BLANK-2', Shippingline='Missing bill',
+        dict(original, Console_Number='BLANK-2', ShippinglineGroup='Missing bill',
              Master_Bill_of_Lading='N/A', Destination_City='Missing', FCL_TEU_Count=0,
              LCL_Volume=0, Revenue_USD=0),
         dict(sea_rows[0]),  # Joined duplicate of the same consol.
     ])
-    sea_rows.extend(dict(original, Console_Number=f'FORMAT-{i}', Shippingline='Format values',
+    sea_rows.extend(dict(original, Console_Number=f'FORMAT-{i}', ShippinglineGroup='Format values',
         Master_Bill_of_Lading=bill, Destination_City='Missing', FCL_TEU_Count=0,
         LCL_Volume=0, Revenue_USD=0) for i, bill in enumerate(['BOL-SHARED', 'bol-shared', '', '-', 'NULL']))
     with sync_playwright() as playwright:
