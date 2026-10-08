@@ -65,12 +65,14 @@ def generate_dashboard_pdf(
     include_monthly_visual: bool = True,
     include_monthly_ledger: bool = True,
     include_sector_distribution: bool = True,
+    include_sea_sector_distribution: bool = True,
     max_data_rows: int = 100,
     mode: str = "standard",
     custom_sql: str = None,
     query_id: str = None,
     report_type: str = "weekly",
     transport_mode: str = "AIR",
+    ledger_output_path: str = None,
 ):
     """
     Directs a headless browser to the frontend print view and captures a PDF.
@@ -116,6 +118,7 @@ def generate_dashboard_pdf(
     params["include_monthly_visual"] = str(include_monthly_visual).lower()
     params["include_monthly_ledger"] = str(include_monthly_ledger).lower()
     params["include_sector_distribution"] = str(include_sector_distribution).lower()
+    params["include_sea_sector_distribution"] = str(include_sea_sector_distribution).lower()
     params["max_data_rows"] = max_data_rows
     params["report_type"] = report_type
     
@@ -140,6 +143,19 @@ def generate_dashboard_pdf(
             browser = p.chromium.launch(headless=True)
             try:
                 page = browser.new_page(viewport={"width": 1440, "height": 1000})
+                report_records = None
+                def capture_report_records(response):
+                    nonlocal report_records
+                    path = urllib.parse.urlparse(response.url).path.rstrip("/")
+                    expected = "/api/custom-query" if mode == "custom-sql" else "/api/data"
+                    if path == expected and response.ok:
+                        payload = response.json()
+                        records = payload.get("ledger_records", payload.get("data"))
+                        if payload.get("status") == "success" and isinstance(records, list):
+                            report_records = records
+                if ledger_output_path:
+                    page.set_extra_http_headers({"X-Consol-Ledger": "true"})
+                    page.on("response", capture_report_records)
                 page.add_init_script("window.__FREIGHT_PRINT_CONFIG__ = " + json.dumps(print_config) + ";")
                 page.on("pageerror", lambda err: logger.error("Print view error: %s", err))
                 page.emulate_media(media="print")
@@ -154,6 +170,11 @@ def generate_dashboard_pdf(
                     raise RuntimeError(page.locator("#print-error").inner_text())
                 if not page.locator(".print-page-container").count():
                     raise RuntimeError("Report has no printable pages. No PDF was generated or sent.")
+                if ledger_output_path:
+                    if report_records is None:
+                        raise RuntimeError("Report records were unavailable for the Consol Ledger. No report was sent.")
+                    from api.ledger_service import generate_consol_ledger
+                    generate_consol_ledger(ledger_output_path, report_records, transport_mode)
                 page.pdf(path=output_path, format="A4", landscape=True, print_background=True)
                 logger.info("%s report PDF generated in %.2f seconds.", transport_mode, time.monotonic() - started)
             finally:
@@ -161,3 +182,9 @@ def generate_dashboard_pdf(
     except Exception as e:
         print(f"PDF Generation Error: {str(e)}")
         raise
+
+
+def generate_report_bundle(output_path: str, **kwargs):
+    """Generate a PDF and its Excel ledger from the same fetched data response."""
+    from api.ledger_service import ledger_path
+    generate_dashboard_pdf(output_path, ledger_output_path=ledger_path(output_path), **kwargs)

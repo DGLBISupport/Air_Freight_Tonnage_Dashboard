@@ -7,7 +7,7 @@ if sys.platform == 'win32':
 
 import uuid
 import requests
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Header, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -37,8 +37,11 @@ from api.database import (
 from api.sea_database import (
     get_sea_data, get_sea_kpi, get_sea_trends, get_sea_options,
     normalize_sea_records, render_sea_query, get_sea_sector_distribution, prepare_sea_query,
+    get_sea_source_data,
+    classify_sea_sectors,
 )
-from api.pdf_service import generate_dashboard_pdf
+from api.pdf_service import generate_report_bundle as generate_dashboard_pdf
+from api.ledger_service import cleanup_report_files
 from api.email_service import send_pdf_via_graph
 from api.cloud_scheduler_service import sync_schedule_to_cloud, delete_cloud_scheduler_job
 from api.scheduler_db import (
@@ -304,6 +307,7 @@ class ReportRequest(BaseModel):
     include_monthly_visual: bool = True
     include_monthly_ledger: bool = True
     include_sector_distribution: bool = True
+    include_sea_sector_distribution: bool = True
     max_data_rows: int = 100  # Limit table rows to reduce PDF size
     report_type: Optional[str] = "weekly"
 
@@ -311,6 +315,7 @@ class ReportRequest(BaseModel):
 class CustomQueryRequest(BaseModel):
     query: str
     transport_mode: Literal["AIR", "SEA"] = "AIR"
+    include_sea_sectors: bool = False
 
 
 class SectorDistributionRequest(BaseModel):
@@ -340,9 +345,22 @@ def fetch_data(
     destination_city: str = None,
     branch: str = None,
     transport_mode: Literal["AIR", "SEA"] = "AIR",
+    request: Request = None,
+    include_sea_sectors: bool = False,
 ):
     """Provides filtered JSON data for the React frontend to display charts."""
     try:
+        include_ledger = request is not None and request.headers.get("X-Consol-Ledger") == "true"
+        if include_ledger or (transport_mode == "SEA" and include_sea_sectors):
+            records = (get_sea_source_data if transport_mode == "SEA" else get_filtered_data)(
+                start_date, end_date, country, airline, company_code, origin_city,
+                destination_country, destination_city, branch)
+            prepared = classify_sea_sectors(records) if transport_mode == "SEA" and include_sea_sectors else records
+            data = normalize_sea_records(prepared) if transport_mode == "SEA" else records
+            result = {"status": "success", "data": data}
+            if include_ledger:
+                result["ledger_records"] = records
+            return result
         data = (get_sea_data if transport_mode == "SEA" else get_filtered_data)(
             start_date, end_date, country, airline, company_code, origin_city, destination_country, destination_city, branch
         )
@@ -650,7 +668,7 @@ def build_email_metadata(
     # Subject line
     subject = f"{rep_title} {freight_name} Freight Tonnage Dashboard - {target_label} ({date_range_str})"
 
-    # Construct body as two paragraphs without bullet points
+    # Explain the PDF and the complete source-data ledger attachments.
     plural_reports = "Dashboards" if transport_mode == "BOTH" else "Dashboard"
     body = (
         f"Dear Recipient,\n\n"
@@ -658,6 +676,7 @@ def build_email_metadata(
         f"for {station_clean} Station"
         + (f" ({branch_str} Branch)" if branch_str else "")
         + f" covering the period from {start_date} to {end_date}.\n\n"
+        f"The separate Consol Ledger Excel attachment contains all fetched report records for data checking.\n\n"
         f"Best regards,\n"
         f"BI Support Team"
     )
@@ -702,6 +721,7 @@ def process_pdf_and_email(req: ReportRequest):
             include_monthly_visual=req.include_monthly_visual,
             include_monthly_ledger=req.include_monthly_ledger,
             include_sector_distribution=req.include_sector_distribution,
+            include_sea_sector_distribution=req.include_sea_sector_distribution,
             max_data_rows=req.max_data_rows,
             mode=req.mode,
             custom_sql=req.custom_sql,
@@ -732,8 +752,7 @@ def process_pdf_and_email(req: ReportRequest):
         log_email_transaction(req.recipient_email, "TASK_ERROR", str(e))
         print(f"Background Task Failed: {e}")
     finally:
-        if os.path.exists(temp_pdf_path):
-            os.remove(temp_pdf_path)
+        cleanup_report_files(temp_pdf_path)
 
 
 # --- ENDPOINT 5.4.5: Public configuration (Supabase config) ---
@@ -1179,6 +1198,7 @@ def send_report(req: ReportRequest):
                 include_monthly_visual=req.include_monthly_visual,
                 include_monthly_ledger=req.include_monthly_ledger,
                 include_sector_distribution=req.include_sector_distribution,
+                include_sea_sector_distribution=req.include_sea_sector_distribution,
                 max_data_rows=req.max_data_rows,
                 mode=req.mode,
                 custom_sql=req.custom_sql if req.mode == "custom-sql" else None,
@@ -1203,6 +1223,7 @@ def send_report(req: ReportRequest):
                 include_monthly_visual=req.include_monthly_visual,
                 include_monthly_ledger=req.include_monthly_ledger,
                 include_sector_distribution=req.include_sector_distribution,
+                include_sea_sector_distribution=req.include_sea_sector_distribution,
                 max_data_rows=req.max_data_rows,
                 mode="standard",
                 custom_sql=None,
@@ -1258,12 +1279,7 @@ def send_report(req: ReportRequest):
             print(f"Sync Email Dispatch Failed: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to generate or send report: {str(e)}")
         finally:
-            for p in temp_files_to_cleanup:
-                if os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except Exception:
-                        pass
+            cleanup_report_files(*temp_files_to_cleanup)
 
     temp_pdf_path = f"outputs/report_{uuid.uuid4().hex}.pdf"
     try:
@@ -1283,6 +1299,7 @@ def send_report(req: ReportRequest):
             include_monthly_visual=req.include_monthly_visual,
             include_monthly_ledger=req.include_monthly_ledger,
             include_sector_distribution=req.include_sector_distribution,
+            include_sea_sector_distribution=req.include_sea_sector_distribution,
             max_data_rows=req.max_data_rows,
             mode=req.mode,
             custom_sql=req.custom_sql,
@@ -1318,11 +1335,7 @@ def send_report(req: ReportRequest):
         print(f"Sync Email Dispatch Failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate or send report: {str(e)}")
     finally:
-        if os.path.exists(temp_pdf_path):
-            try:
-                os.remove(temp_pdf_path)
-            except Exception:
-                pass
+        cleanup_report_files(temp_pdf_path)
 
 
 
@@ -1350,7 +1363,7 @@ def get_cached_query(query_id: str):
 
 # --- ENDPOINT 7: Custom SQL Query Sandbox Runner ---
 @app.post("/api/custom-query")
-def custom_query(req: CustomQueryRequest):
+def custom_query(req: CustomQueryRequest, request: Request = None):
     """Executes a custom SQL query directly against the engine in a sandbox environment."""
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=400, detail="SQL query string cannot be empty.")
@@ -1361,10 +1374,14 @@ def custom_query(req: CustomQueryRequest):
         if any(mode.upper() != req.transport_mode for mode in query_modes):
             raise ValueError("Query transport mode does not match the selected freight tab")
         effective_query = prepare_sea_query(req.query) if req.transport_mode == "SEA" else req.query
-        data = execute_custom_query(effective_query)
+        records = execute_custom_query(effective_query)
+        data = records
         if req.transport_mode == "SEA":
-            data = normalize_sea_records(data)
-        return {"status": "success", "data": data, "rowCount": len(data), "effectiveQuery": effective_query}
+            data = normalize_sea_records(classify_sea_sectors(records) if req.include_sea_sectors else records)
+        result = {"status": "success", "data": data, "rowCount": len(data), "effectiveQuery": effective_query}
+        if request is not None and request.headers.get("X-Consol-Ledger") == "true":
+            result["ledger_records"] = records
+        return result
     except ValueError as e:
         # Validation errors
         raise HTTPException(status_code=400, detail=f"Invalid SQL: {str(e)}")
@@ -1682,6 +1699,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                 include_monthly_visual=filters.get("include_monthly_visual", True),
                 include_monthly_ledger=filters.get("include_monthly_ledger", True),
                 include_sector_distribution=filters.get("include_sector_distribution", True),
+                include_sea_sector_distribution=filters.get("include_sea_sector_distribution", True),
                 max_data_rows=filters.get("max_data_rows", 100),
                 mode=mode,
                 custom_sql=custom_sql,
@@ -1706,6 +1724,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                 include_monthly_visual=filters.get("include_monthly_visual", True),
                 include_monthly_ledger=filters.get("include_monthly_ledger", True),
                 include_sector_distribution=filters.get("include_sector_distribution", True),
+                include_sea_sector_distribution=filters.get("include_sea_sector_distribution", True),
                 max_data_rows=filters.get("max_data_rows", 100),
                 mode="standard",
                 custom_sql=None,
@@ -1766,6 +1785,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                 include_monthly_visual=filters.get("include_monthly_visual", True),
                 include_monthly_ledger=filters.get("include_monthly_ledger", True),
                 include_sector_distribution=filters.get("include_sector_distribution", True),
+                include_sea_sector_distribution=filters.get("include_sea_sector_distribution", True),
                 max_data_rows=filters.get("max_data_rows", 100),
                 mode=mode,
                 custom_sql=custom_sql,
@@ -1797,12 +1817,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         log_email_transaction(recipient_email, "SCHEDULED_JOB_ERROR", str(e))
         print(f"Scheduler: Job execution failed for schedule {schedule_id}: {str(e)}")
     finally:
-        for p in (temp_pdf_path, temp_air_path, temp_sea_path):
-            if p and os.path.exists(p):
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
+        cleanup_report_files(temp_pdf_path, temp_air_path, temp_sea_path)
 
 
 def _verify_scheduler_token(request_token: Optional[str]) -> bool:

@@ -2,13 +2,10 @@ import os
 import sys
 import urllib.parse
 import pandas as pd
-import requests
-import base64
 import logging
 import datetime
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
-from msal import ConfidentialClientApplication
 from jinja2 import Environment, FileSystemLoader
 
 # --- SETUP: Directories and Logging ---
@@ -114,7 +111,7 @@ def generate_pdf(station_code, country, station_name, start_date, end_date, outp
     try:
         if transport_mode == "SEA":
             from api.sea_database import render_sea_query
-            from api.pdf_service import generate_dashboard_pdf
+            from api.pdf_service import generate_report_bundle as generate_dashboard_pdf
             sql_query = render_sea_query(start_date=start_date, end_date=end_date, country=country,
                                          company_code=station_code, branch=branch_code)
             next_day = datetime.date.fromisoformat(end_date) + datetime.timedelta(days=1)
@@ -225,7 +222,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 """.strip()
         
         # Use the same readiness checks and local API routing as dashboard emails.
-        from api.pdf_service import generate_dashboard_pdf
+        from api.pdf_service import generate_report_bundle as generate_dashboard_pdf
         next_day = datetime.date.fromisoformat(end_date) + datetime.timedelta(days=1)
         report_type = "monthly" if start_date.endswith("-01") and next_day.day == 1 else "weekly"
         generate_dashboard_pdf(output_path=output_path, start_date=start_date, end_date=end_date,
@@ -239,75 +236,22 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
 
 def send_email_via_graph(pdf_path, station_name, start_date, end_date, recipients, transport_mode="AIR"):
-    """Sends email with PDF attachment using Microsoft Graph API."""
-    logging.info(f"Authenticating with Microsoft Graph API to send email for {station_name}...")
-    try:
-        tenant_id = os.getenv("MAIL_AZURE_TENANT_ID") or os.getenv("AZURE_TENANT_ID")
-        client_id = os.getenv("MAIL_AZURE_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
-        client_secret = os.getenv("MAIL_AZURE_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET")
-        sender = os.getenv("SENDER_EMAIL")
-        
-        # Determine report type: Monthly if start is day 1 and end is the last day of a month,
-        # otherwise treat as Weekly (covers 1st-7th, 1st-14th, 1st-21st cumulative periods).
-        start_dt = datetime.datetime.strptime(start_date, '%Y-%m-%d').date() if isinstance(start_date, str) else start_date
-        end_dt = datetime.datetime.strptime(end_date, '%Y-%m-%d').date() if isinstance(end_date, str) else end_date
-        import calendar
-        last_day_of_start_month = calendar.monthrange(start_dt.year, start_dt.month)[1]
-        is_monthly = (start_dt.day == 1 and end_dt.day == last_day_of_start_month and start_dt.month == end_dt.month)
-        rep_label = "Monthly" if is_monthly else "Weekly"
-        freight_name = "Sea" if transport_mode == "SEA" else "Air"
-        
-        # Authenticate with MSAL
-        app = ConfidentialClientApplication(client_id, authority=f"https://login.microsoftonline.com/{tenant_id}", client_credential=client_secret)
-        result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
-        
-        if "access_token" not in result:
-            raise Exception("Could not acquire Azure token. Check credentials and App Permissions (Mail.Send).")
-        
-        logging.info(f"Preparing email payload for {station_name}...")
-        # Read PDF to base64
-        with open(pdf_path, "rb") as f:
-            pdf_bytes = f.read()
-        b64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
-        
-        to_recipients = [{"emailAddress": {"address": email.strip()}} for email in recipients]
-        
-        email_msg = {
-            "message": {
-                "subject": f"{rep_label} {freight_name} Freight Tonnage Dashboard - {station_name} ({start_date} to {end_date})",
-                "body": {
-                    "contentType": "Text",
-                    "content": f"Dear Recipient,\n\nPlease find attached the {rep_label} {freight_name} Freight Tonnage and Revenue Performance Dashboard for {station_name} covering the period from {start_date} to {end_date}.\n\nBest Regards,\nBI Support Team"
-                },
-                "toRecipients": to_recipients,
-                "attachments": [
-                    {
-                        "@odata.type": "#microsoft.graph.fileAttachment",
-                        "name": f"{'Sea_' if transport_mode == 'SEA' else ''}{rep_label}_Tonnage_Report_{station_name.replace(' ', '_')}.pdf",
-                        "contentType": "application/pdf",
-                        "contentBytes": b64_pdf
-                    }
-                ]
-            },
-            "saveToSentItems": "true"
-        }
-        
-        headers = {
-            "Authorization": f"Bearer {result['access_token']}",
-            "Content-Type": "application/json"
-        }
-        
-        endpoint = f"https://graph.microsoft.com/v1.0/users/{sender}/sendMail"
-        response = requests.post(endpoint, headers=headers, json=email_msg)
-        
-        if response.status_code == 202:
-            logging.info(f"Report for {station_name} sent successfully via Microsoft Graph!")
-        else:
-            logging.error(f"Failed to send email for {station_name}: {response.text}")
-            
-    except Exception as e:
-        logging.error(f"Email distribution for {station_name} failed: {e}")
-        raise
+    """Send the PDF and its complete Excel ledger through the shared sender."""
+    from api.email_service import send_pdf_via_graph
+    import calendar
+    start_dt = datetime.datetime.strptime(start_date, '%Y-%m-%d').date() if isinstance(start_date, str) else start_date
+    end_dt = datetime.datetime.strptime(end_date, '%Y-%m-%d').date() if isinstance(end_date, str) else end_date
+    is_monthly = (start_dt.day == 1 and end_dt.day == calendar.monthrange(start_dt.year, start_dt.month)[1]
+                  and start_dt.month == end_dt.month and start_dt.year == end_dt.year)
+    rep_label = "Monthly" if is_monthly else "Weekly"
+    freight_name = "Sea" if transport_mode == "SEA" else "Air"
+    send_pdf_via_graph(
+        pdf_path=pdf_path,
+        recipient_email=",".join(email.strip() for email in recipients),
+        subject=f"{rep_label} {freight_name} Freight Tonnage Dashboard - {station_name} ({start_date} to {end_date})",
+        body=f"Dear Recipient,\n\nPlease find attached the {rep_label} {freight_name} Freight Tonnage and Revenue Performance Dashboard for {station_name} covering the period from {start_date} to {end_date}. The separate Consol Ledger Excel contains all fetched report records for data checking.\n\nBest Regards,\nBI Support Team",
+        attachment_name=f"{freight_name}_{rep_label}_Tonnage_Report_{station_name.replace(' ', '_')}_{start_date}_to_{end_date}.pdf",
+    )
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":

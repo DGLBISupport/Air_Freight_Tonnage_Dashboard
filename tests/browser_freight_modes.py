@@ -64,6 +64,8 @@ def intercept(route):
         respond(route, {"supabaseUrl": "https://fixture.supabase.co", "supabaseAnonKey": "fixture-anon-key"})
     elif endpoint == "custom-query":
         rows = sea_rows if request.post_data_json.get("transport_mode") == "SEA" else air_rows
+        if request.post_data_json.get("include_sea_sectors"):
+            rows = [dict(row, Destination_Sector=row.get("Destination_Sector", "South East Asia")) for row in rows]
         respond(route, {"status": "success", "data": rows, "rowCount": len(rows)})
     elif endpoint == "cache-query":
         cached_queries["fixture-query"] = request.post_data_json["query"]
@@ -71,6 +73,8 @@ def intercept(route):
     elif endpoint.startswith("get-cached-query"):
         respond(route, {"status": "success", "query": cached_queries["fixture-query"]})
     elif endpoint == "data":
+        if sea and params.get("include_sea_sectors") == ["true"]:
+            rows = [dict(row, Destination_Sector=row.get("Destination_Sector", "South East Asia")) for row in rows]
         respond(route, {"status": "success", "data": rows})
     elif endpoint == "kpi":
         respond(route, {"status": "success", "data": {"Total_Tonnage": 3.5 if sea else 2500, "Total_Volume_M3": 15.75,
@@ -105,6 +109,28 @@ def intercept(route):
 
 
 def main():
+    def check_sea_dashboard(root):
+        report = root.locator('[data-sea-report]')
+        assert report.locator('[data-sea-page]').evaluate_all('els => els.map(el => el.dataset.seaPage)') == [
+            'overview', 'shipping-breakdown', 'route-distribution', 'trade-routes', 'geographical-fcl', 'geographical-lcl', 'sectors', 'shipping-summary']
+        assert report.locator('[data-sea-route-metric]').count() == 2
+        assert report.locator('[data-sea-table], [data-sea-sector-report], [data-sea-route-metric]').last.get_attribute('data-sea-table') == 'Shipping Line Consol Summary'
+        assert report.locator('[data-sea-table="Consol Ledger"]').count() == 0
+        assert report.locator('[data-sea-table="Destination Consol Summary"]').count() == 0
+        assert "Strategic Analysis & Consol Details" not in report.inner_text()
+        for metric in ('teu', 'volume'):
+            chart = report.locator(f'[data-sea-geographical-metric="{metric}"]')
+            chart.locator('.recharts-line-curve').wait_for()
+            assert chart.locator('.recharts-bar-rectangle').count() == 8
+            assert chart.locator('.recharts-line-curve').get_attribute('stroke') == '#E53E3E'
+        sector_report = report.locator('[data-sea-sector-report]')
+        sector_report.wait_for()
+        for metric, total in (("teu", "3.50"), ("volume", "15.75")):
+            table = sector_report.locator(f'[data-sea-sector-metric="{metric}"]')
+            assert table.locator('[data-sea-sector-row="line"]').count() == 2
+            cells = table.locator('tfoot tr').locator('td,th').all_text_contents()
+            assert cells[2] == total and cells[9] == total and cells[3] == "-", cells
+
     with sync_playwright() as p:
         browser = p.chromium.launch(channel=os.environ.get("FREIGHT_TEST_BROWSER", "chrome"), headless=True)
         context = browser.new_context(viewport={"width": 1440, "height": 1050})
@@ -130,13 +156,15 @@ def main():
         air.locator('input[type="date"]').first.fill("2026-08-01")
         air.get_by_role("tab", name="Sea Freight").click()
         sea = page.locator("#freight-panel-SEA")
-        sea.get_by_text("LCL Volume", exact=True).wait_for()
+        sea.locator('[data-sea-report] .sea-kpi-card').last.wait_for()
         assert "15.75" in sea.inner_text(), "LCL volume must retain decimals"
         assert "3.5" in sea.inner_text(), "FCL TEUs must retain decimals"
         assert sea.locator(".sea-kpi-card").count() == 4
         assert sea.locator(".sea-kpi-card").first.evaluate(card_styles) == air_card, "Sea KPI styling should match Air"
         assert sea.locator(".sea-operational-grid .recharts-pie").count() == 1
         assert "Cargo Revenue Trend - Weekly" in sea.inner_text()
+        check_sea_dashboard(sea)
+        assert [params for path, params, _ in requests_seen if path == "/api/data" and params.get("transport_mode") == ["SEA"]][-1]["include_sea_sectors"] == ["true"]
         assert sea.locator('input[type="date"]').first.input_value() != "2026-08-01"
         sea.locator('input[type="date"]').first.fill("2026-09-21")
         Path("outputs").mkdir(exist_ok=True)
@@ -152,13 +180,23 @@ def main():
         sea.locator("textarea").fill(sql + "\n-- Sea editor state")
         sea.get_by_role("button", name=re.compile("Execute Custom SQL")).click()
         sea.get_by_text(re.compile("Query executed successfully")).wait_for()
+        check_sea_dashboard(sea)
+        assert [body for path, _, body in requests_seen if path == "/api/custom-query"][-1]["include_sea_sectors"] is True
         sea.get_by_role("button", name="PDF Preview", exact=True).click()
         sea.locator("iframe").wait_for()
         assert "transport_mode=SEA" in sea.locator("iframe").get_attribute("src")
         page.frame_locator("#pdf-iframe-SEA").locator("#pdf-ready").wait_for()
         preview = page.frame_locator("#pdf-iframe-SEA").locator("[data-sea-report]")
-        assert "Consol Ledger" in preview.inner_text()
-        assert "no. of consols" in preview.inner_text().lower()
+        assert "Consol Ledger" not in preview.inner_text()
+        sector_report = preview.locator('[data-sea-sector-report]')
+        assert sector_report.count() == 1
+        assert "TOP 20 SHIPPING LINES" in sector_report.inner_text()
+        for metric, total in (("teu", "3.50"), ("volume", "15.75")):
+            table = sector_report.locator(f'[data-sea-sector-metric="{metric}"]')
+            assert table.locator('[data-sea-sector-row="line"]').count() == 2
+            cells = table.locator('tfoot tr').locator('td,th').all_text_contents()
+            assert cells[2] == total and cells[9] == total and cells[3] == "-", cells
+        assert "no of masters" in preview.inner_text().lower()
         assert preview.get_by_alt_text("DGL Logo").count() == 1
         assert "Top 10 Shipping Lines FCL TEU Share" in preview.inner_text()
         assert "2.5 TEU" in preview.locator('[data-sea-share-line="Maersk"]').inner_text()
@@ -166,12 +204,13 @@ def main():
         assert "1 TEU" in preview.locator('[data-sea-share-line="MSC"]').inner_text()
         assert "(28.6%)" in preview.locator('[data-sea-share-line="MSC"]').inner_text()
         assert preview.locator(".recharts-bar").count() >= 2
-        assert not re.search(r"Shipments|Masters|Cost|Profit|Margin", preview.inner_text(), re.I)
+        assert not re.search(r"Shipments|Cost|Profit|Margin", preview.inner_text(), re.I)
         shipping_table = preview.locator('[data-sea-table="Shipping Line Consol Summary"]')
         assert shipping_table.locator('[data-summary-row]').count() == 2
         assert shipping_table.locator('[data-route-row]').count() == 2
         assert shipping_table.locator('tbody [aria-label="71.43% of FCL TEUs"]').count() == 1
-        for title in ("Shipping Line Consol Summary", "Trade Route Consol Summary", "Destination Consol Summary"):
+        assert preview.locator('[data-sea-table="Destination Consol Summary"]').count() == 0
+        for title in ("Shipping Line Consol Summary", "Trade Route Consol Summary"):
             table = preview.locator(f'[data-sea-table="{title}"]')
             cells = table.locator('tfoot td').all_text_contents()
             assert cells[-4:] == ['3.5', '15.75', '2', '$3,000.00'], (title, cells)
@@ -181,9 +220,27 @@ def main():
         assert shipping_table.locator('[data-route-row]').count() == 0
         assert shipping_table.locator('tfoot td').all_text_contents()[-4:] == ['3.5', '15.75', '2', '$3,000.00']
         frame.locator('#show-route-breakdown').check()
+        sector_toggle = frame.get_by_role("button", name=re.compile("Top 20 Shipping Lines - Sector wise"))
+        sector_toggle.click()
+        sector_report.wait_for(state="detached")
+        frame.locator("#pdf-ready").wait_for()
+        assert sector_report.count() == 0
+        assert preview.locator('[data-sea-geographical-metric]').count() == 0
+        assert [body for path, _, body in requests_seen if path == "/api/custom-query"][-1]["include_sea_sectors"] is False
+        sector_toggle.click()
+        sector_report.wait_for()
+        frame.locator("#pdf-ready").wait_for()
+        assert sector_report.locator('[data-sea-sector-metric="teu"] tfoot').inner_text().count("3.50") == 2
+        assert [body for path, _, body in requests_seen if path == "/api/custom-query"][-1]["include_sea_sectors"] is True
         assert not any(path == "/api/sector-carrier-distribution" and ((body and body.get("transport_mode") == "SEA")
                        or params.get("transport_mode") == ["SEA"]) for path, params, body in requests_seen), "Sea should derive summaries from consol data"
         sea.get_by_role("button", name="Close PDF preview", exact=True).click()
+        sea.get_by_role("button", name="Monthly Reports", exact=True).click()
+        sea.get_by_role("button", name=re.compile("Execute Custom SQL")).click()
+        sea.get_by_text(re.compile("Query executed successfully")).wait_for()
+        check_sea_dashboard(sea)
+        assert [body for path, _, body in requests_seen if path == "/api/custom-query"][-1]["include_sea_sectors"] is True
+        sea.get_by_role("button", name="Weekly Reports", exact=True).click()
         sea.get_by_role("tab", name="Air Freight").click()
         assert air.locator('input[type="date"]').first.input_value() == "2026-08-01"
         air.get_by_role("button", name="Weekly Reports", exact=True).click()
@@ -207,6 +264,16 @@ def main():
         print_page.goto(BASE + "/print-view/?" + urlencode({"transport_mode": "SEA", "start_date": "2026-09-21", "end_date": "2026-09-27"}), wait_until="networkidle")
         print_page.locator("#pdf-ready").wait_for()
         assert "15.75" in print_page.inner_text("body")
+        sector_toggle = print_page.get_by_role("button", name=re.compile("Top 20 Shipping Lines - Sector wise"))
+        sector_toggle.click()
+        print_page.locator('[data-sea-sector-report]').wait_for(state="detached")
+        print_page.locator("#pdf-ready").wait_for()
+        assert print_page.locator('[data-sea-sector-report]').count() == 0
+        assert [params for path, params, _ in requests_seen if path == "/api/data"][-1]["include_sea_sectors"] == ["false"]
+        sector_toggle.click()
+        print_page.locator('[data-sea-sector-report]').wait_for()
+        print_page.locator("#pdf-ready").wait_for()
+        assert [params for path, params, _ in requests_seen if path == "/api/data"][-1]["include_sea_sectors"] == ["true"]
         assert "LCL Volume" in print_page.inner_text("body")
         assert not re.search(r"\bkg\b|Airline|AIR CARRIERS|Shipments|Masters|Financial summary", print_page.inner_text("body")), "Sea print view contains air labels"
         print_page.screenshot(path="outputs/sea-print-preview.png", full_page=True)
@@ -214,11 +281,94 @@ def main():
         print_page.goto(BASE + "/print-view/?" + urlencode({"transport_mode": "SEA", "start_date": "2026-09-21", "end_date": "2026-09-27", "max_data_rows": "1"}), wait_until="networkidle")
         print_page.locator("#pdf-ready").wait_for()
         ledger = print_page.locator('[data-sea-table="Consol Ledger"]')
-        assert ledger.locator('tbody tr').count() == 1
-        assert ledger.locator('tfoot td').all_text_contents() == ['SUBTOTAL (DISPLAYED CONSOLS)', '2.5', '10.25', '$1,000.00']
+        assert ledger.count() == 0
         assert print_page.locator('[data-sea-table="Shipping Line Consol Summary"] tfoot td').all_text_contents()[-4:] == ['3.5', '15.75', '2', '$3,000.00']
         assert any(path == "/api/custom-query" and body["transport_mode"] == "SEA" for path, _, body in requests_seen)
         assert not errors, errors
+        original_rows = list(sea_rows)
+        try:
+            sea_rows[:] = [dict(original_rows[0], Console_Number=f"PIE-{i}", Shippingline=f"Line {i:02}",
+                FCL_TEU_Count=i / 4) for i in range(1, 8)]
+            dashboard_page = context.new_page()
+            dashboard_page.goto(BASE, wait_until="networkidle")
+            dashboard_page.get_by_role("tab", name="Sea Freight").click()
+            pie = dashboard_page.locator('#freight-panel-SEA [data-sea-chart="Shipping Line TEU Share"]')
+            pie.get_by_title("Line 07", exact=True).wait_for()
+            legend = pie.locator('[data-sea-line-list] > div')
+            assert legend.count() == 6
+            assert legend.locator('[title]').evaluate_all('els => els.map(el => el.title)') == [
+                "Line 07", "Line 06", "Line 05", "Line 04", "Line 03", "Others"]
+            assert legend.last.inner_text().splitlines() == ["Others", "0.75 TEU", "(10.7%)"]
+            assert pie.locator('.recharts-pie-sector').count() == 6
+            assert pie.locator('[data-sea-line-list]').evaluate('el => el.scrollHeight <= el.clientHeight'), "All pie legend rows should be visible"
+            pie.screenshot(path="outputs/sea-top-five-dashboard-pie.png")
+            dashboard_page.close()
+            sea_rows[:] = [dict(original_rows[0], Console_Number=f"ROUTE-{i}", Destination_City=f"Port {i:02}",
+                FCL_TEU_Count=i, LCL_Volume=i / 2, Revenue_USD=i * 100) for i in range(1, 13)]
+
+            def check_top_routes(root):
+                assert root.locator('[data-sea-table="Destination Consol Summary"]').count() == 0
+                table = root.locator('[data-sea-table="Trade Route Consol Summary"]')
+                table.get_by_text("Port 12", exact=True).wait_for()
+                routes = table.locator('tbody [data-summary-row]')
+                assert routes.count() == 10
+                assert routes.locator('td:nth-child(5)').all_text_contents() == [f"Port {i:02}" for i in range(12, 2, -1)]
+                assert table.locator('[data-others-row] td').all_text_contents()[-4:] == ['3', '1.5', '2', '$300.00']
+                assert table.locator('tfoot td').all_text_contents()[-4:] == ['78', '39', '12', '$7,800.00']
+                for metric, value in (("teu", "28 TEU"), ("volume", "14 m³")):
+                    chart = root.locator(f'[data-sea-route-metric="{metric}"]')
+                    assert chart.locator('[data-sea-route-share]').count() == 6
+                    other = chart.locator('[data-sea-route-share="Others"]')
+                    assert other.locator('[data-sea-route-value]').inner_text() == value
+                    assert other.locator('[data-sea-route-percentage]').inner_text() == '35.9%'
+                    assert other.locator('[data-sea-route-countries]').count() == 0
+                    first_route = chart.locator('[data-sea-route-share]').first
+                    assert first_route.locator('[data-sea-route-cities]').inner_text() == 'Mumbai → Port 12'
+                    assert first_route.locator('[data-sea-route-countries]').inner_text() == 'India → Singapore'
+                    assert first_route.locator('[data-sea-route-percentage]').inner_text() == '15.4%'
+                    assert chart.locator('.recharts-pie-sector').count() == 6
+                return table
+
+            dashboard_page = context.new_page()
+            dashboard_page.goto(BASE, wait_until="networkidle")
+            dashboard_page.get_by_role("tab", name="Sea Freight").click()
+            check_top_routes(dashboard_page.locator('#freight-panel-SEA')).screenshot(path="outputs/sea-top-ten-routes-dashboard.png")
+            route_charts = dashboard_page.locator('#freight-panel-SEA [data-sea-trade-route-charts]')
+            route_charts.evaluate('el => window.scrollTo(0, window.scrollY + el.getBoundingClientRect().top - 100)')
+            route_charts.screenshot(path="outputs/sea-route-pies-dashboard.png")
+            dashboard_page.close()
+            route_report = context.new_page()
+            route_report.goto(BASE + "/print-view/?" + urlencode({"transport_mode": "SEA",
+                "include_weekly_visual": "false", "include_weekly_ledger": "false",
+                "include_sea_sector_distribution": "false"}))
+            route_report.locator('#pdf-ready').wait_for()
+            check_top_routes(route_report)
+            assert 'Destination Consol Summary' not in route_report.inner_text('body')
+            route_report.pdf(path="outputs/sea-top-ten-routes-report.pdf", format="A4", landscape=True, print_background=True)
+            route_report.close()
+            sector_names = ['Europe Other', 'USA', 'North America Other', 'Central America & Caribbean',
+                'South America', 'Middle East', 'South East Asia', 'India & Sub Continent', 'Northern Asia',
+                'Africa', 'South Africa', 'Australia', 'Pacific Islands', 'Other']
+            sea_rows[:] = [dict(original_rows[0], Console_Number=f"GEO-{i}", Destination_Sector=sector,
+                FCL_TEU_Count=i + 1, LCL_Volume=14 - i) for i, sector in enumerate(sector_names)]
+            geo_page = context.new_page()
+            geo_page.goto(BASE, wait_until="networkidle")
+            geo_page.get_by_role("tab", name="Sea Freight").click()
+            for metric, share in (("teu", "56.2%"), ("volume", "43.8%")):
+                chart = geo_page.locator(f'[data-sea-geographical-metric="{metric}"]')
+                chart.locator('.recharts-label-list text').last.wait_for()
+                assert chart.locator('.recharts-label-list text').last.text_content() == share
+                chart.evaluate('el => window.scrollTo(0, window.scrollY + el.getBoundingClientRect().top - 100)')
+                chart.screenshot(path=f"outputs/sea-geographical-{metric}-dashboard.png")
+            geo_page.close()
+            geo_report = context.new_page()
+            geo_report.goto(BASE + "/print-view/?" + urlencode({"transport_mode": "SEA",
+                "include_weekly_visual": "false", "include_weekly_ledger": "false", "include_monthly_visual": "false"}))
+            geo_report.locator('#pdf-ready').wait_for()
+            geo_report.pdf(path="outputs/sea-geographical-contribution-report.pdf", format="A4", landscape=True, print_background=True)
+            geo_report.close()
+        finally:
+            sea_rows[:] = original_rows
         browser.close()
         print("PASS: Air/Sea switching, independent dates and SQL, sea metrics, SQL execution, sea schedule creation, PDF preview, and printable sea report.")
 

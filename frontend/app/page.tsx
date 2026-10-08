@@ -11,7 +11,8 @@ import {
   Calendar, Globe, Plane, RefreshCw, Send, X, ArrowUpRight, ArrowDownRight, Layers, FileText, Printer, CheckCircle,
   Users, Check, ChevronDown, Plus, Settings, Eye, Info, LayoutDashboard, BarChart2, ShieldCheck,
   Mail, Clock, UserCheck, Trash2, Bell, Database, Lock, ChevronRight, Play, AlertTriangle, AlertCircle,
-  Building2, MapPin, Search, Sparkles, SlidersHorizontal, Filter, PlusCircle, CheckSquare, SendHorizontal, AtSign, Zap, CheckCheck
+  Building2, MapPin, Search, Sparkles, SlidersHorizontal, Filter, PlusCircle, CheckSquare, SendHorizontal, AtSign, Zap, CheckCheck,
+  PanelLeftClose, PanelLeftOpen
 } from "lucide-react";
 
 import { Ship } from "lucide-react";
@@ -316,6 +317,32 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
   };
   // Sidebar active section
   const [activeSection, setActiveSection] = useState<"dashboard" | "weekly-reports" | "monthly-reports" | "admin" | "email-scheduling" | "users">("dashboard");
+
+  // Sidebar collapse/expand state with localStorage persistence
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("dgl_sidebar_collapsed");
+      if (saved !== null) {
+        setIsSidebarCollapsed(saved === "true");
+      }
+    } catch {
+      // Ignore localStorage errors (e.g. private browsing)
+    }
+  }, []);
+
+  const toggleSidebar = () => {
+    setIsSidebarCollapsed(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem("dgl_sidebar_collapsed", String(next));
+      } catch {
+        // Ignore localStorage errors
+      }
+      return next;
+    });
+  };
 
   // --- AUTH GATE STATES ---
   const [supabase, setSupabase] = useState<any>(null);
@@ -1346,6 +1373,7 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
     weeklyLedger: true,
     monthlyVisual: true,
     monthlyLedger: true,
+    seaSectorDistribution: true,
   });
 
   const [showSectionSelector, setShowSectionSelector] = useState(false);
@@ -1647,7 +1675,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`, transport
       const res = await fetch(`${API}/api/custom-query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: activeSql, transport_mode: transportMode }),
+        body: JSON.stringify({ query: activeSql, transport_mode: transportMode, include_sea_sectors: isSea }),
         signal: abortController.signal,
       });
 
@@ -1754,7 +1782,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`, transport
       const res = await fetch(`${API}/api/custom-query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: activeSql, transport_mode: transportMode }),
+        body: JSON.stringify({ query: activeSql, transport_mode: transportMode, include_sea_sectors: isSea }),
         signal: abortController.signal,
       });
 
@@ -1878,7 +1906,7 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`, transport
       if (branchParam) params.append("branch", branchParam);
 
       const [dataRes, weekRes, monthRes, kpiRes, sectorRes] = await Promise.all([
-        fetch(`${API}/api/data?${params}`),
+        fetch(`${API}/api/data?${params}${isSea ? "&include_sea_sectors=true" : ""}`),
         isSea ? Promise.resolve({json: async () => ({status: "success", data: []})}) : fetch(`${API}/api/weekly?${params}`),
         isSea ? Promise.resolve({json: async () => ({status: "success", data: []})}) : fetch(`${API}/api/monthly?${params}`),
         isSea ? Promise.resolve({json: async () => ({status: "success", data: null})}) : fetch(`${API}/api/kpi?${params}`),
@@ -2028,7 +2056,8 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`, transport
         include_weekly_visual: pdfSections.weeklyVisual,
         include_weekly_ledger: pdfSections.weeklyLedger,
         include_monthly_visual: pdfSections.monthlyVisual,
-        include_monthly_ledger: !isSea && dashboardMode === "custom-sql" ? false : pdfSections.monthlyLedger,
+        include_monthly_ledger: isSea || dashboardMode === "custom-sql" ? false : pdfSections.monthlyLedger,
+        include_sea_sector_distribution: isSea && pdfSections.seaSectorDistribution,
         // Limit data rows to 100 to reduce email attachment size
         max_data_rows: 100,
         report_type: activeSection === "weekly-reports" || activeSection === "dashboard" ? "weekly" : "monthly",
@@ -2604,16 +2633,19 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     const pct = (val: number) => total > 0 ? (val / total) * 100 : 0;
 
     return [
-      { name: "Europe", tonnage: Number((tEurope / sectorDivisor).toFixed(3)), contribution: pct(tEurope) },
-      { name: "USA", tonnage: Number((tUSA / sectorDivisor).toFixed(3)), contribution: pct(tUSA) },
-      { name: "S.East Asia", tonnage: Number((tSEAsia / sectorDivisor).toFixed(3)), contribution: pct(tSEAsia) },
-      { name: "Africa", tonnage: Number((tAfrica / sectorDivisor).toFixed(3)), contribution: pct(tAfrica) },
-      { name: "India & Sub Cont.", tonnage: Number((tIndiaSub / sectorDivisor).toFixed(3)), contribution: pct(tIndiaSub) },
-      { name: "Mid East", tonnage: Number((tMidEast / sectorDivisor).toFixed(3)), contribution: pct(tMidEast) },
-      { name: "Australia", tonnage: Number((tAustralia / sectorDivisor).toFixed(3)), contribution: pct(tAustralia) },
-      { name: "Other Sectors", tonnage: Number((tOthers / sectorDivisor).toFixed(3)), contribution: pct(tOthers) },
+      { name: "Europe", tonnage: tEurope / sectorDivisor, contribution: pct(tEurope) },
+      { name: "USA", tonnage: tUSA / sectorDivisor, contribution: pct(tUSA) },
+      { name: "S.East Asia", tonnage: tSEAsia / sectorDivisor, contribution: pct(tSEAsia) },
+      { name: "Africa", tonnage: tAfrica / sectorDivisor, contribution: pct(tAfrica) },
+      { name: "India & Sub Cont.", tonnage: tIndiaSub / sectorDivisor, contribution: pct(tIndiaSub) },
+      { name: "Mid East", tonnage: tMidEast / sectorDivisor, contribution: pct(tMidEast) },
+      { name: "Australia", tonnage: tAustralia / sectorDivisor, contribution: pct(tAustralia) },
+      { name: "Other Sectors", tonnage: tOthers / sectorDivisor, contribution: pct(tOthers) },
     ];
   };
+
+  const sectorChartData = getSectorChartData();
+  const sectorChartMaximum = sectorChartData.reduce((sum, sector) => sum + sector.tonnage, 0) || 1;
 
   const getSectorTableRows = () => {
     const sorted = [...sectorCarrierData].sort((a, b) => b.Total_Tons - a.Total_Tons);
@@ -3131,7 +3163,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         include_weekly_visual: pdfSections.weeklyVisual.toString(),
         include_weekly_ledger: pdfSections.weeklyLedger.toString(),
         include_monthly_visual: pdfSections.monthlyVisual.toString(),
-        include_monthly_ledger: isSea ? pdfSections.monthlyLedger.toString() : "false",
+        include_monthly_ledger: "false",
+        include_sea_sector_distribution: (isSea && pdfSections.seaSectorDistribution).toString(),
         max_data_rows: "100",
         report_type: activeSection === "weekly-reports" ? "weekly" : "monthly",
       });
@@ -3157,7 +3190,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
     params.append("include_weekly_visual", pdfSections.weeklyVisual.toString());
     params.append("include_weekly_ledger", pdfSections.weeklyLedger.toString());
     params.append("include_monthly_visual", pdfSections.monthlyVisual.toString());
-    params.append("include_monthly_ledger", pdfSections.monthlyLedger.toString());
+    params.append("include_monthly_ledger", isSea ? "false" : pdfSections.monthlyLedger.toString());
+    params.append("include_sea_sector_distribution", (isSea && pdfSections.seaSectorDistribution).toString());
     params.append("max_data_rows", "100");
     params.append("report_type", activeSection === "dashboard" ? "weekly" : "monthly");
     return `/print-view?${params.toString()}`;
@@ -3287,6 +3321,19 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
       <div className="bg-white border-b border-[#E2E8F0] shadow-sm sticky top-0 z-50">
         <div className="max-w-[1400px] mx-auto px-6 h-16 flex items-center justify-between gap-6">
           <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              className="p-1.5 -ml-1.5 mr-0.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors border border-transparent hover:border-slate-200 shrink-0"
+            >
+              {isSidebarCollapsed ? (
+                <PanelLeftOpen className="w-5 h-5 text-slate-600" />
+              ) : (
+                <PanelLeftClose className="w-5 h-5 text-slate-600" />
+              )}
+            </button>
             <img src="/images/Dart_Logo_new.webp" alt="DGL Logo" className="h-8 w-auto rounded object-contain shrink-0" />
             <h1 className="text-lg font-bold text-[#1A202C] tracking-tight">{freightText("DGL Tonnage Analysis", transportMode)}</h1>
             <span className="text-[11px] text-slate-400 font-medium px-2 py-0.5 rounded-full bg-[#EDF2F7] border border-[#E2E8F0]">{freightText("\n              Tonnage Dashboard\n            ", transportMode)}</span>
@@ -3386,19 +3433,44 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
       <div className="flex" style={{ minHeight: "calc(100vh - 64px)" }}>
 
         {/* ── LEFT SIDEBAR ── */}
-        <nav className="sidebar-nav">
-          <div className="px-4 pb-3 border-b border-[#EDF2F7] mb-2">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Navigation</p>
+        <nav
+          className={`sidebar-nav ${isSidebarCollapsed ? "collapsed" : ""}`}
+          aria-label="Sidebar navigation"
+        >
+          {/* Header with collapse/expand toggle */}
+          <div className={`pb-3 border-b border-[#EDF2F7] mb-2 flex items-center ${isSidebarCollapsed ? "justify-center px-2" : "justify-between px-4"}`}>
+            {!isSidebarCollapsed && (
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest select-none">Navigation</p>
+            )}
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+            >
+              {isSidebarCollapsed ? (
+                <PanelLeftOpen className="w-4 h-4" />
+              ) : (
+                <PanelLeftClose className="w-4 h-4" />
+              )}
+            </button>
           </div>
 
-          <span className="sidebar-section-label">Main</span>
+          {!isSidebarCollapsed ? (
+            <span className="sidebar-section-label">Main</span>
+          ) : (
+            <div className="my-1.5 mx-3 border-t border-slate-100" />
+          )}
 
           <button
             onClick={() => setActiveSection("dashboard")}
+            title="Dashboard"
+            aria-label="Dashboard"
             className={`sidebar-nav-item ${activeSection === "dashboard" ? "active" : ""}`}
           >
             <LayoutDashboard className="nav-icon" />
-            <span>Dashboard</span>
+            {!isSidebarCollapsed && <span>Dashboard</span>}
           </button>
 
           <button
@@ -3406,10 +3478,12 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
               setActiveSection("weekly-reports");
               setIsWeeklySqlConsoleOpen(true);
             }}
+            title="Weekly Reports"
+            aria-label="Weekly Reports"
             className={`sidebar-nav-item ${activeSection === "weekly-reports" ? "active" : ""}`}
           >
             <BarChart2 className="nav-icon" />
-            <span>Weekly Reports</span>
+            {!isSidebarCollapsed && <span>Weekly Reports</span>}
           </button>
 
           <button
@@ -3417,41 +3491,67 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
               setActiveSection("monthly-reports");
               setIsMonthlySqlConsoleOpen(true);
             }}
+            title="Monthly Reports"
+            aria-label="Monthly Reports"
             className={`sidebar-nav-item ${activeSection === "monthly-reports" ? "active" : ""}`}
           >
             <Calendar className="nav-icon" />
-            <span>Monthly Reports</span>
+            {!isSidebarCollapsed && <span>Monthly Reports</span>}
           </button>
 
-          <span className="sidebar-section-label" style={{ marginTop: 12 }}>System</span>
+          {!isSidebarCollapsed ? (
+            <span className="sidebar-section-label" style={{ marginTop: 12 }}>System</span>
+          ) : (
+            <div className="my-2 mx-3 border-t border-slate-100" />
+          )}
 
           <button
             onClick={() => setActiveSection("admin")}
+            title="Admin Panel"
+            aria-label="Admin Panel"
             className={`sidebar-nav-item ${activeSection === "admin" ? "active" : ""}`}
           >
             <ShieldCheck className="nav-icon" />
-            <span>Admin Panel</span>
+            {!isSidebarCollapsed && <span>Admin Panel</span>}
           </button>
 
           <button
             onClick={() => setActiveSection("email-scheduling")}
+            title="Email Scheduling"
+            aria-label="Email Scheduling"
             className={`sidebar-nav-item ${activeSection === "email-scheduling" ? "active" : ""}`}
           >
             <Clock className="nav-icon" />
-            <span>Email Scheduling</span>
+            {!isSidebarCollapsed && <span>Email Scheduling</span>}
           </button>
 
           <button
             onClick={() => setActiveSection("users")}
+            title="Users"
+            aria-label="Users"
             className={`sidebar-nav-item ${activeSection === "users" ? "active" : ""}`}
           >
             <Users className="nav-icon" />
-            <span>Users</span>
+            {!isSidebarCollapsed && <span>Users</span>}
           </button>
 
-          <div style={{ marginTop: "auto" }} className="px-4 pt-4 pb-2 border-t border-[#EDF2F7]">
-            <p className="text-[9px] text-slate-300 font-semibold">{freightText("DGL Tonnage Analysis", transportMode)}</p>
-            <p className="text-[9px] text-slate-300">&copy; 2026 Dart Global Logistics</p>
+          <div style={{ marginTop: "auto" }} className={`${isSidebarCollapsed ? "px-2" : "px-4"} pt-4 pb-2 border-t border-[#EDF2F7] flex flex-col items-center text-center`}>
+            {!isSidebarCollapsed ? (
+              <>
+                <p className="text-[9px] text-slate-300 font-semibold">{freightText("DGL Tonnage Analysis", transportMode)}</p>
+                <p className="text-[9px] text-slate-300">&copy; 2026 Dart Global Logistics</p>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={toggleSidebar}
+                title="Expand sidebar"
+                aria-label="Expand sidebar"
+                className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </nav>
 
@@ -7028,7 +7128,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
                 <div className="grid grid-cols-12 gap-6">
                   {/* Left Chart (Col-span-12 or 8) */}
-                  <div className="col-span-12 lg:col-span-8 saas-card p-6 bg-white relative flex flex-col justify-between min-h-[350px]">
+                  <div data-geographical-chart="air" className="col-span-12 lg:col-span-8 saas-card p-6 bg-white relative flex flex-col justify-between min-h-[350px]">
                     <div className="flex items-center justify-between mb-4 border-b border-[#F1F5F9] pb-4">
                       <div>
                         <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Geographical contribution</p>
@@ -7048,11 +7148,11 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                         </div>
                       ) : (
                         <ResponsiveContainer width="100%" height="100%">
-                          <ComposedChart data={getSectorChartData()} margin={{ top: 20, right: 30, left: 10, bottom: 5 }}>
+                          <ComposedChart data={sectorChartData} margin={{ top: 30, right: 30, left: 10, bottom: 5 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} />
                             <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#718096", fontWeight: 600 }} axisLine={{ stroke: "#E2E8F0" }} tickLine={false} />
-                            <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v} ${isSea ? "TEU" : "t"}`} width={45} />
-                            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} width={35} />
+                            <YAxis yAxisId="left" domain={[0, sectorChartMaximum]} ticks={[0, 0.25, 0.5, 0.75, 1].map(share => share * sectorChartMaximum)} allowDataOverflow tick={{ fontSize: 10, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Number(v).toLocaleString("en-US", {maximumFractionDigits: 3})} ${isSea ? "TEU" : "t"}`} width={65} />
+                            <YAxis yAxisId="right" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} orientation="right" tick={{ fontSize: 10, fill: "#E53E3E" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} width={40} />
                             <Tooltip
                               content={({ active, payload, label }) => {
                                 if (!active || !payload?.length) return null;
@@ -7061,7 +7161,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                     <p className="font-bold text-slate-800 border-b border-[#F1F5F9] pb-1 mb-1">{label}</p>
                                     <div className="flex justify-between gap-4">
                                       <span className="text-slate-500 font-medium">{freightText("Tonnage:", transportMode)}</span>
-                                      <span className="text-blue-600 font-bold">{payload[0].value}{freightText(" Tons", transportMode)}</span>
+                                      <span className="text-blue-600 font-bold">{Number(payload[0].value).toLocaleString("en-US", {maximumFractionDigits: 3})}{freightText(" Tons", transportMode)}</span>
                                     </div>
                                     <div className="flex justify-between gap-4">
                                       <span className="text-slate-500 font-medium">Contribution:</span>
@@ -7073,7 +7173,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             />
                             <Bar yAxisId="left" dataKey="tonnage" fill="#3182CE" radius={[4, 4, 0, 0]} barSize={40} name={freightText("Tonnage (Tons)", transportMode)} />
                             <Line yAxisId="right" type="monotone" dataKey="contribution" stroke="#E53E3E" strokeWidth={2.5} dot={{ fill: "#E53E3E", r: 4 }} activeDot={{ r: 6 }} name="Contribution %">
-                              <LabelList dataKey="contribution" position="top" formatter={(v: number) => `${v.toFixed(0)}%`} style={{ fontSize: 10, fill: "#E53E3E", fontWeight: 700 }} />
+                              <LabelList dataKey="contribution" position="top" formatter={(v: number) => `${v.toFixed(1)}%`} style={{ fontSize: 10, fill: "#E53E3E", fontWeight: 700 }} />
                             </Line>
                           </ComposedChart>
                         </ResponsiveContainer>
@@ -7103,7 +7203,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: index === 0 ? "#3182CE" : index === 1 ? "#4299E1" : index === 2 ? "#63B3ED" : "#90CDF4" }} />
                                 {sector.name}
                               </span>
-                              <span>{sector.tonnage}{freightText(" Tons (", transportMode)}{sector.contribution.toFixed(1)}%)</span>
+                              <span>{sector.tonnage.toLocaleString("en-US", {maximumFractionDigits: 3})}{freightText(" Tons (", transportMode)}{sector.contribution.toFixed(1)}%)</span>
                             </div>
                             <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
                               <div className="h-full rounded-full" style={{ width: `${sector.contribution}%`, backgroundColor: index === 0 ? "#3182CE" : index === 1 ? "#4299E1" : index === 2 ? "#63B3ED" : "#90CDF4" }} />
@@ -7756,7 +7856,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                       {isSea ? "Trade Route Consol Summary" : dashboardMode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Financial Summary Chart"}
                     </h4>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      {isSea ? "Consols, FCL TEUs, LCL volume and revenue by origin and destination" : dashboardMode === "custom-sql"
+                      {isSea ? "Top 5 FCL TEU and LCL volume pie charts, plus Top 10 routes and Others" : dashboardMode === "custom-sql"
                         ? freightText("Top 10 trade routes tonnage, shipments, revenue, cost, and margin summary table", transportMode)
                         : "Pie chart showing revenue distribution by company"}
                     </p>
@@ -7767,7 +7867,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                 </div>
 
                 {/* Monthly Ledger */}
-                {(isSea || dashboardMode !== "custom-sql") && (
+                {(!isSea && dashboardMode !== "custom-sql") && (
                   <div className="flex items-center gap-3 p-3 border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer transition-colors"
                     onClick={() => setPdfSections({ ...pdfSections, monthlyLedger: !pdfSections.monthlyLedger })}>
                     <input
@@ -7788,13 +7888,21 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                 )}
               </div>
 
+              {isSea && <label className="mt-3 flex items-center gap-3 p-3 border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer">
+                <input type="checkbox" checked={pdfSections.seaSectorDistribution}
+                  onChange={() => setPdfSections({...pdfSections, seaSectorDistribution: !pdfSections.seaSectorDistribution})}
+                  className="w-5 h-5 rounded border-slate-300 text-blue-600" />
+                <div><h4 className="text-sm font-semibold text-slate-800">Top 20 Shipping Lines - Sector wise</h4>
+                  <p className="text-xs text-slate-500 mt-0.5">Separate FCL / LCL geographical contribution charts and sector tables</p></div>
+              </label>}
+
               {/* Info Box */}
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800">
                 <p className="font-semibold flex items-center gap-1.5">
                   <Info className="w-4 h-4" /> Email Size Optimization
                 </p>
                 <p className="mt-1.5 leading-relaxed">
-                  Unselecting sections will reduce the PDF file size. The report is limited to 100 data rows to ensure it stays within email size limits.
+                  Unselecting sections will reduce the PDF file size. Emails also include a separate Consol Ledger Excel with all fetched records, without the PDF row limit.
                 </p>
               </div>
             </div>
@@ -7803,9 +7911,10 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
             <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-xs text-slate-500">
                 <span>
-                  Sections selected: {!isSea && dashboardMode === "custom-sql"
-                    ? `${[pdfSections.weeklyVisual, pdfSections.weeklyLedger, pdfSections.monthlyVisual].filter(Boolean).length} / 3`
-                    : `${Object.values(pdfSections).filter(Boolean).length} / 4`
+                  Sections selected: {isSea
+                    ? `${[pdfSections.weeklyVisual, pdfSections.weeklyLedger, pdfSections.monthlyVisual, pdfSections.seaSectorDistribution].filter(Boolean).length} / 4`
+                    : dashboardMode === "custom-sql" ? `${[pdfSections.weeklyVisual, pdfSections.weeklyLedger, pdfSections.monthlyVisual].filter(Boolean).length} / 3`
+                    : `${[pdfSections.weeklyVisual, pdfSections.weeklyLedger, pdfSections.monthlyVisual, pdfSections.monthlyLedger].filter(Boolean).length} / 4`
                   }
                 </span>
               </div>

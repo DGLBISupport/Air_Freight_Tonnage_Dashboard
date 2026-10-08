@@ -21,6 +21,7 @@ sqlalchemy==2.0.25
 pyodbc>=5.1.0
 numpy==1.26.4
 pandas==2.2.0
+openpyxl==3.1.5
 
 # PDF reports, HTML templates, and browser smoke tests
 # Keep Playwright aligned with the browser image version in Dockerfile.

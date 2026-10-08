@@ -2,6 +2,8 @@ import os
 import base64
 import requests
 import datetime
+import mimetypes
+from api.ledger_service import ledger_path, ledger_attachment_name
 from msal import ConfidentialClientApplication
 
 def log_email_transaction(recipient: str, status: str, details: str = ""):
@@ -21,8 +23,8 @@ def send_pdf_via_graph(
     attachments: list = None
 ):
     """
-    Authenticates via MSAL and sends an email with the attached PDF(s) using MS Graph API.
-    Supports either a single pdf_path or a list of dicts: [{"path": ..., "name": ...}].
+    Send report PDF(s) and their required companion Consol Ledger Excel files.
+    Supports a single pdf_path or a list of dicts: [{"path": ..., "name": ...}].
     """
     tenant_id = os.getenv("MAIL_AZURE_TENANT_ID") or os.getenv("AZURE_TENANT_ID")
     client_id = os.getenv("MAIL_AZURE_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
@@ -57,28 +59,31 @@ def send_pdf_via_graph(
         
         # Prepare attachments
         email_attachments = []
+        report_attachments = attachments or [{"path": pdf_path, "name": attachment_name}]
+        bundled_attachments = []
+        for item in report_attachments:
+            bundled_attachments.append(item)
+            if str(item.get("path", "")).lower().endswith(".pdf"):
+                bundled_attachments.append({"path": ledger_path(item["path"]),
+                                            "name": ledger_attachment_name(item.get("name", "Report.pdf"))})
+        attachments = bundled_attachments
         if attachments:
             for item in attachments:
                 item_path = item.get("path")
                 item_name = item.get("name", "Report.pdf")
-                if item_path and os.path.exists(item_path):
+                if not item_path or not os.path.isfile(item_path):
+                    raise FileNotFoundError(f"Required report attachment missing: {item_name}")
+                if item_path:
                     with open(item_path, "rb") as f:
                         file_bytes = f.read()
                     email_attachments.append({
                         "@odata.type": "#microsoft.graph.fileAttachment",
                         "name": item_name,
-                        "contentType": "application/pdf",
+                        "contentType": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                        if item_name.lower().endswith(".xlsx") else
+                                        mimetypes.guess_type(item_name)[0] or "application/octet-stream"),
                         "contentBytes": base64.b64encode(file_bytes).decode('utf-8')
                     })
-        elif pdf_path and os.path.exists(pdf_path):
-            with open(pdf_path, "rb") as f:
-                pdf_bytes = f.read()
-            email_attachments.append({
-                "@odata.type": "#microsoft.graph.fileAttachment",
-                "name": attachment_name,
-                "contentType": "application/pdf",
-                "contentBytes": base64.b64encode(pdf_bytes).decode('utf-8')
-            })
         
         # Prepare MS Graph Email Payload
         recipients_list = [email.strip() for email in recipient_email.split(",") if email.strip()]

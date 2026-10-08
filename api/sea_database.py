@@ -78,6 +78,23 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC
     return query, params
 
 
+def sea_master_key(value):
+    """Exclude only NULL; preserve spaces, case and all non-null bill values."""
+    return None if value is None else str(value)
+
+
+def sea_master_number(row):
+    for column in ("Master_Bill_of_Lading", "Master_Airway_Bill", "MasterBillNum"):
+        if column in row:
+            return sea_master_key(row[column])
+    return None
+
+
+def count_sea_masters(records):
+    """Distinct actual bills, independent of how many consols use each bill."""
+    return len({key for row in records if (key := sea_master_number(row)) is not None})
+
+
 def normalize_sea_records(records):
     """Expose one consol record, including compatibility aliases for API charts."""
     consols = {}
@@ -92,11 +109,15 @@ def normalize_sea_records(records):
             consols[number] = {key: source.get(key) for key in (
                 "ETD", "Origin_Country", "Origin_City", "Destination_Country", "Destination_City", "Company_Code")}
             consols[number].update(Console_Number=number,
-                Master_Bill_of_Lading=source.get("Master_Bill_of_Lading", source.get("Master_Airway_Bill", source.get("MasterBillNum"))),
+                Master_Bill_of_Lading=sea_master_number(source),
                 Shippingline=source.get("Shippingline") or source.get("ShippingLine") or source.get("Airline") or "Unknown",
                 ShippinglineGroup=source.get("ShippinglineGroup", source.get("shippinglineGroup", source.get("ShippingLineGroup"))),
                 FCL_TEU_Count=0, LCL_Volume=0, Revenue_USD=0)
+            if "Destination_Sector" in source:
+                consols[number]["Destination_Sector"] = source["Destination_Sector"]
         row = consols[number]
+        if row["Master_Bill_of_Lading"] is None:
+            row["Master_Bill_of_Lading"] = sea_master_number(source)
         row["FCL_TEU_Count"] = max(row["FCL_TEU_Count"], teu)
         row["LCL_Volume"] = max(row["LCL_Volume"], volume)
         row["Revenue_USD"] += revenue
@@ -117,9 +138,33 @@ def prepare_sea_query(sql):
     return sql
 
 
-def get_sea_data(*args, **kwargs):
+def get_sea_source_data(*args, **kwargs):
+    """Return query-result fields before chart aliases and consol normalization."""
     query, params = build_sea_query(*args, **kwargs)
-    return normalize_sea_records(to_clean_records(run_query(query, params)))
+    return to_clean_records(run_query(query, params))
+
+
+def classify_sea_sectors(records):
+    """Classify this report's rows using the cached country reference table.
+
+    Copies preserve original query records for the Excel ledger. Grouping the
+    reference by country prevents duplicate country entries multiplying cargo.
+    """
+    if not records:
+        return []
+    countries = to_clean_records(run_query("""
+SELECT CountryName, MAX(Sector) AS Sector
+FROM [DartBIDW].[dbo].[DimCountry]
+GROUP BY CountryName
+""".strip()))
+    sector_by_country = {str(row.get("CountryName") or "").strip().casefold(): row.get("Sector")
+                         for row in countries}
+    return [dict(row, Destination_Sector=sector_by_country.get(
+        str(row.get("Destination_Country") or "").strip().casefold()) or "Other") for row in records]
+
+
+def get_sea_data(*args, **kwargs):
+    return normalize_sea_records(get_sea_source_data(*args, **kwargs))
 
 
 def get_sea_kpi(*args, **kwargs):
@@ -132,6 +177,7 @@ def get_sea_kpi(*args, **kwargs):
         "Total_Volume_M3": total("Total_Volume_M3"),
         "Total_Revenue": total("Total_Revenue"),
         "Total_Consols": len(records),
+        "Total_Masters": count_sea_masters(records),
         "Unique_Airlines": len({r["Airline"] for r in records}),
         "Unique_Countries": len({r["Origin_Country"] for r in records}),
     }
@@ -139,6 +185,7 @@ def get_sea_kpi(*args, **kwargs):
 
 def get_sea_trends(period, *args, **kwargs):
     groups = {}
+    masters = {}
     for row in get_sea_data(*args, **kwargs):
         if not row.get("ETD"):
             continue
@@ -157,6 +204,11 @@ def get_sea_trends(period, *args, **kwargs):
                            "Total_Revenue": 0, "Total_Consols": 0}
             if period == "weekly":
                 groups[key]["Week_Start"] = date.fromisocalendar(year, number, 1).isoformat()
+        bills = masters.setdefault(key, set())
+        bill = sea_master_key(sea_master_number(row))
+        if bill is not None:
+            bills.add(bill)
+        groups[key]["Total_Masters"] = len(bills)
         groups[key]["Total_Consols"] += 1
         for metric in ("Total_Tonnage", "Total_Volume_M3", "Total_Revenue"):
             groups[key][metric] += float(row.get(metric) or 0)

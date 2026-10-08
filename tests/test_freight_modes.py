@@ -58,7 +58,7 @@ class FreightModesTest(unittest.TestCase):
             self.assertEqual(kpi["Total_Revenue"], 300)
             self.assertEqual(kpi["Total_Consols"], 2)
             self.assertNotIn("Total_Shipments", kpi)
-            self.assertNotIn("Total_Masters", kpi)
+            self.assertEqual(kpi["Total_Masters"], 0)  # Missing bills are not masters.
             self.assertNotIn("GP_Margin", kpi)
             weekly = sea.get_sea_trends("weekly", "2026-09-21", "2026-09-28")
             self.assertEqual([r["Week_Start"] for r in weekly], ["2026-09-21", "2026-09-28"])
@@ -72,6 +72,37 @@ class FreightModesTest(unittest.TestCase):
             self.assertEqual(sea.get_sea_kpi("2026-09-21", "2026-09-27")["Total_TEU"], 0)
             self.assertEqual(sea.get_sea_trends("weekly", "2026-09-21", "2026-09-27"), [])
             self.assertEqual(sea.get_sea_options("airlines", "2026-09-21", "2026-09-27"), [])
+
+    def test_sea_master_counts_deduplicate_bills_across_consols_and_periods(self):
+        records = [dict(ROWS[0], Console_Number=f"C{i}", ETD=etd,
+                        Master_Bill_of_Lading=bill) for i, (bill, etd) in enumerate([
+            (" BOL-1 ", "2026-09-21"), ("bol-1", "2026-09-22"),
+            ("BOL-2", "2026-09-23"), (None, "2026-09-24"),
+            ("N/A", "2026-09-25"), ("—", "2026-09-26"),
+            ("BOL-1", "2026-09-28")])]
+        records.append(dict(records[0]))  # Same consol repeated by a join.
+        with patch.object(sea, "run_query", return_value=pd.DataFrame(records)):
+            kpi = sea.get_sea_kpi("2026-09-21", "2026-09-30")
+            self.assertEqual(kpi["Total_Consols"], 7)
+            self.assertEqual(kpi["Total_Masters"], 6)
+            self.assertEqual(kpi["Total_TEU"], 17.5)
+            weeks = sea.get_sea_trends("weekly", "2026-09-21", "2026-09-30")
+            self.assertEqual([week["Total_Masters"] for week in weeks], [5, 1])
+            months = sea.get_sea_trends("monthly", "2026-09-01", "2026-09-30")
+            self.assertEqual(months[0]["Total_Masters"], 6)
+        aliases = [{"Console_Number": "ALIAS", "Master_Bill_of_Lading": " ",
+                    "Master_Airway_Bill": " BOL-3 "},
+                   {"Console_Number": "LATE", "Master_Bill_of_Lading": None},
+                   {"Console_Number": "LATE", "MasterBillNum": "BOL-3"}]
+        normalized = sea.normalize_sea_records(aliases)
+        self.assertEqual(sea.count_sea_masters(normalized), 2)
+        self.assertEqual(normalized[0]["Master_Bill_of_Lading"], " ")
+        bills = ["", " ", "N/A", "NA", "NULL", "NONE", "UNKNOWN", "UNLINKED",
+                 "-", "--", "—", "bol-1", "BOL-1", " BOL-1 ", 0]
+        exact_records = [{"Console_Number": f"EXACT-{i}", "Master_Bill_of_Lading": bill}
+                         for i, bill in enumerate(bills + bills + [None])]
+        self.assertEqual(sea.count_sea_masters(sea.normalize_sea_records(exact_records)), 15)
+        self.assertEqual(sea.sea_master_key(" BOL/123-A "), " BOL/123-A ")
 
     def test_consol_aliases_and_repeated_customer_rows_do_not_multiply_volume(self):
         rows = [dict(ROWS[0], FCL_TEU_Count=2.5, LCL_Volume=10.25),

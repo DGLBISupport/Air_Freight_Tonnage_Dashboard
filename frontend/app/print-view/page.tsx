@@ -402,6 +402,7 @@ function PrintViewContent() {
     monthlyVisual: searchParams?.get("include_monthly_visual") !== "false",
     monthlyLedger: searchParams?.get("include_monthly_ledger") !== "false",
     sectorDistribution: searchParams?.get("include_sector_distribution") !== "false",
+    seaSectorDistribution: searchParams?.get("include_sea_sector_distribution") !== "false",
   });
 
   // Toggle section selection
@@ -420,6 +421,7 @@ function PrintViewContent() {
       monthlyVisual: true,
       monthlyLedger: true,
       sectorDistribution: true,
+      seaSectorDistribution: true,
     });
   };
 
@@ -431,6 +433,7 @@ function PrintViewContent() {
       monthlyVisual: false,
       monthlyLedger: false,
       sectorDistribution: false,
+      seaSectorDistribution: false,
     });
   };
 
@@ -481,7 +484,8 @@ function PrintViewContent() {
           const d = await loadJson(`${API}/api/custom-query`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: customSql, transport_mode: transportMode }),
+            body: JSON.stringify({ query: customSql, transport_mode: transportMode,
+              include_sea_sectors: isSea && selectedSections.seaSectorDistribution }),
           });
           if (d.status === "success") {
             const records = d.data;
@@ -521,6 +525,7 @@ function PrintViewContent() {
       } else {
         startSectors();
         const params = new URLSearchParams({ transport_mode: transportMode, start_date: startDate, end_date: endDate });
+        if (isSea) params.set("include_sea_sectors", String(selectedSections.seaSectorDistribution));
         if (country) params.append("country", country);
         if (airline) params.append("airline", airline);
         if (companyCode) params.append("company_code", companyCode);
@@ -560,7 +565,7 @@ function PrintViewContent() {
       controller.abort();
       setLoading(false);
     }
-  }, [startDate, endDate, country, airline, companyCode, originCity, destinationCountry, destinationCity, branch, transportMode, searchParams]);
+  }, [startDate, endDate, country, airline, companyCode, originCity, destinationCountry, destinationCity, branch, transportMode, searchParams, selectedSections.seaSectorDistribution]);
 
   useEffect(() => {
     fetchPrintData();
@@ -587,6 +592,7 @@ function PrintViewContent() {
       monthlyVisual: searchParams?.get("include_monthly_visual") !== "false",
       monthlyLedger: searchParams?.get("include_monthly_ledger") !== "false",
       sectorDistribution: searchParams?.get("include_sector_distribution") !== "false",
+      seaSectorDistribution: searchParams?.get("include_sea_sector_distribution") !== "false",
     });
     setShowRouteBreakdown(searchParams?.get("show_route_breakdown") !== "false");
   }, [
@@ -595,6 +601,7 @@ function PrintViewContent() {
     searchParams?.get("include_monthly_visual"),
     searchParams?.get("include_monthly_ledger"),
     searchParams?.get("include_sector_distribution"),
+    searchParams?.get("include_sea_sector_distribution"),
     searchParams?.get("show_route_breakdown")
   ]);
 
@@ -736,14 +743,14 @@ function PrintViewContent() {
     const pct = (val: number) => total > 0 ? (val / total) * 100 : 0;
 
     return [
-      { name: "Europe", tonnage: Number((tEurope / sectorDivisor).toFixed(1)), contribution: pct(tEurope) },
-      { name: "USA", tonnage: Number((tUSA / sectorDivisor).toFixed(1)), contribution: pct(tUSA) },
-      { name: "S.East Asia", tonnage: Number((tSEAsia / sectorDivisor).toFixed(1)), contribution: pct(tSEAsia) },
-      { name: "Africa", tonnage: Number((tAfrica / sectorDivisor).toFixed(1)), contribution: pct(tAfrica) },
-      { name: "India & Sub Cont.", tonnage: Number((tIndiaSub / sectorDivisor).toFixed(1)), contribution: pct(tIndiaSub) },
-      { name: "Mid East", tonnage: Number((tMidEast / sectorDivisor).toFixed(1)), contribution: pct(tMidEast) },
-      { name: "Australia", tonnage: Number((tAustralia / sectorDivisor).toFixed(1)), contribution: pct(tAustralia) },
-      { name: "Other Sectors", tonnage: Number((tOthers / sectorDivisor).toFixed(1)), contribution: pct(tOthers) },
+      { name: "Europe", tonnage: tEurope / sectorDivisor, contribution: pct(tEurope) },
+      { name: "USA", tonnage: tUSA / sectorDivisor, contribution: pct(tUSA) },
+      { name: "S.East Asia", tonnage: tSEAsia / sectorDivisor, contribution: pct(tSEAsia) },
+      { name: "Africa", tonnage: tAfrica / sectorDivisor, contribution: pct(tAfrica) },
+      { name: "India & Sub Cont.", tonnage: tIndiaSub / sectorDivisor, contribution: pct(tIndiaSub) },
+      { name: "Mid East", tonnage: tMidEast / sectorDivisor, contribution: pct(tMidEast) },
+      { name: "Australia", tonnage: tAustralia / sectorDivisor, contribution: pct(tAustralia) },
+      { name: "Other Sectors", tonnage: tOthers / sectorDivisor, contribution: pct(tOthers) },
     ];
   };
 
@@ -871,6 +878,7 @@ function PrintViewContent() {
   };
 
   const chartData = getSectorChartData();
+  const sectorChartMaximum = chartData.reduce((sum, sector) => sum + sector.tonnage, 0) || 1;
   const tableRows = getSectorTableRows();
 
   const weekStackLabels = (() => {
@@ -1230,6 +1238,12 @@ function PrintViewContent() {
             page-break-after: auto !important;
             box-shadow: none !important;
           }
+          .sea-print-report { padding-bottom: 0 !important; }
+          .sea-print-report .sea-report-group { margin-top: 0 !important; }
+          .sea-print-report .sea-report-group ~ .sea-report-group {
+            break-before: page;
+            page-break-before: always;
+          }
           .print-page-container > .border-b-2,
           .report-heading {
             break-inside: avoid !important;
@@ -1260,14 +1274,15 @@ function PrintViewContent() {
                 {selectedSections.weeklyVisual && <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{isSea ? "Weekly Operational Performance" : mode === "custom-sql" ? "Weekly Operational Performance" : "Weekly Charts"}</span>}
                 {selectedSections.weeklyLedger && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{isSea ? "Shipping Line Summary" : mode === "custom-sql" ? freightText("Airline Performance Summary — Top 10", transportMode) : "Weekly Tables"}</span>}
                 {selectedSections.monthlyVisual && <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{isSea ? "Trade Route Summary" : mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Charts"}</span>}
-                {selectedSections.monthlyLedger && (isSea || mode !== "custom-sql") && <span className="bg-teal-100 text-teal-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">{isSea ? "Consol Ledger" : "Monthly Tables"}</span>}
+                {selectedSections.monthlyLedger && !isSea && mode !== "custom-sql" && <span className="bg-teal-100 text-teal-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">Monthly Tables</span>}
+                {isSea && selectedSections.seaSectorDistribution && <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[9px] font-bold mr-1 inline-block">Top 20 Shipping Lines by Sector</span>}
               </span>
             </p>
           </div>
           <span className="text-[9px] font-bold text-blue-600 bg-white px-2.5 py-1 rounded-full border border-blue-200">
-            {isSea ? `${Object.values(selectedSections).filter(Boolean).length} / 5 Sections · Continuous layout` : mode === "custom-sql"
+            {isSea ? `${[selectedSections.weeklyVisual, selectedSections.weeklyLedger, selectedSections.monthlyVisual, selectedSections.seaSectorDistribution].filter(Boolean).length} / 4 Sections · Paged layout` : mode === "custom-sql"
               ? `${[selectedSections.weeklyVisual, selectedSections.weeklyLedger, selectedSections.monthlyVisual].filter(Boolean).length} / 3 Sections · Continuous layout`
-              : `${Object.values(selectedSections).filter(Boolean).length} / 4 Sections · Continuous layout`
+              : `${[selectedSections.weeklyVisual, selectedSections.weeklyLedger, selectedSections.monthlyVisual, selectedSections.monthlyLedger, selectedSections.sectorDistribution].filter(Boolean).length} / 4 Sections · Continuous layout`
             }
           </span>
         </div>
@@ -1370,14 +1385,14 @@ function PrintViewContent() {
                     {isSea ? "Trade Route Consol Summary" : mode === "custom-sql" ? "Trade Route Performance Summary — Top 10" : "Monthly Dashboard"}
                   </p>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    {isSea ? "Consol totals by origin and destination" : mode === "custom-sql" ? "Route details & metrics" : "Trends & insights"}
+                    {isSea ? "Top 5 FCL / LCL pie charts and Top 10 route totals" : mode === "custom-sql" ? "Route details & metrics" : "Trends & insights"}
                   </p>
                 </div>
               </div>
             </button>
 
             {/* Section 4: Monthly Ledger */}
-            {(isSea || mode !== "custom-sql") && (
+            {(!isSea && mode !== "custom-sql") && (
               <button
                 onClick={() => toggleSection('monthlyLedger')}
                 className={`p-3 rounded-lg border-2 transition-all text-left ${selectedSections.monthlyLedger
@@ -1400,7 +1415,7 @@ function PrintViewContent() {
             )}
 
             {/* Section 5: Sector Tonnage Distribution */}
-            <button
+            {!isSea && <button
               onClick={() => toggleSection('sectorDistribution')}
               className={`p-3 rounded-lg border-2 transition-all text-left ${selectedSections.sectorDistribution
                 ? 'border-rose-450 bg-rose-50/60 border-rose-300 shadow-sm'
@@ -1414,12 +1429,21 @@ function PrintViewContent() {
                   <Square className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
                 )}
                 <div>
-                  <p className="font-semibold text-sm text-slate-800">{isSea ? "Destination Consol Summary" : "Sector Distribution"}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">{isSea ? "Consol TEUs, volume and revenue by destination" : "Top 20 carriers & sectors"}</p>
+                  <p className="font-semibold text-sm text-slate-800">Sector Distribution</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Top 20 carriers &amp; sectors</p>
                 </div>
               </div>
-            </button>
+            </button>}
           </div>
+
+          {isSea && <button type="button" onClick={() => toggleSection("seaSectorDistribution")}
+            className={`mt-3 w-full p-3 rounded-lg border-2 text-left ${selectedSections.seaSectorDistribution ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-slate-50"}`}>
+            <div className="flex items-start gap-2">
+              {selectedSections.seaSectorDistribution ? <CheckSquare className="w-5 h-5 text-blue-600 shrink-0" /> : <Square className="w-5 h-5 text-slate-400 shrink-0" />}
+              <div><p className="font-semibold text-sm text-slate-800">Top 20 Shipping Lines - Sector wise</p>
+                <p className="text-xs text-slate-500 mt-0.5">FCL / LCL geographical contribution charts and destination sector tables</p></div>
+            </div>
+          </button>}
 
           {mode === "custom-sql" && (
             <div className="flex items-center gap-2 mt-2 pt-3 border-t border-slate-250/80">
@@ -1440,7 +1464,7 @@ function PrintViewContent() {
         </div>
       </div>
 
-      {isSea && <div className="print-page-container bg-white p-8 w-[1123px]">
+      {isSea && <div className="print-page-container sea-print-report bg-white p-8 w-[1123px]">
         <SeaConsolReport records={data} print showRouteBreakdown={showRouteBreakdown} dateRange={getSqlDateRange()} station={`Station: ${getStationLabel()}`}
           sections={selectedSections} maxRows={maxDataRows} viewMode={mode === "custom-sql" ? "custom-sql" : "standard"} reportType={reportType} />
       </div>}
@@ -2534,20 +2558,20 @@ function PrintViewContent() {
           {/* Graphical Tonnage Contribution (Top half) */}
           <div className="flex flex-col gap-4 flex-1 overflow-hidden mt-4">
             {/* Top Chart Area */}
-            <div className="h-[480px] border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between shrink-0">
+            <div data-geographical-chart="air" className="h-[480px] border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col justify-between shrink-0">
               <div className="border-b border-[#F1F5F9] pb-2 flex justify-between items-center shrink-0 mb-3">
                 <span className="text-[11px] uppercase tracking-wider font-extrabold text-slate-400">{freightText("\n                  AIR EXPORTS - Geographical Tonnage Contribution (Tons vs Contribution %)\n                ", transportMode)}</span>
               </div>
               <div className="h-[410px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={chartData} margin={{ top: 20, right: 35, left: 15, bottom: 5 }}>
+                  <ComposedChart data={chartData} margin={{ top: 30, right: 35, left: 15, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F7" vertical={false} />
                     <XAxis dataKey="name" tick={{ fontSize: 11.5, fill: "#718096", fontWeight: 600 }} axisLine={{ stroke: "#E2E8F0" }} tickLine={false} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 11.5, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v} ${isSea ? "TEU" : "t"}`} width={50} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11.5, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} width={40} />
+                    <YAxis yAxisId="left" domain={[0, sectorChartMaximum]} ticks={[0, 0.25, 0.5, 0.75, 1].map(share => share * sectorChartMaximum)} allowDataOverflow tick={{ fontSize: 11.5, fill: "#718096" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Number(v).toLocaleString("en-US", {maximumFractionDigits: 3})} ${isSea ? "TEU" : "t"}`} width={75} />
+                    <YAxis yAxisId="right" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} orientation="right" tick={{ fontSize: 11.5, fill: "#E53E3E" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} width={45} />
                     <Bar yAxisId="left" dataKey="tonnage" fill="#3182CE" radius={[4, 4, 0, 0]} barSize={40} name={freightText("Tonnage (Tons)", transportMode)} isAnimationActive={false} />
                     <Line yAxisId="right" type="monotone" dataKey="contribution" stroke="#E53E3E" strokeWidth={3} dot={{ fill: "#E53E3E", r: 4.5 }} activeDot={{ r: 6 }} name="Contribution %" isAnimationActive={false}>
-                      <LabelList dataKey="contribution" position="top" formatter={(v: number) => `${v.toFixed(0)}%`} style={{ fontSize: 11, fill: "#E53E3E", fontWeight: 700 }} />
+                      <LabelList dataKey="contribution" position="top" formatter={(v: number) => `${v.toFixed(1)}%`} style={{ fontSize: 11, fill: "#E53E3E", fontWeight: 700 }} />
                     </Line>
                   </ComposedChart>
                 </ResponsiveContainer>
