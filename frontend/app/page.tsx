@@ -192,6 +192,7 @@ function MultiSelect({
   onChange,
   placeholder,
   isObject = false,
+  wrapOptions = false,
   emoji = "🔍",
   widthClass = "min-w-[150px]"
 }: {
@@ -201,6 +202,7 @@ function MultiSelect({
   onChange: (val: string[]) => void;
   placeholder: string;
   isObject?: boolean;
+  wrapOptions?: boolean;
   emoji?: string;
   widthClass?: string;
 }) {
@@ -291,9 +293,9 @@ function MultiSelect({
                     type="checkbox"
                     checked={isChecked}
                     onChange={() => { }}
-                    className="w-3.5 h-3.5 rounded border-slate-300 text-[#3182CE] focus:ring-[#3182CE] pointer-events-none"
+                    className="w-3.5 h-3.5 shrink-0 rounded border-slate-300 text-[#3182CE] focus:ring-[#3182CE] pointer-events-none"
                   />
-                  <span className="truncate">
+                  <span className={wrapOptions ? "min-w-0 whitespace-normal [overflow-wrap:anywhere]" : "truncate"}>
                     {isObject ? `${code} - ${name.replace("Dart Global Logistics", "DGL").replace("DGL SUPPLY CHAIN SOLUTIONS", "DGL SCS")}` : name}
                   </span>
                 </div>
@@ -3632,6 +3634,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                       {/* Airline Carrier */}
                       <MultiSelect
                         label={freightText("Airline Carrier", transportMode)}
+                        wrapOptions={isSea}
                         options={airlines}
                         selected={selectedAirlines}
                         onChange={setSelectedAirlines}

@@ -3,9 +3,10 @@ import base64
 import json
 import time
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs
 
 from playwright.sync_api import sync_playwright
-from browser_freight_modes import BASE, intercept, sea_rows
+from browser_freight_modes import BASE, intercept, respond, sea_rows
 
 
 def check_labels(page):
@@ -48,7 +49,13 @@ def main():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(channel='chrome', headless=True)
         context = browser.new_context(viewport={'width': 1440, 'height': 1000})
-        context.route('**/*', intercept)
+        def fixture(route):
+            url = urlparse(route.request.url)
+            if url.path == '/api/airlines' and parse_qs(url.query).get('transport_mode') == ['SEA']:
+                respond(route, {'status': 'success', 'data': [row['ShippinglineGroup'] for row in sea_rows]})
+            else:
+                intercept(route)
+        context.route('**/*', fixture)
         token = base64.urlsafe_b64encode(json.dumps({'exp': int(time.time()) + 86400, 'sub': 'fixture'}).encode()).decode().rstrip('=')
         session = {'access_token': 'eyJhbGciOiJIUzI1NiJ9.' + token + '.fixture', 'refresh_token': 'fixture',
             'token_type': 'bearer', 'expires_in': 86400, 'expires_at': int(time.time()) + 86400,
@@ -64,6 +71,12 @@ def main():
             else:
                 page.goto(BASE, wait_until='networkidle')
                 page.get_by_role('tab', name='Sea Freight').click()
+                dropdown = page.locator('#freight-panel-SEA .multiselect-ShippingLineGroup')
+                dropdown.get_by_role('button').first.click()
+                option = dropdown.get_by_text(sea_rows[0]['ShippinglineGroup'], exact=True)
+                option.wait_for()
+                assert option.evaluate("el => getComputedStyle(el).whiteSpace === 'normal' && el.scrollWidth <= el.clientWidth + 1")
+                dropdown.get_by_role('button').first.click()
             check_labels(page)
             if not printed:
                 for chart in ('Shipping Line TEU Share', 'Shipping Line FCL TEUs'):
