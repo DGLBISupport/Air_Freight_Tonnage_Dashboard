@@ -16,14 +16,46 @@ load_dotenv()
 # Lazy-loaded database connection engine
 _engine = None
 
+def get_odbc_driver() -> str:
+    """Returns the best available ODBC driver for SQL Server."""
+    env_driver = os.getenv("DB_DRIVER")
+    if env_driver:
+        return env_driver
+    try:
+        import pyodbc
+        available = pyodbc.drivers()
+        for candidate in [
+            "ODBC Driver 18 for SQL Server",
+            "ODBC Driver 17 for SQL Server",
+            "ODBC Driver 13 for SQL Server",
+            "SQL Server",
+        ]:
+            if candidate in available:
+                return candidate
+        for driver in available:
+            if "SQL Server" in driver:
+                return driver
+    except Exception:
+        pass
+    return "ODBC Driver 18 for SQL Server"
+
+
 def get_engine():
     global _engine
     if _engine is None:
         db_pass = urllib.parse.quote_plus(os.getenv("DB_PASSWORD", ""))
         db_server = os.getenv("DB_SERVER", "")
-        db_name = "DartBIDW"
+        db_name = os.getenv("DB_NAME", "DartBIDW")
         db_user = os.getenv("DB_USER", "")
-        conn_str = f"mssql+pyodbc:///?odbc_connect=DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={db_server};DATABASE={db_name};UID={db_user};PWD={db_pass}"
+        driver = get_odbc_driver()
+
+        # ODBC Driver 18 defaults to Encrypt=yes, which requires TrustServerCertificate=yes
+        # unless custom SSL certificates are configured on the database.
+        trust_cert = ""
+        if "18" in driver or os.getenv("DB_TRUST_SERVER_CERTIFICATE", "yes").lower() in ("yes", "true", "1"):
+            trust_cert = ";TrustServerCertificate=yes"
+
+        conn_str = f"mssql+pyodbc:///?odbc_connect=DRIVER={{{driver}}};SERVER={db_server};DATABASE={db_name};UID={db_user};PWD={db_pass}{trust_cert}"
         _engine = create_engine(conn_str)
     return _engine
 

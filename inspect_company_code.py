@@ -11,7 +11,10 @@ db_server = os.getenv("DB_SERVER", "")
 db_name = "DartBIDW"
 db_user = os.getenv("DB_USER", "")
 
-conn_str = f"mssql+pyodbc:///?odbc_connect=DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={db_server};DATABASE={db_name};UID={db_user};PWD={db_pass}"
+from api.database import get_odbc_driver
+driver = get_odbc_driver()
+trust_cert = ";TrustServerCertificate=yes" if "18" in driver or os.getenv("DB_TRUST_SERVER_CERTIFICATE", "yes").lower() in ("yes", "true", "1") else ""
+conn_str = f"mssql+pyodbc:///?odbc_connect=DRIVER={{{driver}}};SERVER={db_server};DATABASE={db_name};UID={db_user};PWD={db_pass}{trust_cert}"
 engine = create_engine(conn_str)
 
 print("Connecting and querying Dim_DGLCompany...")
