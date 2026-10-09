@@ -157,7 +157,6 @@ export function SeaConsolReport({records, print = false, loading = false, dateRa
   const period = reportType === "monthly" ? "Monthly" : "Weekly";
   const chapter = (title: string) => <div className="report-heading flex flex-wrap items-center gap-2 pb-2 border-b border-[#E2E8F0]">
     <span className="h-5 w-1.5 bg-[#4299E1] rounded-full" /><h2 className="text-base print:text-sm font-bold text-[#1A202C]">{title}</h2>
-    {station && <span className={badge}>{station}</span>}
   </div>;
   const chartHeading = (eyebrow: string, title: string, tag: string) => <div className="flex flex-wrap items-center justify-between gap-2 mb-4 print:mb-1 border-b border-[#F1F5F9] pb-4 print:pb-1">
     <div><p className="text-[11px] print:text-[9px] font-bold text-slate-400 uppercase tracking-widest">{eyebrow}</p><h3 className="text-sm print:text-xs font-bold text-[#1A202C] mt-0.5">{title}</h3></div><span className={badge}>{tag}</span>

@@ -278,7 +278,8 @@ if __name__ == "__main__":
         if "18" in driver or os.getenv("DB_TRUST_SERVER_CERTIFICATE", "yes").lower() in ("yes", "true", "1"):
             trust_cert = ";TrustServerCertificate=yes"
 
-        conn_str = f"mssql+pyodbc:///?odbc_connect=DRIVER={{{driver}}};SERVER={db_server};DATABASE={db_name};UID={db_user};PWD={db_pass}{trust_cert}"
+        login_timeout = os.getenv("DB_LOGIN_TIMEOUT", "15")
+        conn_str = f"mssql+pyodbc:///?odbc_connect=DRIVER={{{driver}}};SERVER={db_server};DATABASE={db_name};UID={db_user};PWD={db_pass}{trust_cert};LoginTimeout={login_timeout}"
         engine = create_engine(conn_str)
     except Exception as e:
         logging.critical(f"Failed to build database engine: {e}")
