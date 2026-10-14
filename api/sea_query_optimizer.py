@@ -1,4 +1,4 @@
-"""Flatten the revenue view only for compatible Sea consol reports.
+"""Flatten the revenue view only for compatible Air and Sea consol reports.
 
 The view groups shipment facts across many descriptive columns. These reports
 then sum those amounts again by consol. Removing that intermediate grouping is
@@ -60,9 +60,9 @@ def can_optimize(sql):
     code = _without_comments(sql)
     if len(_SOURCE_JOIN.findall(code)) != 1:
         return False
-    # Sector reports sum an already grouped SeaConsols CTE. Validate that inner
+    # Sector reports sum an already grouped consol CTE. Validate that inner
     # report, whose rows remain identical, rather than its later sector totals.
-    cte = re.match(r"\s*WITH\s+SeaConsols\s+AS\s*\(", code, re.I)
+    cte = re.match(r"\s*WITH\s+(?:Air|Sea)Consols\s+AS\s*\(", code, re.I)
     if cte:
         start, depth, quote, i = cte.end(), 1, None, cte.end()
         while i < len(code) and depth:
@@ -85,7 +85,7 @@ def can_optimize(sql):
         code = code[start:i - 1]
     if not code.lstrip().upper().startswith("SELECT"):
         return False
-    if not re.search(r"\bvt\.TransportMode\s*=\s*'SEA'", code, re.I):
+    if not re.search(r"\bvt\.TransportMode\s*=\s*'(?:AIR|SEA)'", code, re.I):
         return False
     if re.search(r"\b(?:OVER|COUNT_BIG|CHECKSUM_AGG|STDEV|STDEVP|VAR|VARP|APPROX_COUNT_DISTINCT)\s*\(", code, re.I):
         return False

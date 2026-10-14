@@ -8,6 +8,8 @@ services:
     envVars:
       - key: ONPREM_API_URL
         value: https://survey.dartglobal.com/chatbot/v1.0/data
+      - key: DB_NAME
+        value: DartBIDW
       - key: MAIL_AZURE_TENANT_ID
         sync: false
       - key: MAIL_AZURE_CLIENT_ID

@@ -15,6 +15,15 @@ load_dotenv()
 
 # Lazy-loaded database connection engine
 _engine = None
+FREIGHT_VIEWS = (
+    "ChatData_ViewShipConsolTransport",
+    "ChatData_ViewShipConsolLink",
+    "ChatData_ViewRevandVolume_ShipmentDate",
+)
+
+
+def get_database_name() -> str:
+    return os.getenv("DB_NAME", "").strip() or "DartBIDW"
 
 def get_odbc_driver() -> str:
     """Returns the best available ODBC driver for SQL Server."""
@@ -45,7 +54,7 @@ def get_engine():
     if _engine is None:
         db_pass = urllib.parse.quote_plus(os.getenv("DB_PASSWORD", ""))
         db_server = os.getenv("DB_SERVER", "")
-        db_name = os.getenv("DB_NAME", "DartBIDW")
+        db_name = get_database_name()
         db_user = os.getenv("DB_USER", "")
         driver = get_odbc_driver()
 
@@ -73,11 +82,24 @@ def run_query(sql_str: str, params: dict = None) -> pd.DataFrame:
     """Reuse identical reads for 60 seconds; concurrent callers share one query."""
     from api.sea_query_optimizer import _without_comments
     # UI report templates start with a descriptive SQL comment.
-    if _without_comments(sql_str).lstrip().upper().startswith(("SELECT", "WITH")):
-        key = (ONPREM_API_URL, os.getenv("DB_SERVER"), sql_str.strip(),
-               json.dumps(params or {}, sort_keys=True, default=str))
-        return query_results.get_or_load(key, lambda: _run_report_query(sql_str, params))
-    return _run_query_uncached(sql_str, params)
+    try:
+        if _without_comments(sql_str).lstrip().upper().startswith(("SELECT", "WITH")):
+            key = (ONPREM_API_URL, os.getenv("DB_SERVER"), get_database_name(), sql_str.strip(),
+                   json.dumps(params or {}, sort_keys=True, default=str))
+            return query_results.get_or_load(key, lambda: _run_report_query(sql_str, params))
+        return _run_query_uncached(sql_str, params)
+    except ProgrammingError as error:
+        # Inspect the driver error only; the SQL statement can mention freight
+        # views even when a different object or column caused the failure.
+        driver_error = str(error.orig)
+        if "42S02" not in driver_error or not any(view in driver_error for view in FREIGHT_VIEWS):
+            raise
+        raise RuntimeError(
+            f"A required freight view is unavailable in database '{get_database_name()}'. "
+            "Set DB_NAME to DartBIDW (the freight warehouse) and restart the API. "
+            "If the database is already correct, check that the freight views exist "
+            "and the database user has permission to read them."
+        ) from error
 
 
 def _run_report_query(sql_str, params):
@@ -89,7 +111,7 @@ def _run_report_query(sql_str, params):
             if not metadata.empty and metadata.iloc[0].get("definition"):
                 optimized = optimize_query(sql_str, metadata.iloc[0]["definition"])
         except Exception as error:
-            logger.info("Using original SEA query: revenue-view optimization unavailable (%s).", type(error).__name__)
+            logger.info("Using original freight query: revenue-view optimization unavailable (%s).", type(error).__name__)
     try:
         return _run_query_uncached(optimized, params)
     except ProgrammingError:
@@ -97,7 +119,7 @@ def _run_report_query(sql_str, params):
         # underlying tables. Keep the existing view query available to them.
         if optimized == sql_str:
             raise
-        logger.warning("Optimized SEA source unavailable; using original revenue view.")
+        logger.warning("Optimized freight source unavailable; using original revenue view.")
         return _run_query_uncached(sql_str, params)
 
 
@@ -819,7 +841,26 @@ def get_sector_carrier_distribution(
         company_filter = f"AND vs.Company IN ({', '.join(placeholders)})"
 
     query = f"""
-    SELECT 
+    WITH AirConsols AS (
+        -- Group by consol before sector totals to preserve chargeable weight.
+        SELECT
+            vt.ConsoleNumber,
+            vt.AirlineName1 AS Airline,
+            MAX(vt.Air_ChargebleWeight) AS Tonnage,
+            MAX(vt.Air_ChargebleWeight) AS Export_Tonnage,
+            COALESCE(dc.Sector, 'Other') AS Sector
+        FROM dbo.ChatData_ViewShipConsolTransport vt
+        LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc ON vsc.Link_ConsolNumber = vt.ConsoleNumber
+        LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs ON vs.ShipmentNumber = vsc.Link_ShipmentNum
+        LEFT JOIN [DartBIDW].[dbo].[DimCountry] dc ON dc.CountryName = vt.ConDischargePortCountryName
+        WHERE vt.TransportMode = 'AIR'
+          AND vt.ETD >= :start_date
+          AND vt.ETD <= :end_date
+          {country_filter}
+          {company_filter}
+        GROUP BY vt.ConsoleNumber, vt.AirlineName1, dc.Sector
+    )
+    SELECT
         Airline,
         SUM(Export_Tonnage) AS Air_Exp_Tong,
         0 AS Air_Imp_Tong,
@@ -838,25 +879,7 @@ def get_sector_carrier_distribution(
         SUM(CASE WHEN Sector = 'Australia' THEN Tonnage ELSE 0 END) AS Australia,
         SUM(CASE WHEN Sector = 'Pacific Islands' THEN Tonnage ELSE 0 END) AS Pacific_Islands,
         SUM(CASE WHEN Sector NOT IN ('Europe Other', 'USA', 'North America Other', 'Central America & Caribbean', 'South America', 'Middle East', 'South East Asia', 'India & Sub Continent', 'Northern Asia', 'Africa', 'South Africa', 'Australia', 'Pacific Islands') OR Sector IS NULL THEN Tonnage ELSE 0 END) AS Others
-    FROM (
-        -- EXPORTS ONLY (Grouped by Console to prevent duplication and align with Monthly rollup query)
-        SELECT 
-            vt.ConsoleNumber,
-            vt.AirlineName1 AS Airline,
-            MAX(vt.Air_ChargebleWeight) AS Tonnage,
-            MAX(vt.Air_ChargebleWeight) AS Export_Tonnage,
-            COALESCE(dc.Sector, 'Other') AS Sector
-        FROM dbo.ChatData_ViewShipConsolTransport vt
-        LEFT JOIN dbo.ChatData_ViewShipConsolLink vsc ON vsc.Link_ConsolNumber = vt.ConsoleNumber
-        LEFT JOIN dbo.ChatData_ViewRevandVolume_ShipmentDate vs ON vs.ShipmentNumber = vsc.Link_ShipmentNum
-        LEFT JOIN [DartBIDW].[dbo].[DimCountry] dc ON dc.CountryName = vt.ConDischargePortCountryName
-        WHERE vt.TransportMode = 'AIR'
-          AND vt.ETD >= :start_date 
-          AND vt.ETD <= :end_date
-          {country_filter}
-          {company_filter}
-        GROUP BY vt.ConsoleNumber, vt.AirlineName1, dc.Sector
-    ) Combined
+    FROM AirConsols
     GROUP BY Airline
     ORDER BY Total_Tons DESC
     """

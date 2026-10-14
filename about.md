@@ -2,6 +2,10 @@
 
 ## Air and Sea workspaces
 
+Custom Air station reports now use the same guarded shipment-revenue optimization as compatible Sea reports, including chargeable/actual weight, distinct shipment counts, financial sums and margin calculations. Reports that use individual financial values, non-additive measures, unrecognized view definitions, or unavailable underlying sources retain the original query. PDF generation scopes the Excel-ledger request header to the data endpoint, so third-party fonts can load without that extra CORS header.
+
+Direct SQL Server access must use `DB_NAME=DartBIDW`, where the freight views live. `DartCusSurvey` contains the company directory and is accessed through the existing fully qualified company lookup; it must not be the freight connection's database. A gateway failure activates the direct connection, so an incorrect `DB_NAME` can stay hidden while the gateway is healthy and then cause SQL Server error 208 (invalid object name). Set `DB_NAME=DartBIDW` in `.env` and the Cloud Run runtime environment, then restart the API or deploy a new revision. A missing freight view now produces an actionable database configuration message. Cached results are separated by database as well as server and query.
+
 The **Air Freight** and **Sea Freight** tabs share the complete dashboard, weekly/monthly SQL reports, station and branch reporting, PDF preview/export, report email delivery, and subscription features. Each workspace retains its own dates, filters, SQL editors, results, and schedules when switching tabs. User authentication and recipient directories are shared.
 
 Every data, print, email, and schedule request carries `transport_mode` (`AIR` or `SEA`). Requests and existing subscriptions without that field default to `AIR`. The mode is stored in the existing schedules `filters` JSON, so no Supabase schema migration is required.

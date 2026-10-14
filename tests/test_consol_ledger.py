@@ -152,6 +152,36 @@ class ConsolLedgerTest(unittest.TestCase):
         self.assertEqual(generate.call_args.kwargs["ledger_output_path"], "fixture.xlsx")
         self.assertEqual(generate.call_args.kwargs["max_data_rows"], 1)
 
+    def test_ledger_header_is_scoped_to_data_and_capture_preserves_source_rows(self):
+        rows = [{"Console_Number": "AIR-1", "Source_Value": 123}]
+        for mode, endpoint in (("standard", "/api/data"), ("custom-sql", "/api/custom-query")):
+            with self.subTest(mode=mode):
+                playwright = MagicMock()
+                page = playwright.chromium.launch.return_value.new_page.return_value
+                handlers = {}
+                page.on.side_effect = lambda event, callback: handlers.update({event: callback})
+                data_response = MagicMock(url="http://127.0.0.1:8000" + endpoint, ok=True)
+                data_response.json.return_value = {"status": "success", "data": [], "ledger_records": rows}
+                page.goto.side_effect = lambda *args, **kwargs: handlers["response"](data_response)
+                page.locator.side_effect = lambda selector: MagicMock(
+                    count=MagicMock(return_value=1 if selector == ".print-page-container" else 0))
+                context = MagicMock()
+                context.__enter__.return_value = playwright
+                with patch.dict("os.environ", {"API_PORT": "8000"}, clear=True), \
+                     patch.object(pdf_service, "sync_playwright", return_value=context), \
+                     patch.object(pdf_service, "get_tonnage_base_url", return_value="http://127.0.0.1:3000"), \
+                     patch.object(ledger_service, "generate_consol_ledger") as ledger:
+                    pdf_service.generate_report_bundle("fixture.pdf", mode=mode)
+                pattern, add_header = page.route.call_args.args
+                self.assertEqual(pattern, "http://127.0.0.1:8000" + endpoint + "**")
+                route = MagicMock()
+                route.request.headers = {"content-type": "application/json"}
+                add_header(route)
+                route.fallback.assert_called_once_with(headers={"content-type": "application/json", "X-Consol-Ledger": "true"})
+                page.set_extra_http_headers.assert_not_called()
+                ledger.assert_called_once_with("fixture.xlsx", rows, "AIR")
+                page.pdf.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

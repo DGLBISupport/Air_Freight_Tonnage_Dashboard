@@ -1,4 +1,4 @@
-"""Check amount-preserving Sea rewrites, including duplicate dimension joins."""
+"""Check amount-preserving freight rewrites, including duplicate dimension joins."""
 import sqlite3
 import unittest
 from unittest.mock import patch
@@ -104,8 +104,24 @@ class SeaQueryOptimizerTest(unittest.TestCase):
         self.assertIn("CROSS JOIN dbo.StagingTablesLastUpdateTimeMax", source)
         self.assertNotIn("GROUP BY RVF.", source)
 
-    def test_non_additive_custom_queries_and_air_queries_keep_original_source(self):
-        variants = [QUERY.replace("'SEA'", "'AIR'"),
+        # Air station reports use the same shipment financial sums, distinct
+        # counts and consol MAX quantities, including the derived margin.
+        conn.execute("ALTER TABLE dbo.ChatData_ViewShipConsolTransport ADD COLUMN Air_ChargebleWeight NUMERIC")
+        conn.execute("ALTER TABLE dbo.ChatData_ViewShipConsolTransport ADD COLUMN Air_ActualWeight NUMERIC")
+        conn.execute("UPDATE dbo.ChatData_ViewShipConsolTransport SET TransportMode='AIR', Air_ChargebleWeight=2500, Air_ActualWeight=2000")
+        air_query = QUERY.replace("'SEA'", "'AIR'").replace("MAX(vt.FCLTEU)", "MAX(vt.Air_ChargebleWeight)").replace("MAX(vt.LCLVolume)", "MAX(vt.Air_ActualWeight)")
+        air_query = air_query.replace("ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD",
+            "ROUND(SUM(vs.Profit_USD), 2) AS Profit_USD, ROUND(SUM(vs.Profit_USD) / NULLIF(SUM(vs.Revenue_USD), 0) * 100, 2) AS GP_Margin_Percent")
+        for extra_filter in ("", " AND vs.Company='IND'", " AND vs.Branch='BLR'"):
+            report = air_query.replace("GROUP BY vt.ConsoleNumber", extra_filter + "\nGROUP BY vt.ConsoleNumber")
+            self.assertTrue(can_optimize(report))
+            self.assertEqual(conn.execute(report).fetchall(), conn.execute(optimize_query(report, DEFINITION)).fetchall())
+        sector_report = "WITH AirConsols AS (" + air_query.split(" ORDER BY ")[0] + ") SELECT SUM(TEUCount) AS Total_Tons FROM AirConsols"
+        self.assertTrue(can_optimize(sector_report))
+        self.assertEqual(conn.execute(sector_report).fetchall(), conn.execute(optimize_query(sector_report, DEFINITION)).fetchall())
+
+    def test_non_additive_custom_queries_keep_original_source_for_both_modes(self):
+        variants = [QUERY.replace("'SEA'", "'RAIL'"),
                     QUERY.replace("COUNT(DISTINCT vs.ShipmentNumber)", "COUNT(vs.ShipmentNumber)"),
                     QUERY.replace("COUNT(DISTINCT vs.ShipmentNumber)", "COUNT_BIG(vs.ShipmentNumber)"),
                     QUERY.replace("COUNT(DISTINCT vs.ShipmentNumber)", "STDEV(vt.ConsoleNumber)"),
@@ -119,8 +135,10 @@ class SeaQueryOptimizerTest(unittest.TestCase):
                     QUERY.replace("SUM(vs.Revenue_USD)", "MAX(Revenue_USD)"),
                     QUERY.replace("MAX(vs.BranchName)", "MAX(vs.ConsigneeName)")]
         for query in variants:
-            self.assertFalse(can_optimize(query), query)
-            self.assertEqual(optimize_query(query, DEFINITION), query)
+            for mode in ("AIR", "SEA"):
+                report = query.replace("'SEA'", f"'{mode}'")
+                self.assertFalse(can_optimize(report), report)
+                self.assertEqual(optimize_query(report, DEFINITION), report)
         self.assertTrue(can_optimize(QUERY.replace("COUNT(DISTINCT", "COUNT( DISTINCT")))
 
     def test_changed_view_definitions_do_not_silently_change_amounts(self):
@@ -166,6 +184,27 @@ class SeaQueryOptimizerTest(unittest.TestCase):
         with patch.object(database, "_run_query_uncached", side_effect=[pd.DataFrame(), pd.DataFrame()]) as query:
             database.run_query(QUERY)
         self.assertEqual(query.call_args.args[0], QUERY)
+
+    def test_air_read_path_uses_optimization_and_reuses_cached_report(self):
+        report = "-- Air station report\n" + QUERY.replace("'SEA'", "'AIR'")
+        with patch.object(database, "_run_query_uncached", side_effect=[
+            pd.DataFrame([{"definition": DEFINITION}]), pd.DataFrame([{"Revenue_USD": 100}])
+        ]) as query:
+            database.run_query(report)
+            database.run_query(report)
+        self.assertEqual(query.call_count, 2)
+        self.assertIn("dbo.RevandVolFact AS RVF", query.call_args.args[0])
+        self.assertIn("vt.TransportMode = 'AIR'", query.call_args.args[0])
+
+    def test_air_sector_report_retains_consol_max_before_optimized_sector_totals(self):
+        with patch.object(database, "run_query", return_value=pd.DataFrame()) as query:
+            database.get_sector_carrier_distribution("2026-10-01", "2026-10-08", "India", "IND")
+        report, params = query.call_args.args
+        self.assertTrue(can_optimize(report))
+        self.assertIn("MAX(vt.Air_ChargebleWeight)", report)
+        self.assertIn("SUM(Export_Tonnage) AS Air_Exp_Tong", report)
+        self.assertIn("dbo.RevandVolFact AS RVF", optimize_query(report, DEFINITION))
+        self.assertEqual(params, {"start_date": "2026-10-01", "end_date": "2026-10-08", "cty_0": "India", "cc_0": "IND"})
 
     def test_unscoped_dropdowns_do_not_join_shipment_revenue(self):
         with patch.object(sea, "run_query", return_value=pd.DataFrame()) as query:

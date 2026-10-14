@@ -154,7 +154,11 @@ def generate_dashboard_pdf(
                         if payload.get("status") == "success" and isinstance(records, list):
                             report_records = records
                 if ledger_output_path:
-                    page.set_extra_http_headers({"X-Consol-Ledger": "true"})
+                    expected = "/api/custom-query" if mode == "custom-sql" else "/api/data"
+                    # The ledger header belongs on the data request. A global
+                    # header also reaches third-party fonts and fails CORS.
+                    page.route(api_base + expected + "**", lambda route: route.fallback(
+                        headers={**route.request.headers, "X-Consol-Ledger": "true"}))
                     page.on("response", capture_report_records)
                 page.add_init_script("window.__FREIGHT_PRINT_CONFIG__ = " + json.dumps(print_config) + ";")
                 page.on("pageerror", lambda err: logger.error("Print view error: %s", err))
