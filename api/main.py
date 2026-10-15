@@ -764,7 +764,8 @@ def get_config():
     """Returns public configuration variables (like Supabase URL and Key) to the frontend at runtime."""
     return {
         "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
-        "supabaseAnonKey": os.environ.get("SUPABASE_KEY", "")
+        "supabaseAnonKey": os.environ.get("SUPABASE_KEY", ""),
+        "schedulerTimezone": os.environ.get("GCP_SCHEDULER_TIMEZONE", "Asia/Colombo"),
     }
 
 
@@ -1514,7 +1515,7 @@ def execute_scheduled_report_job(schedule_id: str):
     # Process mode and cache custom SQL query if needed
     company_val = filters.get("company_code")
     country_val = filters.get("country")
-    branch_val = filters.get("branch")
+    branch_val = filters.get("branch") or filters.get("branch_code")
     
     # Dynamically resolve station & branch metadata from Supabase if not provided
     db_stations = get_supabase_stations()

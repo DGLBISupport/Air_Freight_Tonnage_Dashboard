@@ -74,6 +74,28 @@ Scheduled times use `GCP_SCHEDULER_TIMEZONE` (default `Asia/Colombo`), not UTC.
 Cloud automation also requires `GCP_PROJECT_ID` (or metadata autodetection),
 `GCP_LOCATION`, `CLOUD_RUN_SERVICE_URL`, scheduler credentials and the shared secret.
 
+## Schedule directory and individual configuration
+
+Active Schedules separates station, branch and global report scopes. Branch scope
+recognizes both the current `filters.branch` field and older `filters.branch_code`
+records. Station, branch, recipient, frequency and status filters narrow the list;
+the All schedules tab includes every scope.
+
+Use **Schedule report** beside a recipient in the directory, or choose **One
+person** in Configure New Schedule. Select the recipient, target reports,
+frequency/day, send time and PDF report sections. One schedule is saved for each
+selected target, with only that person's email. Directory assignment is not
+modified. No schedule is created until Save Schedule is clicked.
+
+Providing both custom dates saves `filters.use_fixed_dates=true`; leaving both
+blank calculates the reporting period at each run. Invalid/incomplete ranges and
+empty target selections cannot be saved in the form. Send times display the
+configured scheduler timezone from `/api/config`.
+
+These options use the existing `report_schedules` columns and JSON `filters`
+field, including `recipient_mode` for the individual/group label. No additional
+table, migration, NPS relationship or automatic directory trigger is introduced.
+
 ## Independent station and branch subscriptions
 
 `tonnage_users.station` stores explicit, comma-separated report assignments. `BLR`

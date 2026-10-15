@@ -38,7 +38,7 @@ class ConsolLedgerTest(unittest.TestCase):
         self.assertNotIn("Source_Column", result["data"][0])
         self.assertNotIn("Airline", result["ledger_records"][0])
 
-    def test_export_keeps_every_row_column_type_and_duplicate_source_record(self):
+    def test_export_keeps_every_row_column_and_duplicate_source_record(self):
         rows = [{"Console_Number": "000123", "FCL_TEU_Count": 2.5, "LCL_Volume": 10.25,
                  "Revenue_USD": 1000, "ETD": "2026-09-21T00:15:00+05:30", "Note": "=1+1"}
                 for _ in range(125)]
@@ -54,7 +54,8 @@ class ConsolLedgerTest(unittest.TestCase):
             self.assertEqual(sheet["A5"].data_type, "s")
             self.assertEqual(sheet["B5"].value, 2.5)
             self.assertEqual(sheet["B5"].data_type, "n")
-            self.assertEqual(sheet["E5"].value, rows[0]["ETD"])
+            self.assertEqual(sheet["E5"].value, datetime.datetime(2026, 9, 21, 0, 15))
+            self.assertEqual(sheet["E5"].number_format, "yyyy-mm-dd hh:mm:ss")
             self.assertEqual(sheet["F5"].value, "=1+1")
             self.assertEqual(sheet["F5"].data_type, "s")
             self.assertEqual(sheet["G129"].value, "last row retained")
@@ -80,6 +81,43 @@ class ConsolLedgerTest(unittest.TestCase):
             self.assertEqual([cell.value for cell in book.active[5]], list(row.values()))
             book.close()
 
+    def test_air_and_sea_etd_exports_as_sortable_datetime_with_requested_display(self):
+        expected = datetime.datetime(2026, 10, 7, 9, 10)
+        values = ["2026-10-07T09:10:00", "2026-10-07 09:10:00",
+                  "2026-10-07T09:10:00Z", "2026-10-07T09:10:00+05:30",
+                  "2026-10-07T09:10:00-04:00", expected,
+                  expected.replace(tzinfo=datetime.timezone(datetime.timedelta(hours=5, minutes=30)))]
+        for mode in ("AIR", "SEA"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                rows = [{"ETD": value, "Source_Timestamp": "2026-10-07T09:10:00+05:30"} for value in values]
+                path = Path(directory) / f"{mode}.xlsx"
+                ledger_service.generate_consol_ledger(path, rows, mode)
+                book = load_workbook(path)
+                for index in range(5, len(values) + 5):
+                    cell = book.active.cell(index, 1)
+                    self.assertEqual(cell.value, expected)
+                    self.assertEqual(cell.data_type, "d")
+                    self.assertEqual(cell.number_format, "yyyy-mm-dd hh:mm:ss")
+                    self.assertEqual(cell.value.strftime("%Y-%m-%d %H:%M:%S"), "2026-10-07 09:10:00")
+                    self.assertEqual(book.active.cell(index, 2).value, rows[index - 5]["Source_Timestamp"])
+                book.close()
+
+    def test_etd_date_only_blank_invalid_and_fractional_values(self):
+        rows = [{"ETD": value} for value in ["2026-10-07", datetime.date(2026, 10, 7), None, "", "unknown",
+                                             "2026-10-07T09:10:00.123+05:30"]]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "dates.xlsx"
+            ledger_service.generate_consol_ledger(path, rows)
+            book = load_workbook(path)
+            self.assertEqual(book.active["A5"].value, datetime.datetime(2026, 10, 7))
+            self.assertEqual(book.active["A6"].value, datetime.datetime(2026, 10, 7))
+            self.assertIsNone(book.active["A7"].value)
+            self.assertIsNone(book.active["A8"].value)
+            self.assertEqual(book.active["A9"].value, "unknown")
+            self.assertEqual(book.active["A10"].value, datetime.datetime(2026, 10, 7, 9, 10, 0, 123000))
+            self.assertEqual(book.active["A10"].number_format, "yyyy-mm-dd hh:mm:ss")
+            book.close()
+
     def mock_graph(self):
         app = MagicMock()
         app.acquire_token_for_client.return_value = {"access_token": "fixture-token"}
@@ -94,7 +132,8 @@ class ConsolLedgerTest(unittest.TestCase):
                         created.append(output_path)
                         Path(output_path).write_bytes(b"fixture PDF")
                         ledger_service.generate_consol_ledger(ledger_service.ledger_path(output_path),
-                            [{"Console_Number": transport_mode + "-1", "Source_Value": 123}], transport_mode)
+                            [{"Console_Number": transport_mode + "-1", "Source_Value": 123,
+                              "ETD": "2026-10-07T09:10:00+05:30"}], transport_mode)
                     config = {"is_active": 1, "recipient_email": "fixture@example.test", "frequency": "weekly",
                               "filters": {"transport_mode": mode, "country": "India", "company_code": "IND"}}
                     with patch.dict("os.environ", {"DB_SERVER": "fixture", "DB_USER": "fixture", "DB_PASSWORD": "fixture",
@@ -121,6 +160,8 @@ class ConsolLedgerTest(unittest.TestCase):
                             self.assertEqual(excel["contentType"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                             book = load_workbook(io.BytesIO(base64.b64decode(excel["contentBytes"])))
                             self.assertEqual(book.active["A5"].value, "SEA-1" if pdf["name"].startswith("Sea_") else "AIR-1")
+                            self.assertEqual(book.active["C5"].value, datetime.datetime(2026, 10, 7, 9, 10))
+                            self.assertEqual(book.active["C5"].number_format, "yyyy-mm-dd hh:mm:ss")
                             book.close()
                     for path in created:
                         self.assertFalse(Path(path).exists())

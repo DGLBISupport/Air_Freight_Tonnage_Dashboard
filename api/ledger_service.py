@@ -14,6 +14,20 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
+def _excel_etd(value):
+    """Keep the source ETD calendar/clock fields in Excel's timezone-free date type."""
+    if isinstance(value, str):
+        try:
+            value = datetime.datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return value
+    if isinstance(value, datetime.datetime):
+        return value.replace(tzinfo=None)
+    if isinstance(value, datetime.date):
+        return datetime.datetime.combine(value, datetime.time())
+    return value
+
+
 def ledger_path(pdf_path):
     return str(Path(pdf_path).with_suffix(".xlsx"))
 
@@ -63,10 +77,12 @@ def generate_consol_ledger(output_path, records, transport_mode="AIR"):
         for row_index, record in enumerate(records, 5):
             for col_index, column in enumerate(columns, 1):
                 value = record.get(column)
+                if str(column).strip().upper() == "ETD":
+                    value = _excel_etd(value)
                 if isinstance(value, (dict, list)):
                     value = json.dumps(value, ensure_ascii=False)
-                # Preserve timezone-bearing dates as source text; Excel cannot
-                # store timezone-aware dates without discarding their offset.
+                # Other timezone-bearing columns retain their source offset as
+                # text. ETD above intentionally displays the source clock time.
                 if isinstance(value, datetime.datetime) and value.tzinfo:
                     value = value.isoformat()
                 if isinstance(value, str) and len(value) > 32767:

@@ -110,6 +110,30 @@ class ScheduleTriggerTest(unittest.TestCase):
         self.assertNotIn("2000-01", sql)
         send.assert_called_once()
 
+    def test_individual_branch_schedule_keeps_recipient_dates_and_report_sections(self):
+        for branch_field in ["branch", "branch_code"]:
+            with self.subTest(branch_field=branch_field):
+                config = {"is_active": True, "recipient_email": "delhi@example.test", "frequency": "weekly",
+                          "filters": {"transport_mode": "AIR", "recipient_mode": "person",
+                                      "company_code": "IND", branch_field: "DEL", "report_level": "branch",
+                                      "use_fixed_dates": True, "start_date": "2026-10-01", "end_date": "2026-10-14",
+                                      "include_weekly_visual": True, "include_weekly_ledger": False,
+                                      "include_monthly_visual": False, "include_monthly_ledger": False}}
+                with patch.object(main, "get_schedule", return_value=config), \
+                     patch.object(main, "get_supabase_stations", return_value=[]), \
+                     patch.object(main, "get_supabase_branches", return_value=[{"code": "DEL", "company_code": "IND", "country": "India"}]), \
+                     patch.object(main, "generate_dashboard_pdf") as pdf, \
+                     patch.object(main, "send_pdf_via_graph") as send, \
+                     patch.object(main, "cleanup_report_files"):
+                    self.assertTrue(main.execute_scheduled_report_job("individual-fixture"))
+                self.assertEqual(pdf.call_args.kwargs["branch"], "DEL")
+                self.assertEqual(pdf.call_args.kwargs["start_date"], "2026-10-01")
+                self.assertEqual(pdf.call_args.kwargs["end_date"], "2026-10-14")
+                self.assertFalse(pdf.call_args.kwargs["include_weekly_ledger"])
+                self.assertFalse(pdf.call_args.kwargs["include_monthly_visual"])
+                self.assertFalse(pdf.call_args.kwargs["include_monthly_ledger"])
+                self.assertEqual(send.call_args.kwargs["recipient_email"], "delhi@example.test")
+
 
 if __name__ == "__main__":
     unittest.main()

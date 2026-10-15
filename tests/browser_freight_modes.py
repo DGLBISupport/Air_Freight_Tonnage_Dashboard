@@ -45,6 +45,12 @@ def intercept(route):
         data = {"email": "fixture@example.test"} if "allowed_admins" in url.path else []
         if "station_recipients" in url.path:
             data = [{"station_code": "IND", "email": "fixture@example.test"}]
+        elif url.path == "/rest/v1/tonnage_users":
+            data = [{"id": "fixture", "email": "fixture@example.test", "display_name": "Fixture Recipient", "station": "IND", "is_air": True, "is_sea": True}]
+        elif url.path == "/rest/v1/stations":
+            data = [{"code": "IND", "name": "India", "country": "India", "is_active": True}]
+        elif url.path == "/rest/v1/branches":
+            data = [{"code": "BLR", "name": "Bengaluru", "company_code": "IND", "country": "India", "is_active": True}]
         respond(route, data)
         return
     if url.hostname not in ("127.0.0.1", "localhost") and not url.path.startswith("/api/"):
@@ -253,9 +259,12 @@ def main():
         # Schedule saves are intercepted; verify the complete form carries SEA.
         sea.get_by_role("button", name="Email Scheduling", exact=True).click()
         sea.get_by_role("button", name="Configure New Schedule", exact=True).click()
+        sea.get_by_role("button", name="Target stations", exact=True).click()
+        sea.get_by_role("button", name="Target stations", exact=True).locator("..").get_by_text("India", exact=True).click()
+        sea.get_by_role("button", name="Done", exact=True).click()
         sea.get_by_role("button", name=re.compile("Match Target Selection")).click()
         sea.get_by_role("button", name="Save Schedule", exact=True).click()
-        sea.get_by_text(re.compile("Successfully configured")).wait_for()
+        sea.get_by_text(re.compile("Saved 1 station schedule")).wait_for()
         assert created_schedules and all(item["filters"]["transport_mode"] == "SEA" for item in created_schedules)
 
         # Verify native sea print output independently of the preview modal.
@@ -303,7 +312,7 @@ def main():
             assert pie.locator('[data-sea-line-list]').evaluate('el => el.scrollHeight <= el.clientHeight'), "All pie legend rows should be visible"
             pie.screenshot(path="outputs/sea-top-five-dashboard-pie.png")
             dashboard_page.close()
-            sea_rows[:] = [dict(original_rows[0], Console_Number=f"ROUTE-{i}", Destination_City=f"Port {i:02}",
+            sea_rows[:] = [dict(original_rows[0], Console_Number=f"ROUTE-{i}", Master_Bill_of_Lading=f"BOL-ROUTE-{i}", Destination_City=f"Port {i:02}",
                 FCL_TEU_Count=i, LCL_Volume=i / 2, Revenue_USD=i * 100) for i in range(1, 13)]
 
             def check_top_routes(root):

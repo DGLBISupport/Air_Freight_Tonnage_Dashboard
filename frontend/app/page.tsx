@@ -29,6 +29,7 @@ import { createClient } from "@supabase/supabase-js";
 import { TONNAGE_USERS_TABLE } from "@/lib/tonnage-tables";
 import { classifyRecipientLocations } from "@/lib/recipient-locations";
 import { buildRecipientGroups, recipientAssignmentCodes, updateRecipientAssignment } from "@/lib/recipient-assignments";
+import { resolveScheduleScope } from "@/lib/schedule-scope";
 
 import { TransportMode, freightText, buildFreightQuery, formatFreightQuantity } from "@/lib/freight";
 import { SeaConsolReport } from "@/components/sea-consol-report";
@@ -390,7 +391,8 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
     // Try to fetch config from FastAPI backend first (production path)
     fetch(`${API}/api/config`)
       .then((res) => res.json())
-      .then(({ supabaseUrl, supabaseAnonKey }) => {
+      .then(({ supabaseUrl, supabaseAnonKey, schedulerTimezone }) => {
+        if (schedulerTimezone) setSchedulerTimezone(schedulerTimezone);
         if (supabaseUrl && supabaseAnonKey) {
           bootSupabase(supabaseUrl, supabaseAnonKey);
         } else {
@@ -934,13 +936,22 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
   // --- SCHEDULER STATES ---
   const [schedules, setSchedules] = useState<any[]>([]);
   const [schedulerLoading, setSchedulerLoading] = useState(false);
+  const [schedulerTimezone, setSchedulerTimezone] = useState("Asia/Colombo");
   const [selectedScheduleIds, setSelectedScheduleIds] = useState<string[]>([]);
   const [scheduleSearch, setScheduleSearch] = useState("");
   const [scheduleFrequencyFilter, setScheduleFrequencyFilter] = useState("ALL");
   const [scheduleStatusFilter, setScheduleStatusFilter] = useState("ALL");
-  const [schedStation, setSchedStation] = useState("IND");
-  const [schedSelectedStations, setSchedSelectedStations] = useState<string[]>(DEFAULT_STATIONS.map(s => s.code));
-  const [schedSelectedBranches, setSchedSelectedBranches] = useState<string[]>(["BLR"]);
+  const [scheduleScopeTab, setScheduleScopeTab] = useState<"all" | "station" | "branch" | "global">("station");
+  const [scheduleStationFilter, setScheduleStationFilter] = useState("");
+  const [scheduleBranchFilter, setScheduleBranchFilter] = useState("");
+  const [schedulePersonFilter, setSchedulePersonFilter] = useState("");
+  const [schedReportLevel, setSchedReportLevel] = useState<"station" | "branch">("station");
+  const [schedSelectedStations, setSchedSelectedStations] = useState<string[]>([]);
+  const [schedSelectedBranches, setSchedSelectedBranches] = useState<string[]>([]);
+  const [schedRecipientMode, setSchedRecipientMode] = useState<"groups" | "person">("groups");
+  const [schedPersonEmail, setSchedPersonEmail] = useState("");
+  const [schedPersonSearch, setSchedPersonSearch] = useState("");
+  const [schedSections, setSchedSections] = useState({include_weekly_visual: true, include_weekly_ledger: true, include_monthly_visual: true, include_monthly_ledger: true});
   const [schedSelectedRecipientSources, setSchedSelectedRecipientSources] = useState<string[]>([]);
   const [isSchedStationDropdownOpen, setIsSchedStationDropdownOpen] = useState(false);
   const [isSchedBranchDropdownOpen, setIsSchedBranchDropdownOpen] = useState(false);
@@ -963,6 +974,36 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
   const [schedActiveTab, setSchedActiveTab] = useState<"list" | "create">("list");
   const [schedStartDate, setSchedStartDate] = useState("");
   const [schedEndDate, setSchedEndDate] = useState("");
+  const scheduleRecipients = schedRecipientMode === "person" ? schedPersonEmail : schedRecipients;
+  const schedPeople = dbUsers.filter(user => transportMode === "SEA" ? user.is_sea === true : user.is_air !== false);
+
+  const handleScheduleForPerson = (user: any, locationCode?: string) => {
+    const assignments = recipientAssignmentCodes(user.station);
+    const code = locationCode || assignments.find(assignment =>
+      stationsList.some(station => station.code === assignment) || branchesList.some(branch => branch.code === assignment));
+    const isBranch = branchesList.some(branch => branch.code === code);
+    setSchedRecipientMode("person");
+    setSchedPersonEmail(String(user.email || "").trim().toLowerCase());
+    setSchedPersonSearch("");
+    setSchedSelectedRecipientSources([]);
+    setSchedRecipients("");
+    setSchedReportLevel(isBranch ? "branch" : "station");
+    setSchedSelectedBranches(isBranch && code ? [code] : []);
+    setSchedSelectedStations(!isBranch && code && stationsList.some(station => station.code === code) ? [code] : []);
+    setSchedStatusMessage("");
+    setSchedFrequency("weekly");
+    setSchedWeeklyType("day_of_week");
+    setSchedDayOfWeek(0);
+    setSchedDayOfMonth(1);
+    setSchedTime("08:00");
+    setSchedSections({include_weekly_visual: true, include_weekly_ledger: true, include_monthly_visual: true, include_monthly_ledger: true});
+    setSchedStartDate("");
+    setSchedEndDate("");
+    setIsSchedStationDropdownOpen(false);
+    setIsSchedBranchDropdownOpen(false);
+    setSchedActiveTab("create");
+    setActiveSection("email-scheduling");
+  };
 
   // Helper to re-aggregate recipients whenever selected sources change
   const syncRecipientsFromSources = (sources: string[]) => {
@@ -1060,8 +1101,30 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
   }, [supabase, transportMode]);
 
   const handleCreateSchedule = async () => {
-    if (!schedRecipients.trim()) {
-      setSchedStatusMessage("Please enter at least one recipient email.");
+    const emails = Array.from(new Set(scheduleRecipients.split(",").map(email => email.trim().toLowerCase()).filter(Boolean)));
+    if (schedRecipientMode === "person" && !schedPeople.some(user => user.email.toLowerCase() === schedPersonEmail)) {
+      setSchedStatusMessage(`Select a directory recipient with ${transportMode} reports enabled.`);
+      setSchedStatusSuccess(false);
+      return;
+    }
+    if (emails.length === 0 || emails.some(email => !isReportEmail(email))) {
+      setSchedStatusMessage("Please select at least one valid recipient email.");
+      setSchedStatusSuccess(false);
+      return;
+    }
+    const targets = schedReportLevel === "branch" ? schedSelectedBranches : schedSelectedStations;
+    if (targets.length === 0 || targets.some(code => !(schedReportLevel === "branch" ? branchesList : stationsList).some(location => location.code === code))) {
+      setSchedStatusMessage(`Please select a configured target ${schedReportLevel}.`);
+      setSchedStatusSuccess(false);
+      return;
+    }
+    if (!schedTime || !Object.values(schedSections).some(Boolean)) {
+      setSchedStatusMessage("Select a send time and at least one report section.");
+      setSchedStatusSuccess(false);
+      return;
+    }
+    if (Boolean(schedStartDate) !== Boolean(schedEndDate) || (schedStartDate && schedStartDate > schedEndDate)) {
+      setSchedStatusMessage("Choose both dates, with the start date on or before the end date.");
       setSchedStatusSuccess(false);
       return;
     }
@@ -1076,17 +1139,16 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
       let errorMessages: string[] = [];
 
       if (schedReportLevel === "branch") {
-        const branchesToProcess = schedSelectedBranches.length > 0 ? schedSelectedBranches : [schedBranch];
+        const branchesToProcess = schedSelectedBranches;
 
         for (const branchCode of branchesToProcess) {
           const branchInfo = branchesList.find(b => b.code === branchCode);
           const filters: any = {
             transport_mode: transportMode,
             mode: "standard",
-            include_weekly_visual: true,
-            include_weekly_ledger: true,
-            include_monthly_visual: true,
-            include_monthly_ledger: true,
+            ...schedSections,
+            recipient_mode: schedRecipientMode,
+            use_fixed_dates: Boolean(schedStartDate && schedEndDate),
             max_data_rows: 100,
             report_level: "branch",
             branch: branchCode,
@@ -1100,7 +1162,7 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
             method: "POST",
             headers: authHeaders,
             body: JSON.stringify({
-              recipient_email: schedRecipients,
+              recipient_email: emails.join(", "),
               frequency: schedFrequency,
               day_of_week: schedFrequency === "weekly" ? (schedWeeklyType === "month_cycle" ? null : schedDayOfWeek) : null,
               day_of_month: schedFrequency === "monthly"
@@ -1112,7 +1174,7 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
             }),
           });
           const data = await res.json();
-          if (data.status === "success") {
+          if (res.ok && data.status === "success") {
             createdCount++;
           } else {
             errorMessages.push(`Branch ${branchCode}: ${data.detail || "Failed"}`);
@@ -1120,8 +1182,8 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
         }
 
         if (createdCount > 0) {
-          setSchedStatusMessage(`Successfully configured ${createdCount} branch schedule${createdCount > 1 ? "s" : ""} (${branchesToProcess.join(", ")})!`);
-          setSchedStatusSuccess(true);
+          setSchedStatusMessage(`Saved ${createdCount} branch schedule${createdCount > 1 ? "s" : ""}.${errorMessages.length ? ` Failed: ${errorMessages.join("; ")}` : ""}`);
+          setSchedStatusSuccess(errorMessages.length === 0);
           setSchedRecipients("");
           setSchedSelectedRecipientSources([]);
           setSchedStartDate("");
@@ -1132,7 +1194,7 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
           setSchedStatusSuccess(false);
         }
       } else {
-        const stationsToProcess = schedSelectedStations.length > 0 ? schedSelectedStations : stationsList.map(s => s.code);
+        const stationsToProcess = schedSelectedStations;
 
         if (stationsToProcess.length === 0) {
           setSchedStatusMessage("Please select at least one target station.");
@@ -1146,10 +1208,9 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
           const filters: any = {
             transport_mode: transportMode,
             mode: "standard",
-            include_weekly_visual: true,
-            include_weekly_ledger: true,
-            include_monthly_visual: true,
-            include_monthly_ledger: true,
+            ...schedSections,
+            recipient_mode: schedRecipientMode,
+            use_fixed_dates: Boolean(schedStartDate && schedEndDate),
             max_data_rows: 100,
             report_level: "station",
             country: stObj?.country || "India",
@@ -1162,7 +1223,7 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
             method: "POST",
             headers: authHeaders,
             body: JSON.stringify({
-              recipient_email: schedRecipients,
+              recipient_email: emails.join(", "),
               frequency: schedFrequency,
               day_of_week: schedFrequency === "weekly" ? (schedWeeklyType === "month_cycle" ? null : schedDayOfWeek) : null,
               day_of_month: schedFrequency === "monthly"
@@ -1174,7 +1235,7 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
             }),
           });
           const data = await res.json();
-          if (data.status === "success") {
+          if (res.ok && data.status === "success") {
             createdCount++;
           } else {
             errorMessages.push(`Station ${stationCode}: ${data.detail || "Failed"}`);
@@ -1182,8 +1243,8 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
         }
 
         if (createdCount > 0) {
-          setSchedStatusMessage(`Successfully configured ${createdCount} station schedule${createdCount > 1 ? "s" : ""} (${stationsToProcess.join(", ")})!`);
-          setSchedStatusSuccess(true);
+          setSchedStatusMessage(`Saved ${createdCount} station schedule${createdCount > 1 ? "s" : ""}.${errorMessages.length ? ` Failed: ${errorMessages.join("; ")}` : ""}`);
+          setSchedStatusSuccess(errorMessages.length === 0);
           setSchedRecipients("");
           setSchedSelectedRecipientSources([]);
           setSchedStartDate("");
@@ -1256,13 +1317,7 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
       .filter((s) => selectedScheduleIds.includes(s.id))
       .map((s) => {
         const filters = s.filters || {};
-        const countryClean = cleanCountryName(filters.country);
-        let stationLabel = "Global (All)";
-        if (filters.branch_code) {
-          stationLabel = `Branch: ${filters.branch_code} (${countryClean || "Global"})`;
-        } else if (filters.company_code) {
-          stationLabel = `${countryClean} (${filters.company_code})`;
-        }
+        const stationLabel = resolveScheduleScope(filters, stationsList, branchesList).label;
 
         let triggerDesc = "";
         if (s.frequency === "weekly") {
@@ -1516,8 +1571,6 @@ ORDER BY vt.ETD DESC, vs.Branch, ROUND(SUM(vs.Revenue_USD), 2) DESC;`, transport
   const [monthlyBranch, setMonthlyBranch] = useState("BLR");
   const [monthlyStation, setMonthlyStation] = useState("IND");
 
-  const [schedReportLevel, setSchedReportLevel] = useState<"station" | "branch">("station");
-  const [schedBranch, setSchedBranch] = useState("BLR");
 
   // --- SQL SANDBOX CONSOLE STATES ---
   // Weekly SQL States
@@ -4931,13 +4984,13 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
           {/* ── EMAIL SCHEDULING SECTION ── */}
           {activeSection === "email-scheduling" && (
-            <div className="w-full px-4 sm:px-6 lg:px-8 py-8 space-y-6 animate-in fade-in-0 duration-200">
+            <div data-email-scheduling className="w-full px-4 sm:px-6 lg:px-8 py-8 space-y-6 animate-in fade-in-0 duration-200">
 
               {/* Email Scheduling Header */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4 mb-4">
                 <div>
                   <div className="flex items-center gap-2.5 mb-1">
-                    <Clock className="w-5 h-5 text-violet-600" />
+                    <Clock className="w-5 h-5 text-blue-600" />
                     <h2 className="text-xl font-extrabold text-[#1A202C] tracking-tight">Email Scheduling</h2>
                   </div>
                   <p className="text-sm text-slate-400">{freightText("Automate and schedule periodic tonnage report dispatches.", transportMode)}</p>
@@ -4948,14 +5001,14 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
               <div className="flex border-b border-slate-200 mb-2">
                 <button
                   onClick={() => setSchedActiveTab("list")}
-                  className={`pb-2.5 px-4 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${schedActiveTab === "list" ? "border-violet-600 text-violet-600" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+                  className={`pb-2.5 px-4 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${schedActiveTab === "list" ? "border-blue-600 text-blue-600" : "border-transparent text-slate-400 hover:text-slate-600"}`}
                 >
                   <Clock className="w-3.5 h-3.5" />
                   Active Schedules
                 </button>
                 <button
                   onClick={() => setSchedActiveTab("create")}
-                  className={`pb-2.5 px-4 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${schedActiveTab === "create" ? "border-violet-600 text-violet-600" : "border-transparent text-slate-400 hover:text-slate-600"}`}
+                  className={`pb-2.5 px-4 font-bold text-xs border-b-2 transition-all flex items-center gap-1.5 ${schedActiveTab === "create" ? "border-blue-600 text-blue-600" : "border-transparent text-slate-400 hover:text-slate-600"}`}
                 >
                   <Plus className="w-3.5 h-3.5" />
                   Configure New Schedule
@@ -4966,10 +5019,10 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                 {/* ── LEFT COL: Configure New Schedule Form ── */}
                 {schedActiveTab === "create" && (
                   <div className="col-span-12">
-                    <div className="admin-card p-6 bg-white border border-slate-200 rounded-xl shadow-sm relative overflow-visible">
+                    <div data-schedule-config className="admin-card p-6 bg-white border border-slate-200 rounded-xl shadow-sm relative overflow-visible">
                       <div className="flex items-center gap-2.5 mb-5 pb-4 border-b border-[#EDF2F7]">
-                        <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center">
-                          <Plus className="w-4 h-4 text-violet-500" />
+                        <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
+                          <Plus className="w-4 h-4 text-blue-500" />
                         </div>
                         <div>
                           <h3 className="text-sm font-bold text-[#1A202C]">Configure New Schedule</h3>
@@ -4978,6 +5031,31 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                       </div>
 
                       <div className="space-y-4 text-xs">
+                        <div className="space-y-3 rounded-xl border border-blue-100 bg-[#f8fbff] p-3">
+                          <div className="flex gap-2" role="group" aria-label="Schedule recipients">
+                            {([['groups', 'Location groups'], ['person', 'One person']] as const).map(([mode, label]) => (
+                              <button key={mode} type="button" aria-pressed={schedRecipientMode === mode}
+                                onClick={() => {setSchedRecipientMode(mode); setSchedStatusMessage("");}}
+                                className={`rounded-lg border px-3 py-2 text-xs font-semibold ${schedRecipientMode === mode ? 'border-blue-200 bg-[#d3e3fd] text-[#174ea6]' : 'border-blue-100 bg-white text-slate-600'}`}>
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                          {schedRecipientMode === "person" && <div className="space-y-2">
+                            <label htmlFor={`schedule-person-${transportMode}`} className="block text-xs font-semibold text-slate-700">Recipient</label>
+                            <Input aria-label="Search schedule recipient" placeholder="Search recipients by name or email" value={schedPersonSearch} onChange={event => setSchedPersonSearch(event.target.value)} className="h-9 bg-white border-blue-100 text-xs" />
+                            <select id={`schedule-person-${transportMode}`} value={schedPersonEmail}
+                              onChange={event => setSchedPersonEmail(event.target.value)} className="w-full h-9 rounded-lg border border-blue-100 bg-white px-2 text-xs text-slate-700">
+                              <option value="">Select one recipient</option>
+                              {schedPersonEmail && !schedPeople.some(user => user.email.toLowerCase() === schedPersonEmail) && <option value={schedPersonEmail}>{schedPersonEmail} (reports disabled)</option>}
+                              {schedPeople.filter(user => user.email.toLowerCase() === schedPersonEmail || `${user.display_name} ${user.email}`.toLowerCase().includes(schedPersonSearch.toLowerCase())).map(user => (
+                                <option key={user.id} value={user.email.toLowerCase()}>{user.display_name || user.email} · {user.email}</option>
+                              ))}
+                            </select>
+                            {schedPersonEmail && !schedPeople.some(user => user.email.toLowerCase() === schedPersonEmail) && <p className="text-xs text-amber-700">This recipient has {transportMode} reports turned off in the directory. Enable their freight preference to select them.</p>}
+                            <p className="text-[11px] text-slate-500">Only the selected person receives this schedule. Choose their report scope and timing below.</p>
+                          </div>}
+                        </div>
                         {/* Report Level: Stationwise vs Branchwise */}
                         <div>
                           <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Report Level</label>
@@ -4985,16 +5063,18 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             <button
                               type="button"
                               onClick={() => setSchedReportLevel("station")}
+                              aria-pressed={schedReportLevel === "station"}
                               className={`flex-1 py-1.5 rounded-lg border text-center font-bold text-xs transition-colors ${schedReportLevel === "station" ? "bg-[#3182CE]/10 border-[#3182CE] text-[#3182CE]" : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"}`}
                             >
-                              🏢 Stationwise
+                               Stationwise
                             </button>
                             <button
                               type="button"
                               onClick={() => setSchedReportLevel("branch")}
-                              className={`flex-1 py-1.5 rounded-lg border text-center font-bold text-xs transition-colors ${schedReportLevel === "branch" ? "bg-purple-50 border-purple-300 text-purple-700" : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"}`}
+                              aria-pressed={schedReportLevel === "branch"}
+                              className={`flex-1 py-1.5 rounded-lg border text-center font-bold text-xs transition-colors ${schedReportLevel === "branch" ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"}`}
                             >
-                              📍 Branchwise
+                               Branchwise
                             </button>
                           </div>
                         </div>
@@ -5010,7 +5090,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 <button
                                   type="button"
                                   onClick={() => setSchedSelectedBranches(branchesList.map(b => b.code))}
-                                  className="text-[9.5px] font-bold text-purple-600 hover:text-purple-800"
+                                  className="text-[9.5px] font-bold text-blue-600 hover:text-blue-800"
                                 >
                                   Select All
                                 </button>
@@ -5028,15 +5108,16 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             <div className="relative">
                               <button
                                 type="button"
+                                aria-label="Target branches"
                                 onClick={() => setIsSchedBranchDropdownOpen(!isSchedBranchDropdownOpen)}
-                                className="w-full min-h-[36px] px-3 py-1.5 bg-slate-50 border border-slate-200 hover:border-purple-300 rounded-lg text-slate-700 text-xs font-semibold flex items-center justify-between transition-colors text-left"
+                                className="w-full min-h-[36px] px-3 py-1.5 bg-slate-50 border border-slate-200 hover:border-blue-300 rounded-lg text-slate-700 text-xs font-semibold flex items-center justify-between transition-colors text-left"
                               >
                                 <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="text-purple-600">📍</span>
+                                  <span className="text-blue-600"></span>
                                   {schedSelectedBranches.length === 0 ? (
                                     <span className="text-slate-400 italic">No branch selected</span>
                                   ) : schedSelectedBranches.length === branchesList.length ? (
-                                    <span className="font-bold text-purple-700">All Branches ({branchesList.length})</span>
+                                    <span className="font-bold text-blue-700">All Branches ({branchesList.length})</span>
                                   ) : (
                                     <span className="font-semibold text-slate-700">
                                       {schedSelectedBranches.length} Branch{schedSelectedBranches.length > 1 ? "es" : ""}: {schedSelectedBranches.join(", ")}
@@ -5047,7 +5128,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               </button>
 
                               {isSchedBranchDropdownOpen && (
-                                <div className="absolute left-0 top-full mt-1.5 w-full bg-white border border-purple-200 rounded-xl shadow-xl z-50 p-2.5 text-slate-800 animate-in fade-in-0 duration-150 space-y-2">
+                                <div className="absolute left-0 top-full mt-1.5 w-full bg-white border border-blue-200 rounded-xl shadow-xl z-50 p-2.5 text-slate-800 animate-in fade-in-0 duration-150 space-y-2">
                                   <Input
                                     type="text"
                                     placeholder="Search branches..."
@@ -5068,14 +5149,14 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                                 prev.includes(br.code) ? prev.filter(c => c !== br.code) : [...prev, br.code]
                                               );
                                             }}
-                                            className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${isChecked ? "bg-purple-50 text-purple-900 font-bold" : "hover:bg-slate-50 text-slate-700"}`}
+                                            className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${isChecked ? "bg-blue-50 text-blue-900 font-bold" : "hover:bg-slate-50 text-slate-700"}`}
                                           >
                                             <div className="flex items-center gap-2">
                                               <input
                                                 type="checkbox"
                                                 checked={isChecked}
                                                 onChange={() => { }}
-                                                className="w-3.5 h-3.5 rounded border-slate-300 text-purple-600 focus:ring-purple-500 pointer-events-none"
+                                                className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 pointer-events-none"
                                               />
                                               <span>{br.name}</span>
                                             </div>
@@ -5088,7 +5169,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                     <button
                                       type="button"
                                       onClick={() => setIsSchedBranchDropdownOpen(false)}
-                                      className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white font-bold text-[10px] rounded-md"
+                                      className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] rounded-md"
                                     >
                                       Done
                                     </button>
@@ -5107,7 +5188,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 <button
                                   type="button"
                                   onClick={() => setSchedSelectedStations(stationsList.map(s => s.code))}
-                                  className="text-[9.5px] font-bold text-violet-600 hover:text-violet-800"
+                                  className="text-[9.5px] font-bold text-blue-600 hover:text-blue-800"
                                 >
                                   Select All
                                 </button>
@@ -5126,14 +5207,15 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               <button
                                 type="button"
                                 onClick={() => setIsSchedStationDropdownOpen(!isSchedStationDropdownOpen)}
-                                className="w-full min-h-[36px] px-3 py-1.5 bg-slate-50 border border-slate-200 hover:border-violet-300 rounded-lg text-slate-700 text-xs font-semibold flex items-center justify-between transition-colors text-left"
+                                aria-label="Target stations"
+                                className="w-full min-h-[36px] px-3 py-1.5 bg-slate-50 border border-slate-200 hover:border-blue-300 rounded-lg text-slate-700 text-xs font-semibold flex items-center justify-between transition-colors text-left"
                               >
                                 <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="text-violet-600">🏢</span>
+                                  <span className="text-blue-600"></span>
                                   {schedSelectedStations.length === 0 ? (
                                     <span className="text-slate-400 italic">No station selected</span>
                                   ) : schedSelectedStations.length === stationsList.length ? (
-                                    <span className="font-bold text-violet-700">All Stations Selected ({stationsList.length})</span>
+                                    <span className="font-bold text-blue-700">All Stations Selected ({stationsList.length})</span>
                                   ) : (
                                     <span className="font-semibold text-slate-700">
                                       {schedSelectedStations.length} Station{schedSelectedStations.length > 1 ? "s" : ""}: {schedSelectedStations.join(", ")}
@@ -5144,14 +5226,14 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               </button>
 
                               {isSchedStationDropdownOpen && (
-                                <div className="absolute left-0 top-full mt-1.5 w-full bg-white border border-violet-200 rounded-xl shadow-xl z-50 p-2.5 text-slate-800 animate-in fade-in-0 duration-150 space-y-2">
+                                <div className="absolute left-0 top-full mt-1.5 w-full bg-white border border-blue-200 rounded-xl shadow-xl z-50 p-2.5 text-slate-800 animate-in fade-in-0 duration-150 space-y-2">
                                   <div className="flex items-center justify-between px-1 pb-1 border-b border-slate-100">
                                     <span className="text-[10px] font-bold text-slate-400 uppercase">Quick Actions</span>
                                     <div className="flex gap-2">
                                       <button
                                         type="button"
                                         onClick={() => setSchedSelectedStations(stationsList.map(s => s.code))}
-                                        className="text-[9.5px] font-bold text-violet-600 hover:text-violet-800"
+                                        className="text-[9.5px] font-bold text-blue-600 hover:text-blue-800"
                                       >
                                         Select All
                                       </button>
@@ -5183,18 +5265,18 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                           setSchedSelectedStations(stationsList.map(s => s.code));
                                         }
                                       }}
-                                      className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${schedSelectedStations.length === stationsList.length && stationsList.length > 0 ? "bg-violet-50 text-violet-900 font-bold" : "hover:bg-slate-50 text-slate-700"}`}
+                                      className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${schedSelectedStations.length === stationsList.length && stationsList.length > 0 ? "bg-blue-50 text-blue-900 font-bold" : "hover:bg-slate-50 text-slate-700"}`}
                                     >
                                       <div className="flex items-center gap-2">
                                         <input
                                           type="checkbox"
                                           checked={schedSelectedStations.length === stationsList.length && stationsList.length > 0}
                                           onChange={() => { }}
-                                          className="w-3.5 h-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 pointer-events-none"
+                                          className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 pointer-events-none"
                                         />
-                                        <span>🏢 Select All Stations ({stationsList.length})</span>
+                                        <span> Select All Stations ({stationsList.length})</span>
                                       </div>
-                                      <Badge variant="outline" className="text-[9px] border-violet-200 text-violet-700 bg-violet-50">All</Badge>
+                                      <Badge variant="outline" className="text-[9px] border-blue-200 text-blue-700 bg-blue-50">All</Badge>
                                     </div>
 
                                     <div className="border-t border-slate-100 my-1" />
@@ -5212,14 +5294,14 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                                 prev.includes(st.code) ? prev.filter(c => c !== st.code) : [...prev, st.code]
                                               );
                                             }}
-                                            className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${isChecked ? "bg-violet-50 text-violet-900 font-bold" : "hover:bg-slate-50 text-slate-700"}`}
+                                            className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${isChecked ? "bg-blue-50 text-blue-900 font-bold" : "hover:bg-slate-50 text-slate-700"}`}
                                           >
                                             <div className="flex items-center gap-2">
                                               <input
                                                 type="checkbox"
                                                 checked={isChecked}
                                                 onChange={() => { }}
-                                                className="w-3.5 h-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 pointer-events-none"
+                                                className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 pointer-events-none"
                                               />
                                               <span>{st.name}</span>
                                             </div>
@@ -5232,7 +5314,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                     <button
                                       type="button"
                                       onClick={() => setIsSchedStationDropdownOpen(false)}
-                                      className="px-3 py-1 bg-violet-600 hover:bg-violet-700 text-white font-bold text-[10px] rounded-md"
+                                      className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] rounded-md"
                                     >
                                       Done
                                     </button>
@@ -5252,7 +5334,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 key={freq}
                                 type="button"
                                 onClick={() => setSchedFrequency(freq as any)}
-                                className={`flex-1 py-1.5 rounded-lg border text-center font-bold capitalize transition-colors ${schedFrequency === freq ? "bg-violet-50 border-violet-200 text-violet-800" : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"}`}
+                                className={`flex-1 py-1.5 rounded-lg border text-center font-bold capitalize transition-colors ${schedFrequency === freq ? "bg-blue-50 border-blue-200 text-blue-800" : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"}`}
                               >
                                 {freq}
                               </button>
@@ -5268,14 +5350,14 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               <button
                                 type="button"
                                 onClick={() => setSchedWeeklyType("day_of_week")}
-                                className={`flex-1 py-1 px-2 rounded border text-xs font-semibold transition-colors ${schedWeeklyType === "day_of_week" ? "bg-violet-100 border-violet-300 text-violet-800" : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"}`}
+                                className={`flex-1 py-1 px-2 rounded border text-xs font-semibold transition-colors ${schedWeeklyType === "day_of_week" ? "bg-blue-100 border-blue-300 text-blue-800" : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"}`}
                               >
                                 Day of Week (Mon–Sun)
                               </button>
                               <button
                                 type="button"
                                 onClick={() => setSchedWeeklyType("month_cycle")}
-                                className={`flex-1 py-1 px-2 rounded border text-xs font-semibold transition-colors ${schedWeeklyType === "month_cycle" ? "bg-violet-100 border-violet-300 text-violet-800" : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"}`}
+                                className={`flex-1 py-1 px-2 rounded border text-xs font-semibold transition-colors ${schedWeeklyType === "month_cycle" ? "bg-blue-100 border-blue-300 text-blue-800" : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"}`}
                               >
                                 Month Cycle (8th, 15th, 22nd)
                               </button>
@@ -5286,8 +5368,9 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Day of Week</label>
                                 <select
                                   value={schedDayOfWeek}
+                                  aria-label="Schedule day of week"
                                   onChange={(e) => setSchedDayOfWeek(parseInt(e.target.value))}
-                                  className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500 text-xs"
+                                  className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 text-xs"
                                 >
                                   <option value={0}>Monday</option>
                                   <option value={1}>Tuesday</option>
@@ -5303,15 +5386,16 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Select Month Cycle Day</label>
                                 <select
                                   value={schedWeeklyMonthCycleDay}
+                                  aria-label="Schedule month cycle day"
                                   onChange={(e) => setSchedWeeklyMonthCycleDay(parseInt(e.target.value))}
-                                  className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500 text-xs"
+                                  className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 text-xs"
                                 >
                                   <option value={8}>8th of every month (1st–7th day cumulative weekly data: 7 days)</option>
                                   <option value={15}>15th of every month (1st–14th day cumulative weekly data: 14 days)</option>
                                   <option value={22}>22nd of every month (1st–21st day cumulative weekly data: 21 days)</option>
                                 </select>
-                                <p className="text-[10px] text-slate-500 mt-1.5 flex items-start gap-1.5 bg-violet-50/70 text-violet-800 p-2 rounded-md border border-violet-100 font-medium">
-                                  <span className="text-xs shrink-0">💡</span>
+                                <p className="text-[10px] text-slate-500 mt-1.5 flex items-start gap-1.5 bg-blue-50/70 text-blue-800 p-2 rounded-md border border-blue-100 font-medium">
+                                  <span className="text-xs shrink-0"></span>
                                   <span>
                                     {schedWeeklyMonthCycleDay === 8 && "Runs on the 8th: Sends a Weekly Report with Day-by-Day Stack covering the 1st through 7th (7 days)."}
                                     {schedWeeklyMonthCycleDay === 15 && "Runs on the 15th: Sends a Weekly Report with Day-by-Day Stack covering the 1st through 14th (14 days cumulative)."}
@@ -5327,14 +5411,15 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                           <div>
                             <div className="flex items-center justify-between mb-1">
                               <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Day of Month</label>
-                              <span className="text-[9.5px] font-bold text-violet-600">
+                              <span className="text-[9.5px] font-bold text-blue-600">
                                 {schedDayOfMonth === 1 ? "Whole previous month report" : `1st – ${getOrdinal(schedDayOfMonth - 1)} completed days`}
                               </span>
                             </div>
                             <select
                               value={schedDayOfMonth}
+                              aria-label="Schedule day of month"
                               onChange={(e) => setSchedDayOfMonth(parseInt(e.target.value))}
-                              className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500 text-xs"
+                              className="w-full h-8 px-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 text-xs"
                             >
                               {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => (
                                 <option key={day} value={day}>
@@ -5342,8 +5427,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 </option>
                               ))}
                             </select>
-                            <p className="text-[10px] text-slate-500 mt-1.5 flex items-start gap-1.5 bg-violet-50/70 text-violet-800 p-2 rounded-md border border-violet-100 font-medium">
-                              <span className="text-xs shrink-0">💡</span>
+                            <p className="text-[10px] text-slate-500 mt-1.5 flex items-start gap-1.5 bg-blue-50/70 text-blue-800 p-2 rounded-md border border-blue-100 font-medium">
+                              <span className="text-xs shrink-0"></span>
                               <span>
                                 {schedDayOfMonth === 1
                                   ? "Configured for the 1st: Sends the Monthly Report covering the full previous calendar month (e.g. Aug 1st to Aug 31st when sent on Sep 1st) with day-by-day data."
@@ -5354,10 +5439,21 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                         )}
 
                         {/* Time */}
+                        <fieldset className="rounded-xl border border-blue-100 bg-[#f8fbff] p-3">
+                          <legend className="px-1 text-xs font-semibold text-slate-700">Report sections</legend>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {([['include_weekly_visual', 'Weekly charts'], ['include_weekly_ledger', 'Weekly ledger'], ['include_monthly_visual', 'Monthly charts'], ['include_monthly_ledger', 'Monthly ledger']] as const).map(([key, label]) => (
+                              <label key={key} className="flex items-center gap-2 text-xs text-slate-700">
+                                <input type="checkbox" checked={schedSections[key]} onChange={event => setSchedSections(previous => ({...previous, [key]: event.target.checked}))} />{label}
+                              </label>
+                            ))}
+                          </div>
+                        </fieldset>
                         <div>
-                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Send Time (24h Local)</label>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Send Time (24h · {schedulerTimezone})</label>
                           <Input
                             type="time"
+                            aria-label="Schedule send time"
                             value={schedTime}
                             onChange={(e) => setSchedTime(e.target.value)}
                             className="h-8 bg-slate-50 border-[#E2E8F0] rounded-lg text-slate-700 [color-scheme:light] font-semibold"
@@ -5375,6 +5471,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               <label className="block text-[9px] font-bold text-slate-450 uppercase tracking-wider mb-1">Start Date</label>
                               <Input
                                 type="date"
+                                aria-label="Schedule start date"
                                 value={schedStartDate}
                                 onChange={(e) => setSchedStartDate(e.target.value)}
                                 className="h-8 text-xs bg-white border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
@@ -5384,6 +5481,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               <label className="block text-[9px] font-bold text-slate-455 uppercase tracking-wider mb-1">End Date</label>
                               <Input
                                 type="date"
+                                aria-label="Schedule end date"
                                 value={schedEndDate}
                                 onChange={(e) => setSchedEndDate(e.target.value)}
                                 className="h-8 text-xs bg-white border-[#E2E8F0] rounded-md text-slate-700 [color-scheme:light]"
@@ -5393,19 +5491,19 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                         </div>
 
                         {/* Multiple Recipients Selection from Stations & Branches */}
-                        <div className="space-y-2 p-3 bg-slate-50/80 border border-slate-200 rounded-xl">
+                        {schedRecipientMode === "groups" && <div className="space-y-2 p-3 bg-slate-50/80 border border-slate-200 rounded-xl">
                           <div className="flex items-center justify-between flex-wrap gap-2">
                             <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                              <Users className="w-3.5 h-3.5 text-violet-600" />
+                              <Users className="w-3.5 h-3.5 text-blue-600" />
                               Select Stations / Branches to Load Recipients ({schedSelectedRecipientSources.length} selected)
                             </label>
                             <button
                               type="button"
                               onClick={handleLoadRecipientsForSelectedTargets}
-                              className="text-[9.5px] font-bold text-violet-600 hover:text-violet-800 flex items-center gap-1 bg-violet-50 px-2 py-0.5 rounded border border-violet-200"
+                              className="text-[9.5px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 bg-blue-50 px-2 py-0.5 rounded border border-blue-200"
                               title="Load recipients matching the currently selected Target stations or branches above"
                             >
-                              ⚡ Match Target Selection
+                               Match Target Selection
                             </button>
                           </div>
 
@@ -5417,7 +5515,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                   key={cat}
                                   type="button"
                                   onClick={() => setSchedRecipientSourceCategory(cat)}
-                                  className={`px-2 py-0.5 rounded text-[10px] font-bold capitalize transition-colors ${schedRecipientSourceCategory === cat ? "bg-violet-600 text-white shadow-xs" : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"}`}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold capitalize transition-colors ${schedRecipientSourceCategory === cat ? "bg-blue-600 text-white shadow-xs" : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"}`}
                                 >
                                   {cat === "all" ? "All Sources" : cat === "station" ? `Stations (${stationsList.length})` : `Branches (${branchesList.length})`}
                                 </button>
@@ -5428,7 +5526,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               <button
                                 type="button"
                                 onClick={handleSelectAllRecipientStations}
-                                className="text-[9.5px] font-bold text-violet-600 hover:text-violet-800"
+                                className="text-[9.5px] font-bold text-blue-600 hover:text-blue-800"
                               >
                                 + All Stations
                               </button>
@@ -5436,7 +5534,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               <button
                                 type="button"
                                 onClick={handleSelectAllRecipientBranches}
-                                className="text-[9.5px] font-bold text-purple-600 hover:text-purple-800"
+                                className="text-[9.5px] font-bold text-blue-600 hover:text-blue-800"
                               >
                                 + All Branches
                               </button>
@@ -5474,20 +5572,20 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                       <div
                                         key={s.code}
                                         onClick={() => handleToggleRecipientSource(s.code)}
-                                        className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${isChecked ? "bg-violet-50 text-violet-900 font-bold border border-violet-200" : "hover:bg-slate-50 text-slate-700 border border-transparent"}`}
+                                        className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${isChecked ? "bg-blue-50 text-blue-900 font-bold border border-blue-200" : "hover:bg-slate-50 text-slate-700 border border-transparent"}`}
                                       >
                                         <div className="flex items-center gap-2">
                                           <input
                                             type="checkbox"
                                             checked={isChecked}
                                             onChange={() => { }}
-                                            className="w-3.5 h-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 pointer-events-none"
+                                            className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 pointer-events-none"
                                           />
-                                          <span>🏢 {s.name}</span>
+                                          <span> {s.name}</span>
                                         </div>
                                         <div className="flex items-center gap-1.5">
                                           <Badge variant="outline" className="text-[9px] border-slate-200 text-slate-400">{s.code}</Badge>
-                                          <Badge variant="outline" className={`text-[9px] ${count > 0 ? "border-violet-200 text-violet-700 bg-violet-50 font-bold" : "border-slate-200 text-slate-400 font-normal"}`}>
+                                          <Badge variant="outline" className={`text-[9px] ${count > 0 ? "border-blue-200 text-blue-700 bg-blue-50 font-bold" : "border-slate-200 text-slate-400 font-normal"}`}>
                                             {count} users
                                           </Badge>
                                         </div>
@@ -5498,16 +5596,16 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 {/* Corporate / OTHER */}
                                 <div
                                   onClick={() => handleToggleRecipientSource("OTHER")}
-                                  className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${schedSelectedRecipientSources.includes("OTHER") ? "bg-violet-50 text-violet-900 font-bold border border-violet-200" : "hover:bg-slate-50 text-slate-700 border border-transparent"}`}
+                                  className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${schedSelectedRecipientSources.includes("OTHER") ? "bg-blue-50 text-blue-900 font-bold border border-blue-200" : "hover:bg-slate-50 text-slate-700 border border-transparent"}`}
                                 >
                                   <div className="flex items-center gap-2">
                                     <input
                                       type="checkbox"
                                       checked={schedSelectedRecipientSources.includes("OTHER")}
                                       onChange={() => { }}
-                                      className="w-3.5 h-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 pointer-events-none"
+                                      className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 pointer-events-none"
                                     />
-                                    <span>🏢 Corporate / OTHER</span>
+                                    <span> Corporate / OTHER</span>
                                   </div>
                                   <Badge variant="outline" className="text-[9px] border-slate-200 text-slate-500">
                                     {(stationSelectedEmails["OTHER"] || []).length} users
@@ -5529,20 +5627,20 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                       <div
                                         key={b.code}
                                         onClick={() => handleToggleRecipientSource(b.code)}
-                                        className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${isChecked ? "bg-purple-50 text-purple-900 font-bold border border-purple-200" : "hover:bg-slate-50 text-slate-700 border border-transparent"}`}
+                                        className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${isChecked ? "bg-blue-50 text-blue-900 font-bold border border-blue-200" : "hover:bg-slate-50 text-slate-700 border border-transparent"}`}
                                       >
                                         <div className="flex items-center gap-2">
                                           <input
                                             type="checkbox"
                                             checked={isChecked}
                                             onChange={() => { }}
-                                            className="w-3.5 h-3.5 rounded border-slate-300 text-purple-600 focus:ring-purple-500 pointer-events-none"
+                                            className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 pointer-events-none"
                                           />
-                                          <span>📍 {b.name}</span>
+                                          <span> {b.name}</span>
                                         </div>
                                         <div className="flex items-center gap-1.5">
                                           <Badge variant="outline" className="text-[9px] border-slate-200 text-slate-400">{b.code}</Badge>
-                                          <Badge variant="outline" className={`text-[9px] ${count > 0 ? "border-purple-200 text-purple-700 bg-purple-50 font-bold" : "border-slate-200 text-slate-400 font-normal"}`}>
+                                          <Badge variant="outline" className={`text-[9px] ${count > 0 ? "border-blue-200 text-blue-700 bg-blue-50 font-bold" : "border-slate-200 text-slate-400 font-normal"}`}>
                                             {count} users
                                           </Badge>
                                         </div>
@@ -5552,19 +5650,20 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               </div>
                             )}
                           </div>
-                        </div>
+                        </div>}
 
                         {/* Visual Loaded Recipients List */}
-                        {schedRecipients.split(",").map(r => r.trim()).filter(Boolean).length > 0 && (
+                        {scheduleRecipients.split(",").map(r => r.trim()).filter(Boolean).length > 0 && (
                           <div className="space-y-1.5 mt-2">
                             <div className="flex items-center justify-between">
                               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                                Loaded Recipients ({schedRecipients.split(",").map(r => r.trim()).filter(Boolean).length} emails)
+                                Selected Recipients ({scheduleRecipients.split(",").map(r => r.trim()).filter(Boolean).length} emails)
                               </p>
                               <button
                                 type="button"
                                 onClick={() => {
                                   setSchedRecipients("");
+                                  setSchedPersonEmail("");
                                   setSchedSelectedRecipientSources([]);
                                 }}
                                 className="text-[9.5px] font-bold text-rose-500 hover:text-rose-700"
@@ -5573,7 +5672,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                               </button>
                             </div>
                             <div className="flex flex-wrap gap-1 p-2 border border-dashed border-slate-200 rounded-lg bg-slate-50 max-h-32 overflow-y-auto shadow-inner">
-                              {schedRecipients
+                              {scheduleRecipients
                                 .split(",")
                                 .map(r => r.trim())
                                 .filter(Boolean)
@@ -5586,11 +5685,12 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                     <X
                                       className="w-2.5 h-2.5 text-slate-400 hover:text-slate-650 cursor-pointer shrink-0"
                                       onClick={() => {
-                                        const remaining = schedRecipients
+                                        const remaining = scheduleRecipients
                                           .split(",")
                                           .map(r => r.trim())
                                           .filter(x => x && x !== email);
-                                        setSchedRecipients(remaining.join(", "));
+                                        if (schedRecipientMode === "person") setSchedPersonEmail("");
+                                        else setSchedRecipients(remaining.join(", "));
                                       }}
                                     />
                                   </Badge>
@@ -5603,6 +5703,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                         {schedStatusMessage && (
                           <div className={`p-2 rounded-lg text-[10px] font-bold border ${schedStatusSuccess ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-rose-50 border-rose-200 text-rose-700"}`}>
                             {schedStatusMessage}
+                            {schedStatusSuccess && <button type="button" className="ml-3 underline" onClick={() => {setSchedActiveTab("list"); setScheduleScopeTab(schedReportLevel); setScheduleStationFilter(""); setScheduleBranchFilter(""); setSchedulePersonFilter(schedRecipientMode === "person" ? schedPersonEmail : "");}}>View schedules</button>}
                           </div>
                         )}
 
@@ -5610,7 +5711,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                         <Button
                           onClick={handleCreateSchedule}
                           disabled={schedIsCreating}
-                          className="w-full h-9 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow"
+                          className="w-full h-9 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow"
                         >
                           {schedIsCreating ? "Saving Schedule..." : "Save Schedule"}
                         </Button>
@@ -5621,21 +5722,36 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
                 {/* ── RIGHT COL: Active Schedules Table ── */}
                 {schedActiveTab === "list" && (() => {
+                  const scopeFor = (schedule: any) => resolveScheduleScope(schedule.filters || {}, stationsList, branchesList);
+                  const scheduleScopes = schedules.map(scopeFor);
+                  const stationCodes = Array.from(new Set([...stationsList.map(station => station.code), ...scheduleScopes.map(scope => scope.stationCode).filter(Boolean)])).sort();
+                  const branchCodes = Array.from(new Set([
+                    ...branchesList.filter(branch => !scheduleStationFilter || branch.company_code === scheduleStationFilter).map(branch => branch.code),
+                    ...scheduleScopes.filter(scope => scope.kind === "branch" && (!scheduleStationFilter || scope.stationCode === scheduleStationFilter)).map(scope => scope.code),
+                  ])).sort();
+                  const personEmails = Array.from(new Set(schedules.flatMap(schedule => String(schedule.recipient_email || "").split(",").map(email => email.trim().toLowerCase()).filter(Boolean)))).sort();
                   const filteredSchedules = schedules.filter((s) => {
+                    const scope = scopeFor(s);
+                    if (scheduleScopeTab !== "all" && scope.kind !== scheduleScopeTab) return false;
+                    if (scheduleStationFilter && scope.stationCode !== scheduleStationFilter) return false;
+                    if (scheduleBranchFilter && scope.code !== scheduleBranchFilter) return false;
+                    if (schedulePersonFilter && !String(s.recipient_email || "").split(",").some(email => email.trim().toLowerCase() === schedulePersonFilter)) return false;
                     // Search query match
                     const searchQ = scheduleSearch.toLowerCase().trim();
                     if (searchQ) {
                       const filters = s.filters || {};
                       const country = (filters.country || "").toLowerCase();
                       const company = (filters.company_code || "").toLowerCase();
-                      const branch = (filters.branch_code || "").toLowerCase();
+                      const branch = scope.label.toLowerCase();
                       const recipients = (s.recipient_email || "").toLowerCase();
+                      const recipientNames = dbUsers.filter(user => recipients.split(",").map((email: string) => email.trim()).includes(user.email.toLowerCase())).map(user => user.display_name || "").join(" ").toLowerCase();
                       const freq = (s.frequency || "").toLowerCase();
                       const time = (s.time_of_day || "").toLowerCase();
                       const matches = country.includes(searchQ) ||
                         company.includes(searchQ) ||
                         branch.includes(searchQ) ||
                         recipients.includes(searchQ) ||
+                        recipientNames.includes(searchQ) ||
                         freq.includes(searchQ) ||
                         time.includes(searchQ);
                       if (!matches) return false;
@@ -5658,21 +5774,21 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
                   return (
                     <div className="col-span-12">
-                      <div className="admin-card p-6 bg-white border border-slate-200 rounded-xl shadow-sm relative overflow-hidden flex flex-col justify-between min-h-[450px]">
+                      <div data-schedule-list className="admin-card p-6 bg-white border border-slate-200 rounded-xl shadow-sm relative overflow-hidden flex flex-col justify-between min-h-[450px]">
                         <div>
                           {/* Header Toolbar */}
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5 pb-4 border-b border-[#EDF2F7]">
                             <div className="flex items-center gap-2.5">
-                              <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center">
-                                <Clock className="w-4 h-4 text-violet-500" />
+                              <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
+                                <Clock className="w-4 h-4 text-blue-500" />
                               </div>
                               <div>
                                 <h3 className="text-sm font-bold text-[#1A202C]">Active Schedules</h3>
-                                <p className="text-[10.5px] text-slate-400">Currently configured periodic automated reports</p>
+                                <p className="text-[10.5px] text-slate-400">Configured reports · Send times in {schedulerTimezone}</p>
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
-                              <Badge variant="outline" className="border-violet-200 text-violet-750 bg-violet-50 text-[10px] font-bold">
+                              <Badge variant="outline" className="border-blue-200 text-blue-750 bg-blue-50 text-[10px] font-bold">
                                 {schedules.length} configured
                               </Badge>
                               <button
@@ -5685,11 +5801,40 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             </div>
                           </div>
 
+                          <div role="tablist" aria-label="Schedule report scopes" className="flex flex-wrap gap-1 rounded-xl border border-blue-100 bg-[#f8fbff] p-1 mb-3 w-fit">
+                            {([['station', 'Stations'], ['branch', 'Branches'], ['global', 'Global'], ['all', 'All schedules']] as const).map(([kind, label]) => (
+                              <button key={kind} type="button" role="tab" aria-selected={scheduleScopeTab === kind}
+                                onClick={() => {setScheduleScopeTab(kind); setScheduleStationFilter(""); setScheduleBranchFilter(""); setSelectedScheduleIds([]);}}
+                                className={`rounded-lg px-3 py-2 text-xs font-semibold ${scheduleScopeTab === kind ? 'bg-[#d3e3fd] text-[#174ea6]' : 'text-slate-600 hover:bg-blue-50'}`}>
+                                {label} <span className="ml-1 text-[10px]">{kind === "all" ? schedules.length : scheduleScopes.filter(scope => scope.kind === kind).length}</span>
+                              </button>
+                            ))}
+                          </div>
+                          <div className="flex flex-wrap gap-2 mb-3">
+                            {scheduleScopeTab !== "global" && <select aria-label="Schedule station" value={scheduleStationFilter}
+                              onChange={event => {setScheduleStationFilter(event.target.value); setScheduleBranchFilter(""); setSelectedScheduleIds([]);}}
+                              className="h-9 rounded-lg border border-blue-100 bg-white px-3 text-xs text-slate-700">
+                              <option value="">All stations</option>
+                              {stationCodes.map(code => <option key={code} value={code}>{stationsList.find(station => station.code === code)?.name || code} ({code})</option>)}
+                            </select>}
+                            {scheduleScopeTab === "branch" && <select aria-label="Schedule branch" value={scheduleBranchFilter}
+                              onChange={event => {setScheduleBranchFilter(event.target.value); setSelectedScheduleIds([]);}}
+                              className="h-9 rounded-lg border border-blue-100 bg-white px-3 text-xs text-slate-700">
+                              <option value="">All branches</option>
+                              {branchCodes.map(code => <option key={code} value={code}>{branchesList.find(branch => branch.code === code)?.name || code} ({code})</option>)}
+                            </select>}
+                            <select aria-label="Schedule recipient" value={schedulePersonFilter} onChange={event => {setSchedulePersonFilter(event.target.value); setSelectedScheduleIds([]);}}
+                              className="h-9 max-w-full rounded-lg border border-blue-100 bg-white px-3 text-xs text-slate-700">
+                              <option value="">All recipients</option>
+                              {personEmails.map(email => <option key={email} value={email}>{dbUsers.find(user => user.email.toLowerCase() === email)?.display_name || email} · {email}</option>)}
+                            </select>
+                          </div>
                           {/* Search, Filter & Quick Action Bar */}
                           <div className="flex flex-col sm:flex-row gap-3 mb-4">
                             <div className="relative flex-1">
                               <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                               <Input
+                                aria-label="Search schedules"
                                 placeholder="Search by country, station, branch, email..."
                                 value={scheduleSearch}
                                 onChange={(e) => setScheduleSearch(e.target.value)}
@@ -5698,9 +5843,10 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             </div>
 
                             <select
+                              aria-label="Schedule frequency filter"
                               value={scheduleFrequencyFilter}
                               onChange={(e) => setScheduleFrequencyFilter(e.target.value)}
-                              className="h-9 px-3 bg-white border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500 w-full sm:w-40"
+                              className="h-9 px-3 bg-white border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 w-full sm:w-40"
                             >
                               <option value="ALL">All Frequencies</option>
                               <option value="daily">Daily</option>
@@ -5709,9 +5855,10 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             </select>
 
                             <select
+                              aria-label="Schedule status filter"
                               value={scheduleStatusFilter}
                               onChange={(e) => setScheduleStatusFilter(e.target.value)}
-                              className="h-9 px-3 bg-white border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-violet-500 w-full sm:w-36"
+                              className="h-9 px-3 bg-white border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 w-full sm:w-36"
                             >
                               <option value="ALL">All Statuses</option>
                               <option value="ACTIVE">Active Only</option>
@@ -5771,8 +5918,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                 <p className="text-xs text-slate-500 font-bold">No schedules match your search filters.</p>
                                 <button
                                   type="button"
-                                  onClick={() => { setScheduleSearch(""); setScheduleFrequencyFilter("ALL"); setScheduleStatusFilter("ALL"); }}
-                                  className="text-[10.5px] text-violet-600 font-bold hover:underline mt-1"
+                                  onClick={() => { setScheduleSearch(""); setScheduleFrequencyFilter("ALL"); setScheduleStatusFilter("ALL"); setScheduleScopeTab("all"); setScheduleStationFilter(""); setScheduleBranchFilter(""); setSchedulePersonFilter(""); }}
+                                  className="text-[10.5px] text-blue-600 font-bold hover:underline mt-1"
                                 >
                                   Clear All Filters
                                 </button>
@@ -5796,7 +5943,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                             setSelectedScheduleIds(selectedScheduleIds.filter(id => !filteredIds.has(id)));
                                           }
                                         }}
-                                        className="w-3.5 h-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 cursor-pointer"
+                                        className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                                         title={isAllFilteredSelected ? "Deselect all" : "Select all visible"}
                                       />
                                     </th>
@@ -5812,15 +5959,10 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                   {filteredSchedules.map((s) => {
                                     const filters = s.filters || {};
                                     const countryClean = cleanCountryName(filters.country);
-                                    const isBranch = !!filters.branch_code;
-                                    const isStation = !!filters.company_code && !isBranch;
-
-                                    let stationLabel = "Global (All)";
-                                    if (isBranch) {
-                                      stationLabel = `Branch: ${filters.branch_code} (${countryClean || "Global"})`;
-                                    } else if (isStation) {
-                                      stationLabel = `${countryClean} (${filters.company_code})`;
-                                    }
+                                    const scope = scopeFor(s);
+                                    const isBranch = scope.kind === "branch";
+                                    const isStation = scope.kind === "station";
+                                    const stationLabel = scope.label;
 
                                     let triggerDesc = "";
                                     const isMonthCycleWeekly = (s.frequency === "weekly" && !!s.day_of_month) || (s.frequency === "monthly" && !!s.day_of_month && s.day_of_month > 1);
@@ -5841,7 +5983,8 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                     return (
                                       <tr
                                         key={s.id}
-                                        className={`transition-colors hover:bg-slate-50/70 ${isSelected ? "bg-violet-50/40 font-medium" : ""}`}
+                                        data-schedule-id={s.id}
+                                        className={`transition-colors hover:bg-slate-50/70 ${isSelected ? "bg-blue-50/40 font-medium" : ""}`}
                                       >
                                         {/* Row Checkbox */}
                                         <td className="p-3 text-center">
@@ -5853,7 +5996,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                                 prev.includes(s.id) ? prev.filter((id) => id !== s.id) : [...prev, s.id]
                                               );
                                             }}
-                                            className="w-3.5 h-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 cursor-pointer"
+                                            className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                                           />
                                         </td>
 
@@ -5861,16 +6004,16 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                         <td className="px-4 py-3">
                                           <div className="flex items-center gap-2">
                                             {isBranch ? (
-                                              <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200 text-[10px] font-bold shrink-0">
-                                                📍 {filters.branch_code}
+                                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-[10px] font-bold shrink-0">
+                                                {scope.code}
                                               </Badge>
                                             ) : isStation ? (
                                               <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-[10px] font-bold shrink-0">
-                                                🏢 {filters.company_code}
+                                                {scope.code}
                                               </Badge>
                                             ) : (
                                               <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-200 text-[10px] font-bold shrink-0">
-                                                🌐 Global
+                                                Global
                                               </Badge>
                                             )}
                                             <div>
@@ -5890,10 +6033,10 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                               className={`text-[9.5px] font-bold uppercase tracking-wider ${s.frequency === "daily"
                                                   ? "bg-sky-50 text-sky-700 border-sky-200"
                                                   : isMonthCycleWeekly
-                                                    ? "bg-violet-50 text-violet-700 border-violet-200"
+                                                    ? "bg-blue-50 text-blue-700 border-blue-200"
                                                     : s.frequency === "monthly"
                                                       ? "bg-amber-50 text-amber-700 border-amber-200"
-                                                      : "bg-violet-50 text-violet-700 border-violet-200"
+                                                      : "bg-blue-50 text-blue-700 border-blue-200"
                                                 }`}
                                             >
                                               {isMonthCycleWeekly ? "weekly" : s.frequency}
@@ -5904,14 +6047,14 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
                                         {/* Date Range */}
                                         <td className="px-4 py-3">
-                                          {filters.start_date && filters.end_date ? (
+                                          {filters.use_fixed_dates && filters.start_date && filters.end_date ? (
                                             <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200">
                                               <Calendar className="w-3 h-3 text-slate-500" />
                                               {filters.start_date} → {filters.end_date}
                                             </span>
                                           ) : (
                                             <span className="text-[10px] text-slate-400 font-medium italic">
-                                              Full Data Period
+                                              Calculated at each run
 
                                             </span>
                                           )}
@@ -5920,6 +6063,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                                         {/* Recipients */}
                                         <td className="px-4 py-3">
                                           <div className="space-y-1">
+                                            {filters.recipient_mode === "person" && <p className="text-[10px] font-semibold text-blue-700">Individual schedule</p>}
                                             <div className="flex items-center gap-1.5">
                                               <Badge className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-[9.5px] font-bold border border-slate-200 px-1.5 py-0 rounded">
                                                 <Users className="w-2.5 h-2.5 mr-1" />
@@ -6317,6 +6461,10 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
                                                 <span>Sea</span>
                                               </button>
+                                              <button type="button" onClick={() => handleScheduleForPerson(u, branch.code)} title="Schedule report"
+                                                className="p-1 rounded text-slate-500 hover:text-blue-700 hover:bg-white">
+                                                <Clock className="w-3 h-3" />
+                                              </button>
                                               <button
                                                 onClick={() => handleOpenEditRecipient(u)}
                                                 className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-white"
@@ -6493,6 +6641,10 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
 
                                       <td className="px-4 py-3 text-center">
                                         <div className="flex items-center justify-center gap-1">
+                                          <button type="button" onClick={() => handleScheduleForPerson(u, dbUserStationFilter !== "ALL" ? dbUserStationFilter : undefined)} title="Schedule report"
+                                            className="p-1 rounded hover:bg-[#f8fbff] text-slate-500 hover:text-blue-700 transition-colors">
+                                            <Clock className="w-3.5 h-3.5" />
+                                          </button>
                                           <button
                                             onClick={() => handleOpenEditRecipient(u)}
                                             className="p-1 rounded hover:bg-[#f8fbff] text-slate-400 hover:text-slate-600 transition-colors"
