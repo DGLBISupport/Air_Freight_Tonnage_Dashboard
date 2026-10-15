@@ -28,7 +28,7 @@ def build_cron_expression(
     time_of_day: str = "09:00",
 ) -> str:
     """
-    Converts a schedule config into a standard 5-field cron string (UTC).
+    Converts a schedule config into a 5-field cron string in the job's time zone.
 
     Day-of-week numbering differs between APScheduler and standard cron:
       APScheduler:    0 = Monday  …  6 = Sunday
@@ -198,7 +198,7 @@ def sync_schedule_to_cloud(config: dict) -> None:
     except ImportError:
         logger.warning(
             "google-cloud-scheduler is not installed. "
-            "Schedule was saved to SQLite but NOT registered in Cloud Scheduler."
+            "Schedule was saved to Supabase but NOT registered in Cloud Scheduler."
         )
     except Exception as exc:
         logger.error(

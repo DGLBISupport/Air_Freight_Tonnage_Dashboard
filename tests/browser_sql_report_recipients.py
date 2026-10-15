@@ -15,7 +15,7 @@ def main():
 
     def fixture(route):
         url = urlparse(route.request.url)
-        if url.hostname == "fixture.supabase.co" and url.path.endswith("/users"):
+        if url.hostname == "fixture.supabase.co" and url.path.endswith("/tonnage_users"):
             respond(route, [{"email": "jane.silva@example.test", "display_name": "Jane Silva"}]
                     if route.request.method == "GET" else [])
         elif url.path == "/api/org-users":

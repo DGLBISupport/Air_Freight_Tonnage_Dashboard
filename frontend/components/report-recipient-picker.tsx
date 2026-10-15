@@ -3,7 +3,7 @@
 import { useId, useState } from "react";
 import { Mail, Search, Send, X, RefreshCw } from "lucide-react";
 
-export type ReportRecipient = {email: string; name: string};
+export type ReportRecipient = {email: string; name: string; is_air?: boolean; is_sea?: boolean};
 export const isReportEmail = (email: string) => email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
 export function ReportRecipientPicker({people, recipient, onChange, onSend, loading, directoryError, canSend, sending, reportLabel}: {
@@ -57,7 +57,14 @@ export function ReportRecipientPicker({people, recipient, onChange, onSend, load
                 if (event.key === "Escape") {document.getElementById(id)?.focus(); setOpen(false);}
               }}
               className="block w-full text-left px-3 py-2 hover:bg-[#EBF8FF] focus:bg-[#EBF8FF] focus:outline-none border-b border-slate-100 last:border-b-0">
-              <span className="block text-xs font-semibold text-slate-800">{person.name}</span><span className="block text-[11px] text-slate-500">{person.email}</span>
+              <span className="block text-xs font-semibold text-slate-800 flex items-center justify-between">
+                <span>{person.name}</span>
+                <span className="flex items-center gap-1">
+                  {person.is_air && <span className="text-[9px] px-1.5 py-0.2 bg-blue-100 text-blue-700 rounded font-semibold">Air</span>}
+                  {person.is_sea && <span className="text-[9px] px-1.5 py-0.2 bg-teal-100 text-teal-700 rounded font-semibold">Sea</span>}
+                </span>
+              </span>
+              <span className="block text-[11px] text-slate-500">{person.email}</span>
             </button>)}
             {loading && <p role="status" className="px-3 py-2 text-xs text-slate-500">Loading users…</p>}
             {!matches.length && !loading && <p className="px-3 py-2 text-xs text-slate-500">No matching users. Enter an email address and select it.</p>}

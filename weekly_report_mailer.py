@@ -22,6 +22,16 @@ logging.basicConfig(
 load_dotenv(override=True)
 
 # --- HELPER: Calculate Report Dates ---
+def get_station_report_recipients(station, transport_mode="AIR"):
+    """Use saved Tonnage assignments when configured; empty does not mean default."""
+    from api import scheduler_db
+    if scheduler_db.SUPABASE_URL and (scheduler_db.SUPABASE_SERVICE_ROLE_KEY or scheduler_db.SUPABASE_KEY):
+        return scheduler_db.get_supabase_recipients(station["code"], is_branch=False, transport_mode=transport_mode)
+    env_key = station.get("env_var") or f"RECIPIENTS_{station['code']}"
+    configured = os.getenv(env_key) or os.getenv("RECIPIENT_EMAILS", "")
+    return [email.strip() for email in configured.split(",") if email.strip()]
+
+
 def get_report_dates():
     """Calculates report period dates:
     - If today is the 1st of the month (e.g. 2026-09-01): returns the full previous month (2026-08-01 to 2026-08-31).
@@ -287,7 +297,7 @@ if __name__ == "__main__":
         
     # 3. Define stations to process (dynamically from Supabase with fallback)
     try:
-        from api.scheduler_db import get_supabase_stations, get_supabase_recipients
+        from api.scheduler_db import get_supabase_stations
         STATIONS = get_supabase_stations()
     except Exception as e:
         logging.warning(f"Could not load dynamic stations from Supabase: {e}")
@@ -305,18 +315,12 @@ if __name__ == "__main__":
         mode_prefix = "Sea_" if transport_mode == "SEA" else ""
         pdf_file_path = f"outputs/{mode_prefix}Weekly_Tonnage_Report_{station['code']}.pdf"
         
-        # Get recipients for this station: check Supabase station_recipients table first, then env var
-        recipients = []
+        # A branch assignment never opts a user into the parent station report.
         try:
-            from api.scheduler_db import get_supabase_recipients
-            recipients = get_supabase_recipients(station["code"], is_branch=False)
-        except Exception:
-            pass
-            
-        if not recipients:
-            env_key = station.get("env_var") or f"RECIPIENTS_{station['code']}"
-            recipients_str = os.getenv(env_key) or os.getenv("RECIPIENT_EMAILS", "")
-            recipients = [r.strip() for r in recipients_str.split(",") if r.strip()]
+            recipients = get_station_report_recipients(station, transport_mode)
+        except Exception as error:
+            logging.error("Could not verify recipients for %s; skipping report: %s", station["code"], error)
+            continue
         
         if not recipients:
             logging.warning(f"No recipients configured for {station['name']}. Skipping.")

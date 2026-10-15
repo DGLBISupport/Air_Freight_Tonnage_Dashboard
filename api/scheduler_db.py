@@ -5,15 +5,18 @@ from typing import List, Dict, Optional
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+TONNAGE_USERS_TABLE = "tonnage_users"
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("Warning: SUPABASE_URL or SUPABASE_KEY environment variables are not set.")
 
 def get_headers() -> dict:
     """Returns the authentication headers for Supabase API requests."""
+    key = SUPABASE_SERVICE_ROLE_KEY or SUPABASE_KEY
     return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json"
     }
 
@@ -185,20 +188,23 @@ def get_supabase_branches() -> List[Dict]:
         print(f"Warning: Could not fetch branches from Supabase: {e}")
     return DEFAULT_BRANCHES_FALLBACK
 
-def get_supabase_recipients(code: str, is_branch: bool = False) -> List[str]:
-    """Fetches recipient email addresses for a station or branch from Supabase."""
-    if not SUPABASE_URL or not SUPABASE_KEY:
+def get_supabase_recipients(code: str, is_branch: bool = False, transport_mode: str = "AIR") -> List[str]:
+    """Match an explicit location code; a branch never implies its parent station."""
+    if not SUPABASE_URL or not (SUPABASE_SERVICE_ROLE_KEY or SUPABASE_KEY):
         return []
     headers = get_headers()
-    table = "branch_recipients" if is_branch else "station_recipients"
-    col = "branch_code" if is_branch else "station_code"
-    url = f"{SUPABASE_URL}/rest/v1/{table}?{col}=eq.{code}&select=email"
-    try:
-        resp = requests.get(url, headers=headers, timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            return [row["email"].strip() for row in data if row.get("email") and row["email"].strip()]
-    except Exception as e:
-        print(f"Warning: Could not fetch recipients for {code} from Supabase: {e}")
-    return []
+    mode_col = "is_sea" if str(transport_mode).upper() == "SEA" else "is_air"
+
+    url = f"{SUPABASE_URL}/rest/v1/{TONNAGE_USERS_TABLE}?{mode_col}=eq.true&select=email,station"
+    resp = requests.get(url, headers=headers, timeout=5)
+    resp.raise_for_status()
+    target = code.strip().upper()
+    recipients = set()
+    for user in resp.json():
+        email = (user.get("email") or "").strip().lower()
+        assignments = {value.strip().upper() for value in (user.get("station") or "").split(",") if value.strip()}
+        if email and (target in assignments or "GLOBAL" in assignments):
+            recipients.add(email)
+    # An empty result is authoritative; never restore older recipient lists.
+    return sorted(recipients)
 

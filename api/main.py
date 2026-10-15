@@ -6,6 +6,7 @@ if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 import uuid
+import secrets
 import requests
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +46,8 @@ from api.ledger_service import cleanup_report_files
 from api.email_service import send_pdf_via_graph
 from api.cloud_scheduler_service import sync_schedule_to_cloud, delete_cloud_scheduler_job
 from api.scheduler_db import (
+    TONNAGE_USERS_TABLE,
+    get_headers as get_supabase_headers,
     init_scheduler_db,
     save_schedule,
     get_all_schedules,
@@ -1478,11 +1481,12 @@ def get_report_dates_by_frequency(frequency: str, day_of_month: Optional[int] = 
 
 def execute_scheduled_report_job(schedule_id: str):
     """Generates and emails a scheduled report. Triggered by Google Cloud Scheduler via HTTP."""
+    import re
     print(f"Scheduler: Starting report execution for schedule {schedule_id}")
     config = get_schedule(schedule_id)
     if not config or not config.get("is_active"):
         print(f"Scheduler: Schedule {schedule_id} is inactive or does not exist. Aborting.")
-        return
+        return False
         
     recipient_email = config["recipient_email"]
     frequency = config["frequency"]
@@ -1532,7 +1536,6 @@ def execute_scheduled_report_job(schedule_id: str):
         mode = filters.get("mode", "standard")
         custom_sql = filters.get("custom_sql")
         if mode == "custom-sql" and custom_sql:
-            import re
             custom_sql = re.sub(r"ETD\s*>=\s*'[^']+'", f"ETD >= '{start_date}'", custom_sql, flags=re.IGNORECASE)
             custom_sql = re.sub(r"ETD\s*<=\s*'[^']+'", f"ETD <= '{end_date}'", custom_sql, flags=re.IGNORECASE)
             custom_sql = re.sub(r"ETD\s*<\s*DATEADD\(day,\s*1,\s*CAST\('[^']+'\s+AS\s+date\)\)",
@@ -1812,20 +1815,20 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                 attachment_name=attachment_name
             )
         print(f"Scheduler: Successfully sent report for schedule {schedule_id}")
+        return True
     except Exception as e:
         from api.email_service import log_email_transaction
         log_email_transaction(recipient_email, "SCHEDULED_JOB_ERROR", str(e))
         print(f"Scheduler: Job execution failed for schedule {schedule_id}: {str(e)}")
+        raise
     finally:
         cleanup_report_files(temp_pdf_path, temp_air_path, temp_sea_path)
 
 
 def _verify_scheduler_token(request_token: Optional[str]) -> bool:
-    """Verifies the X-Scheduler-Token header sent by Cloud Scheduler. Returns True if valid or if no secret is configured."""
+    """Accept a Cloud Scheduler request only when its configured secret matches."""
     secret = os.environ.get("SCHEDULER_SECRET_TOKEN", "")
-    if not secret:
-        return True  # No token configured — allow all calls
-    return request_token == secret
+    return bool(secret and request_token and secrets.compare_digest(request_token, secret))
 
 
 @app.on_event("startup")
@@ -1869,24 +1872,21 @@ def api_create_schedule(req: ScheduleCreateRequest, current_user: dict = Depends
         raise HTTPException(status_code=400, detail="time_of_day must be in 'HH:MM' 24-hour format")
 
     try:
-        # Resolve created_by ID from public.users to satisfy foreign key constraint
+        # Schedule creators belong to Tonnage's own user table, independently of NPS.
         created_by_id = None
         admin_email = current_user.get("email")
         if admin_email and SUPABASE_URL and SUPABASE_KEY:
             try:
-                db_headers = {
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}"
-                }
+                db_headers = get_supabase_headers()
                 user_lookup_resp = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/users?email=eq.{admin_email}&select=id",
+                    f"{SUPABASE_URL}/rest/v1/{TONNAGE_USERS_TABLE}?email=eq.{admin_email}&select=id",
                     headers=db_headers,
                     timeout=5
                 )
                 if user_lookup_resp.status_code == 200 and len(user_lookup_resp.json()) > 0:
                     created_by_id = user_lookup_resp.json()[0].get("id")
             except Exception as lookup_err:
-                print(f"Warning: Could not resolve admin email in public.users: {lookup_err}")
+                print(f"Warning: Could not resolve admin email in {TONNAGE_USERS_TABLE}: {lookup_err}")
 
         schedule_id = str(uuid.uuid4())
         save_schedule(
@@ -1965,15 +1965,16 @@ def api_run_schedule_manually(
     if not config:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    # When triggered by Cloud Scheduler, still check the schedule is active
-    if is_scheduler and not config.get("is_active"):
-        print(f"Cloud Scheduler: Schedule {schedule_id} is inactive. Skipping.")
+    if not config.get("is_active"):
+        print(f"Schedule {schedule_id} is inactive. Skipping.")
         return {"status": "skipped", "message": "Schedule is currently inactive."}
 
     try:
         # Run synchronously to prevent CPU throttling on Cloud Run
-        execute_scheduled_report_job(schedule_id)
-        return {"status": "success", "message": "Report generated and email successfully sent."}
+        executed = execute_scheduled_report_job(schedule_id)
+        if executed is False:
+            return {"status": "skipped", "message": "Schedule became inactive or was removed before execution."}
+        return {"status": "success", "message": "Report generated and email accepted for sending."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

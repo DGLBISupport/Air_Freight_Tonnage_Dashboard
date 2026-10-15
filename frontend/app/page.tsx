@@ -2,7 +2,7 @@
 
 import { freightEtdDate, freightIsoWeek, freightDayParts } from "@/lib/operational-date";
 
-import { useState, useEffect, useCallback, useRef, Fragment } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from "react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, Line, LabelList, ComposedChart
@@ -15,16 +15,20 @@ import {
   PanelLeftClose, PanelLeftOpen
 } from "lucide-react";
 
-import { Ship } from "lucide-react";
+import { Ship, Pencil } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectGroup, SelectItem,
   SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { createClient } from "@supabase/supabase-js";
+import { TONNAGE_USERS_TABLE } from "@/lib/tonnage-tables";
+import { classifyRecipientLocations } from "@/lib/recipient-locations";
+import { buildRecipientGroups, recipientAssignmentCodes, updateRecipientAssignment } from "@/lib/recipient-assignments";
 
 import { TransportMode, freightText, buildFreightQuery, formatFreightQuantity } from "@/lib/freight";
 import { SeaConsolReport } from "@/components/sea-consol-report";
@@ -99,6 +103,8 @@ interface BranchInfo {
   code: string;
   name: string;
   city?: string;
+  company_code?: string;
+  country?: string;
   isCustom?: boolean;
 }
 
@@ -122,6 +128,7 @@ const DEFAULT_BRANCH_OPTIONS: BranchInfo[] = [
   { code: "PNQ", name: "Pune (PNQ)", city: "Pune" },
   { code: "DEL", name: "Delhi (DEL)", city: "Delhi" },
   { code: "CCU", name: "Kolkata (CCU)", city: "Kolkata" },
+  { code: "COK", name: "Cochin (COK)", city: "Cochin" },
 ];
 
 const getStationForUser = (user: any, activeStations: StationInfo[] = DEFAULT_STATIONS) => {
@@ -620,9 +627,14 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
     setSqlRecipientUsersLoading(true);
     setSqlRecipientUsersError("");
     try {
-      const {data, error} = await client.from("users").select("email, display_name").order("display_name");
+      const {data, error} = await client.from(TONNAGE_USERS_TABLE).select("email, display_name, is_air, is_sea").order("display_name");
       if (error) throw error;
-      setSqlRecipientUsers((data || []).map((user: any) => ({email: user.email, name: user.display_name || user.email})));
+      setSqlRecipientUsers((data || []).map((user: any) => ({
+        email: user.email,
+        name: user.display_name || user.email,
+        is_air: user.is_air ?? true,
+        is_sea: user.is_sea ?? false,
+      })));
     } catch {
       setSqlRecipientUsersError("Saved users could not be loaded. You can still enter an email address.");
     } finally {
@@ -635,20 +647,8 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
     if (!supabaseClient) return;
     setDbUsersLoading(true);
     try {
-      // Purge dummy emails from Supabase users table if present
-      for (const dummyEmail of DUMMY_EMAILS) {
-        try {
-          await supabaseClient
-            .from("users")
-            .delete()
-            .ilike("email", dummyEmail);
-        } catch (e) {
-          // Silent catch
-        }
-      }
-
       const { data, error } = await supabaseClient
-        .from("users")
+        .from(TONNAGE_USERS_TABLE)
         .select("*")
         .order("created_at", { ascending: false });
       if (error) {
@@ -656,7 +656,11 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
       } else {
         const cleanUsers = (data || []).filter(
           (u: any) => !DUMMY_EMAILS.includes((u.email || "").toLowerCase().trim())
-        );
+        ).map((u: any) => ({
+          ...u,
+          is_air: u.is_air ?? true,
+          is_sea: u.is_sea ?? false,
+        }));
         setDbUsers(cleanUsers);
       }
     } catch (err) {
@@ -666,8 +670,126 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
     }
   }, [supabase]);
 
+  // --- SYSTEM USERS & RECIPIENTS STATE & HANDLERS ---
+  const [dbUserFreightFilter, setDbUserFreightFilter] = useState<"ALL" | "AIR" | "SEA">("ALL");
+  const [isAddRecipientModalOpen, setIsAddRecipientModalOpen] = useState(false);
+  const [editingRecipient, setEditingRecipient] = useState<any | null>(null);
+  const [recipientFormEmail, setRecipientFormEmail] = useState("");
+  const [recipientFormName, setRecipientFormName] = useState("");
+  const [recipientFormStation, setRecipientFormStation] = useState("Global");
+  const [recipientFormIsAir, setRecipientFormIsAir] = useState(true);
+  const [recipientFormIsSea, setRecipientFormIsSea] = useState(false);
+  const [recipientFormLoading, setRecipientFormLoading] = useState(false);
+  const [recipientFormError, setRecipientFormError] = useState("");
+
+  const handleToggleFreightMode = async (userId: string, mode: "is_air" | "is_sea", currentValue: boolean) => {
+    if (!supabase) return;
+    const nextVal = !currentValue;
+    setDbUsers(prev => prev.map(u => u.id === userId ? { ...u, [mode]: nextVal } : u));
+    try {
+      const { error } = await supabase
+        .from(TONNAGE_USERS_TABLE)
+        .update({ [mode]: nextVal })
+        .eq("id", userId);
+      if (error) throw error;
+    } catch (err: any) {
+      console.error("Failed to update user freight mode:", err);
+      setDbUsers(prev => prev.map(u => u.id === userId ? { ...u, [mode]: currentValue } : u));
+      alert(`Failed to update mode: ${err.message || "Unknown error"}`);
+    }
+  };
+
+  const handleOpenAddRecipient = (initialStation?: string) => {
+    setEditingRecipient(null);
+    setRecipientFormEmail("");
+    setRecipientFormName("");
+    setRecipientFormStation(initialStation || "Global");
+    setRecipientFormIsAir(transportMode === "AIR");
+    setRecipientFormIsSea(transportMode === "SEA");
+    setRecipientFormError("");
+    setIsAddRecipientModalOpen(true);
+  };
+
+  const handleOpenEditRecipient = (u: any) => {
+    setEditingRecipient(u);
+    setRecipientFormEmail(u.email || "");
+    setRecipientFormName(u.display_name || "");
+    setRecipientFormStation(u.station ?? "");
+    setRecipientFormIsAir(u.is_air ?? true);
+    setRecipientFormIsSea(u.is_sea ?? false);
+    setRecipientFormError("");
+    setIsAddRecipientModalOpen(true);
+  };
+
+  const handleSaveRecipient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supabase) return;
+    const email = recipientFormEmail.trim().toLowerCase();
+    if (!email || !isReportEmail(email)) {
+      setRecipientFormError("Please enter a valid email address.");
+      return;
+    }
+    if (!recipientFormIsAir && !recipientFormIsSea) {
+      setRecipientFormError("Please select at least one freight report mode (Air Freight or Sea Freight).");
+      return;
+    }
+    setRecipientFormLoading(true);
+    setRecipientFormError("");
+
+    try {
+      if (editingRecipient) {
+        const { error } = await supabase
+          .from(TONNAGE_USERS_TABLE)
+          .update({
+            display_name: recipientFormName.trim() || email.split("@")[0],
+            station: recipientFormStation.trim(),
+            is_air: recipientFormIsAir,
+            is_sea: recipientFormIsSea,
+          })
+          .eq("id", editingRecipient.id);
+        if (error) throw error;
+      } else {
+        const existing = dbUsers.find(u => (u.email || "").toLowerCase() === email);
+        if (existing) {
+          const { error } = await supabase
+            .from(TONNAGE_USERS_TABLE)
+            .update({
+              display_name: recipientFormName.trim() || existing.display_name || email.split("@")[0],
+              station: recipientFormStation.trim(),
+              is_air: recipientFormIsAir,
+              is_sea: recipientFormIsSea,
+            })
+            .eq("id", existing.id);
+          if (error) throw error;
+        } else {
+          const newId = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); });
+          const { error } = await supabase
+            .from(TONNAGE_USERS_TABLE)
+            .insert({
+              id: newId,
+              email: email,
+              display_name: recipientFormName.trim() || email.split("@")[0],
+              station: recipientFormStation.trim(),
+              is_air: recipientFormIsAir,
+              is_sea: recipientFormIsSea,
+            });
+          if (error) throw error;
+        }
+      }
+      setIsAddRecipientModalOpen(false);
+      fetchDbUsers(supabase);
+    } catch (err: any) {
+      setRecipientFormError(err.message || "Failed to save recipient.");
+    } finally {
+      setRecipientFormLoading(false);
+    }
+  };
+
   // --- DYNAMIC STATIONS, BRANCHES & RECIPIENTS FROM SUPABASE ---
   const [stationsLoading, setStationsLoading] = useState(false);
+  const [directoryStations, setDirectoryStations] = useState<StationInfo[]>([]);
+  const [directoryBranches, setDirectoryBranches] = useState<BranchInfo[]>([]);
+  const [directoryLocationError, setDirectoryLocationError] = useState("");
   const [stationsList, setStationsList] = useState<StationInfo[]>(() => {
     if (typeof window !== "undefined") {
       try {
@@ -706,6 +828,7 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
     const supabaseClient = client || supabase;
     if (!supabaseClient) return;
     setStationsLoading(true);
+    setDirectoryLocationError("");
     try {
       // 1. Fetch Stations Table
       const { data: dbStations, error: sErr } = await supabaseClient
@@ -714,18 +837,6 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
         .eq("is_active", true)
         .order("code", { ascending: true });
 
-      if (!sErr && dbStations && dbStations.length > 0) {
-        const formattedStations: StationInfo[] = dbStations.map((s: any) => ({
-          code: s.code,
-          name: s.name,
-          country: s.country || s.name,
-          envVar: s.env_var || `RECIPIENTS_${s.code}`,
-          matchCountries: Array.isArray(s.match_countries) ? s.match_countries : (s.country ? [s.country.toLowerCase()] : []),
-          isCustom: false,
-        }));
-        setStationsList(formattedStations);
-      }
-
       // 2. Fetch Branches Table
       const { data: dbBranches, error: bErr } = await supabaseClient
         .from("branches")
@@ -733,48 +844,28 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
         .eq("is_active", true)
         .order("name", { ascending: true });
 
-      if (!bErr && dbBranches && dbBranches.length > 0) {
-        const formattedBranches: BranchInfo[] = dbBranches.map((b: any) => ({
-          code: b.code,
-          name: b.name,
-          city: b.city || b.name,
+      if (!sErr && !bErr && Array.isArray(dbStations) && Array.isArray(dbBranches)) {
+        const locations = classifyRecipientLocations(dbStations, dbBranches);
+        const formattedStations: StationInfo[] = locations.stations.map(s => ({
+          code: s.code, name: s.name || s.code, country: s.country || s.name || s.code,
+          envVar: s.env_var || `RECIPIENTS_${s.code}`,
+          matchCountries: Array.isArray(s.match_countries) ? s.match_countries : (s.country ? [String(s.country).toLowerCase()] : []),
           isCustom: false,
         }));
+        const formattedBranches: BranchInfo[] = locations.branches.map(b => ({
+          code: b.code, name: b.name || b.code, city: b.city || b.name,
+          company_code: b.company_code, country: b.country, isCustom: false,
+        }));
+        setDirectoryStations(formattedStations);
+        setDirectoryBranches(formattedBranches);
+        setStationsList(formattedStations);
         setBranchesList(formattedBranches);
+      } else {
+        setDirectoryLocationError("Stations and branches could not be verified. Refresh to try again.");
       }
 
-      // 3. Fetch Station and Branch Recipients directly
-      const [stationRecRes, branchRecRes] = await Promise.allSettled([
-        supabaseClient.from("station_recipients").select("station_code, email"),
-        supabaseClient.from("branch_recipients").select("branch_code, email"),
-      ]);
-
-      const recipientMap: Record<string, string[]> = {};
-
-      if (stationRecRes.status === "fulfilled" && stationRecRes.value.data) {
-        stationRecRes.value.data.forEach((r: any) => {
-          const code = r.station_code;
-          const email = (r.email || "").toLowerCase().trim();
-          if (!email || DUMMY_EMAILS.includes(email)) return;
-          if (!recipientMap[code]) recipientMap[code] = [];
-          if (!recipientMap[code].includes(email)) recipientMap[code].push(email);
-        });
-      }
-
-      if (branchRecRes.status === "fulfilled" && branchRecRes.value.data) {
-        branchRecRes.value.data.forEach((r: any) => {
-          const code = r.branch_code;
-          const email = (r.email || "").toLowerCase().trim();
-          if (!email || DUMMY_EMAILS.includes(email)) return;
-          if (!recipientMap[code]) recipientMap[code] = [];
-          if (!recipientMap[code].includes(email)) recipientMap[code].push(email);
-        });
-      }
-
-      if (Object.keys(recipientMap).length > 0) {
-        setStationSelectedEmails(prev => ({ ...prev, ...recipientMap }));
-      }
     } catch (err) {
+      setDirectoryLocationError("Stations and branches could not be loaded. Refresh to try again.");
       console.warn("Could not dynamically load stations/branches (fallback active):", err);
     } finally {
       setStationsLoading(false);
@@ -817,7 +908,6 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
 
   // Station-wise state
   const [stationSelectedEmails, setStationSelectedEmails] = useState<Record<string, string[]>>({});
-  const [stationDefaultRecipients, setStationDefaultRecipients] = useState<Record<string, string[]>>({});
   const [stationEmailLoading, setStationEmailLoading] = useState<Record<string, boolean>>({});
   const [stationEmailStatus, setStationEmailStatus] = useState<Record<string, string>>({});
   const [stationEmailSuccess, setStationEmailSuccess] = useState<Record<string, boolean | null>>({});
@@ -826,55 +916,20 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
   const [stationCustomEmailInput, setStationCustomEmailInput] = useState<Record<string, string>>({});
   const [stationUserSearch, setStationUserSearch] = useState<Record<string, string>>({});
 
-  // Synchronize database users to station selected emails
+  // Exact saved assignments own report membership. Legacy/default recipient
+  // lists must never restore people removed from this location.
   useEffect(() => {
-    setStationSelectedEmails((prev) => {
-      const updated = { ...prev };
-      const stationGroups: Record<string, string[]> = {};
-      dbUsers.forEach((u) => {
-        const cleanEmail = (u.email || "").toLowerCase().trim();
-        if (DUMMY_EMAILS.includes(cleanEmail)) return;
-
-        if (u.station) {
-          const stations = u.station.split(",").map((s: string) => s.trim()).filter(Boolean);
-          stations.forEach((stationCode: string) => {
-            if (!stationGroups[stationCode]) {
-              stationGroups[stationCode] = [];
-            }
-            if (!stationGroups[stationCode].includes(u.email)) {
-              stationGroups[stationCode].push(u.email);
-            }
-          });
-        }
-      });
-
-      stationsList.forEach((s) => {
-        if (stationGroups[s.code]) {
-          updated[s.code] = stationGroups[s.code].filter(e => !DUMMY_EMAILS.includes(e.toLowerCase().trim()));
-        } else if (dbUsers.length > 0) {
-          updated[s.code] = [];
-        } else {
-          updated[s.code] = (stationDefaultRecipients[s.code] || []).filter(e => !DUMMY_EMAILS.includes(e.toLowerCase().trim()));
-        }
-      });
-
-      branchesList.forEach((b) => {
-        if (stationGroups[b.code]) {
-          updated[b.code] = stationGroups[b.code].filter(e => !DUMMY_EMAILS.includes(e.toLowerCase().trim()));
-        } else {
-          updated[b.code] = (stationDefaultRecipients[b.code] || []).filter(e => !DUMMY_EMAILS.includes(e.toLowerCase().trim()));
-        }
-      });
-
-      if (stationGroups["OTHER"]) {
-        updated["OTHER"] = stationGroups["OTHER"].filter(e => !DUMMY_EMAILS.includes(e.toLowerCase().trim()));
-      } else {
-        updated["OTHER"] = [];
+    const stationGroups = buildRecipientGroups(dbUsers.filter(user =>
+      !DUMMY_EMAILS.includes(String(user.email || "").trim().toLowerCase())), transportMode);
+    setStationSelectedEmails(previous => {
+      const updated = { ...previous };
+      for (const code of [...stationsList.map(station => station.code), ...branchesList.map(branch => branch.code), "OTHER", "GLOBAL"]) {
+        const recipients = stationGroups[code.toUpperCase()] || [];
+        updated[code] = recipients.filter(email => !DUMMY_EMAILS.includes(email.toLowerCase().trim()));
       }
-
       return updated;
     });
-  }, [dbUsers, stationDefaultRecipients, stationsList, branchesList]);
+  }, [dbUsers, transportMode, stationsList, branchesList]);
 
   // --- SCHEDULER STATES ---
   const [schedules, setSchedules] = useState<any[]>([]);
@@ -1277,29 +1332,6 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
     }
   };
 
-  const fetchStationRecipients = useCallback(async () => {
-    try {
-      const res = await fetch(`${API}/api/station-recipients`);
-      const d = await res.json();
-      if (d.status === "success") {
-        setStationDefaultRecipients(d.data);
-        // Also initialize selection state for each station with its default recipients
-        setStationSelectedEmails((prev) => {
-          const updated = { ...prev };
-          Object.entries(d.data).forEach(([code, emails]) => {
-            if (!updated[code]) {
-              updated[code] = emails as string[];
-            }
-          });
-          return updated;
-        });
-      }
-    } catch (e) {
-      console.error("Failed to fetch station recipients", e);
-    }
-  }, []);
-
-
   const fetchOrgUsers = useCallback(async () => {
     if (orgUsers.length > 0) return; // already loaded
     setOrgUsersLoading(true);
@@ -1326,11 +1358,10 @@ function FreightDashboard({ transportMode, onModeChange }: { transportMode: Tran
     }
   }, [orgUsers.length]);
 
-  // Fetch org users, station recipients, and schedules when admin/email-scheduling/users section is activated
+  // Fetch org users, exact assignments, and schedules for recipient management.
   useEffect(() => {
     if ((activeSection === "admin" || activeSection === "email-scheduling" || activeSection === "users") && supabase) {
       fetchOrgUsers();
-      fetchStationRecipients();
       fetchSchedules(supabase);
       fetchDbUsers(supabase);
     }
@@ -2336,9 +2367,11 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         console.warn("Relational recipient save note (table may not exist yet):", recErr);
       }
 
-      // Maintain user table sync for backward compatibility
+      // Keep Tonnage user station assignments in sync.
       const currentDbUsers = dbUsers.filter(u => {
         if (!u.station) return false;
+        const isRelevant = isSea ? (u.is_sea === true) : (u.is_air !== false);
+        if (!isRelevant) return false;
         const stations = u.station.split(",").map((s: string) => s.trim()).filter(Boolean);
         return stations.includes(stationCode);
       });
@@ -2346,31 +2379,10 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
       const emailsToRemove = currentDbEmails.filter(e => !emails.includes(e));
       const emailsToUpsert = emails;
 
-      // Helper to compute the combined station string for a given email
+      // Update this location only; do not reconstruct assignments from stale UI lists.
       const getNewStationValue = (email: string, targetStation: string, removing: boolean) => {
-        const stations: string[] = [];
-
-        stationsList.forEach(s => {
-          const isTarget = s.code === targetStation;
-          const isSelected = (stationSelectedEmails[s.code] || []).includes(email);
-          if (isTarget) {
-            if (!removing) stations.push(s.code);
-          } else if (isSelected) {
-            stations.push(s.code);
-          }
-        });
-
-        branchesList.forEach(b => {
-          const isTarget = b.code === targetStation;
-          const isSelected = (stationSelectedEmails[b.code] || []).includes(email);
-          if (isTarget) {
-            if (!removing) stations.push(b.code);
-          } else if (isSelected) {
-            stations.push(b.code);
-          }
-        });
-
-        return stations.length > 0 ? stations.join(", ") : "Global";
+        const existing = dbUsers.find(user => String(user.email || "").toLowerCase() === email.toLowerCase());
+        return updateRecipientAssignment(existing?.station, targetStation, removing);
       };
 
       for (const email of emailsToRemove) {
@@ -2378,7 +2390,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         const displayName = orgUsers.find(u => u.email === email)?.displayName || email.split("@")[0];
 
         const { error } = await supabase
-          .from("users")
+          .from(TONNAGE_USERS_TABLE)
           .update({ station: newStationValue, display_name: displayName })
           .eq("email", email);
         if (error) console.error("Error removing user from station:", error);
@@ -2390,20 +2402,29 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
         const newStationValue = getNewStationValue(email, stationCode, false);
 
         if (existingUser) {
+          const updatePayload: any = {
+            station: newStationValue,
+            display_name: displayName,
+          };
+          if (isSea) updatePayload.is_sea = true;
+          else updatePayload.is_air = true;
+
           const { error } = await supabase
-            .from("users")
-            .update({ station: newStationValue, display_name: displayName })
+            .from(TONNAGE_USERS_TABLE)
+            .update(updatePayload)
             .eq("email", email);
           if (error) throw error;
         } else {
           const newId = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); });
           const { error } = await supabase
-            .from("users")
+            .from(TONNAGE_USERS_TABLE)
             .insert({
               id: newId,
               email: email,
               display_name: displayName,
-              station: newStationValue
+              station: newStationValue,
+              is_air: !isSea,
+              is_sea: isSea,
             });
           if (error) throw error;
         }
@@ -3223,6 +3244,89 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
   const [newUserStation, setNewUserStation] = useState("Global");
   const [dbUserSearch, setDbUserSearch] = useState("");
   const [dbUserStationFilter, setDbUserStationFilter] = useState("ALL");
+  const [recipientDirectoryTab, setRecipientDirectoryTab] = useState<"stations" | "branches">("stations");
+  const showRecipientBranches = recipientDirectoryTab === "branches";
+  const directoryBranchParents = useMemo(() => new Map(directoryBranches.map(branch => {
+    const parent = branch.company_code || (branch.country
+      ? directoryStations.find(station => station.country.toLowerCase() === branch.country!.toLowerCase())?.code
+      : "IND");
+    return [branch.code.toUpperCase(), (parent || "").toUpperCase()];
+  })), [directoryBranches, directoryStations]);
+  const selectedDirectoryBranches = useMemo(() => directoryBranches.filter(branch =>
+    directoryBranchParents.get(branch.code.toUpperCase()) === dbUserStationFilter.toUpperCase()
+  ), [directoryBranches, directoryBranchParents, dbUserStationFilter]);
+  const preferredBranchStation = directoryStations.find(station =>
+    directoryBranches.some(branch => directoryBranchParents.get(branch.code.toUpperCase()) === station.code.toUpperCase())
+  )?.code || directoryStations[0]?.code || "ALL";
+  const formDirectoryBranches = directoryBranches.filter(branch =>
+    directoryBranchParents.get(branch.code.toUpperCase()) ===
+      (directoryBranchParents.get(recipientFormStation.toUpperCase()) || recipientFormStation.toUpperCase())
+  );
+
+  const selectRecipientStation = (code: string) => setDbUserStationFilter(code);
+  const selectRecipientDirectoryTab = (tab: "stations" | "branches") => {
+    setRecipientDirectoryTab(tab);
+    setDbUserStationFilter(tab === "stations" ? "ALL" : preferredBranchStation);
+    setDbUserSearch("");
+  };
+
+  useEffect(() => {
+    const validStation = directoryStations.some(station => station.code === dbUserStationFilter);
+    if ((dbUserStationFilter !== "ALL" && !validStation) || (showRecipientBranches && dbUserStationFilter === "ALL")) {
+      setDbUserStationFilter(showRecipientBranches ? preferredBranchStation : "ALL");
+    }
+  }, [directoryStations, dbUserStationFilter, showRecipientBranches, preferredBranchStation]);
+
+  const scopedDirectoryUsers = useMemo(() => dbUsers.filter(user => {
+    const query = dbUserSearch.trim().toLowerCase();
+    if (query && ![user.display_name, user.email, user.station].some(value =>
+      String(value || "").toLowerCase().includes(query))) return false;
+    const assignments = recipientAssignmentCodes(user.station);
+    if (showRecipientBranches) {
+      return selectedDirectoryBranches.some(branch => assignments.includes(branch.code.toUpperCase()));
+    }
+    const stationAssignments = assignments.filter(code => !directoryBranchParents.has(code));
+    if (stationAssignments.length === 0) return false;
+    if (dbUserStationFilter !== "ALL" && !stationAssignments.includes(dbUserStationFilter.toUpperCase())) return false;
+    return true;
+  }), [dbUsers, dbUserSearch, dbUserStationFilter, showRecipientBranches, selectedDirectoryBranches, directoryBranchParents]);
+
+  const visibleDirectoryUsers = useMemo(() => scopedDirectoryUsers.filter(user =>
+    dbUserFreightFilter === "AIR" ? user.is_air !== false :
+    dbUserFreightFilter === "SEA" ? user.is_sea === true : true
+  ), [scopedDirectoryUsers, dbUserFreightFilter]);
+
+  // Pre-calculated summary of users per branch for Recipients Directory
+  const branchUserSummary = useMemo(() => {
+    const summary: Record<string, { directUsers: any[]; globalUsers: any[]; allUsers: any[] }> = {};
+    const freightFiltered = dbUsers.filter(u => {
+      if (dbUserFreightFilter === "AIR" && u.is_air === false) return false;
+      if (dbUserFreightFilter === "SEA" && u.is_sea !== true) return false;
+      return true;
+    });
+
+    const globalUsers = freightFiltered.filter(u => {
+      const stations = (u.station || "").split(",").map((s: string) => s.trim().toUpperCase()).filter(Boolean);
+      return stations.includes("GLOBAL");
+    });
+
+    selectedDirectoryBranches.forEach(b => {
+      const codeUpper = b.code.toUpperCase();
+      const direct = freightFiltered.filter(u => {
+        const stations = (u.station || "").split(",").map((s: string) => s.trim().toUpperCase()).filter(Boolean);
+        return stations.includes(codeUpper);
+      });
+      const directEmails = new Set(direct.map(u => (u.email || "").toLowerCase()));
+      const combined = [...direct, ...globalUsers.filter(u => !directEmails.has((u.email || "").toLowerCase()))];
+      summary[b.code] = {
+        directUsers: direct,
+        globalUsers: globalUsers,
+        allUsers: combined,
+      };
+    });
+
+    return summary;
+  }, [dbUsers, selectedDirectoryBranches, dbUserFreightFilter]);
 
   if (authLoading) {
     return (
@@ -4152,6 +4256,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             return (
                               <div
                                 key={station.code}
+                                data-station-recipient-code={station.code}
                                 className="bg-white rounded-2xl border border-sky-100/90 hover:border-sky-300 hover:shadow-md transition-all duration-200 p-3.5 flex flex-col justify-between relative overflow-hidden group shadow-2xs"
                               >
                                 <div>
@@ -4434,6 +4539,7 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
                             return (
                               <div
                                 key={branch.code}
+                                data-branch-recipient-code={branch.code}
                                 className="bg-white rounded-2xl border border-sky-100/90 hover:border-sky-300 hover:shadow-md transition-all duration-200 p-3.5 flex flex-col justify-between relative overflow-hidden group shadow-2xs"
                               >
                                 <div>
@@ -5897,145 +6003,759 @@ ORDER BY vt.ETD DESC, ROUND(SUM(vs.Revenue_USD), 2) DESC;
           {activeSection === "users" && (
             <div className="w-full px-4 sm:px-6 lg:px-8 py-8 space-y-8 animate-in fade-in-0 duration-200">
               {/* Header */}
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4 mb-6">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#d3e3fd] pb-4 mb-6">
                 <div>
                   <div className="flex items-center gap-2.5 mb-1">
-                    <Users className="w-5 h-5 text-[#3182CE]" />
-                    <h2 className="text-xl font-extrabold text-[#1A202C] tracking-tight">System Users & Recipients</h2>
+
+                    <h2 className="text-xl font-semibold text-[#1A202C] tracking-tight">System Users & Recipients</h2>
                   </div>
-                  <p className="text-sm text-slate-400">View and manage recipients filtered by station, stored in the database.</p>
+                  <p className="text-sm text-slate-400">View and manage recipients filtered by station and freight mode (Air & Sea), stored in the database.</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-12 gap-6">
                 {/* Users List (Full Width) */}
                 <div className="col-span-12 space-y-4">
-                  <div className="admin-card p-6 bg-white border border-slate-200 rounded-xl shadow-sm">
+                  <div data-recipients-directory className="p-5 bg-white border border-[#d3e3fd] rounded-2xl shadow-sm">
                     {/* Toolbar */}
-                    <div className="flex flex-col sm:flex-row gap-3 justify-between items-center pb-4 border-b border-[#EDF2F7] mb-4">
+                    <div className="flex flex-col sm:flex-row gap-3 justify-between items-center pb-4 border-b border-[#d3e3fd] mb-4">
                       <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-teal-50 flex items-center justify-center">
-                          <Users className="w-4 h-4 text-teal-600" />
-                        </div>
                         <div>
-                          <h3 className="text-sm font-bold text-[#1A202C]">Recipients List</h3>
-                          <p className="text-[10.5px] text-slate-400">Manage saved recipients in the database</p>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-sm font-bold text-[#1A202C]">Recipients Directory</h3>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#e8f0fe] text-slate-600 border border-[#d3e3fd]">
+                              {dbUsers.length} total
+                            </span>
+                          </div>
+                          <p className="text-[10.5px] text-slate-400">Manage recipient details, branch assignments and freight preferences</p>
                         </div>
                       </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => handleOpenAddRecipient(dbUserStationFilter === "ALL" ? undefined : dbUserStationFilter)}
+                          className="h-8 px-4 text-xs bg-[#1a73e8] hover:bg-[#1557b0] text-white font-semibold rounded-full"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Add Recipient</span>
+                        </Button>
+                        <button
+                          onClick={() => { fetchDbUsers(supabase); fetchStationsAndBranches(supabase); }}
+                          className="p-1.5 rounded-lg hover:bg-[#e8f0fe] text-slate-400 hover:text-slate-600 transition-colors"
+                          title="Refresh list"
+                        >
+                          <RefreshCw className={`w-4 h-4 ${dbUsersLoading ? "animate-spin" : ""}`} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <Tabs value={recipientDirectoryTab} onValueChange={value => selectRecipientDirectoryTab(value as "stations" | "branches")} className="w-full">
+                      <TabsList aria-label="Recipient directory sections" className="h-auto rounded-full border border-[#d3e3fd] bg-[#e8f0fe] p-1">
+                        <TabsTrigger value="stations" className="rounded-full px-5 py-2 text-xs font-semibold text-[#1a73e8] data-[state=active]:bg-[#d3e3fd] data-[state=active]:text-[#174ea6] data-[state=active]:shadow-none">Stations</TabsTrigger>
+                        <TabsTrigger value="branches" className="rounded-full px-5 py-2 text-xs font-semibold text-[#1a73e8] data-[state=active]:bg-[#d3e3fd] data-[state=active]:text-[#174ea6] data-[state=active]:shadow-none">Branches</TabsTrigger>
+                      </TabsList>
+                      <TabsContent value={recipientDirectoryTab} className="mt-5">
+                    {!showRecipientBranches && (
+                    <nav aria-label="Recipient stations" className="mb-5 flex flex-wrap gap-2 border-b border-[#d3e3fd] pb-4">
                       <button
-                        onClick={() => fetchDbUsers(supabase)}
-                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-655 transition-colors"
-                        title="Refresh list"
+                        type="button"
+                        aria-pressed={dbUserStationFilter === "ALL"}
+                        onClick={() => selectRecipientStation("ALL")}
+                        className={`rounded-full border px-4 py-2 text-xs font-semibold transition-colors ${dbUserStationFilter === "ALL"
+                          ? "border-[#aecbfa] bg-[#d3e3fd] text-[#174ea6]"
+                          : "border-[#d3e3fd] bg-white text-[#1a73e8] hover:bg-[#e8f0fe]"}`}
                       >
-                        <RefreshCw className={`w-4 h-4 ${dbUsersLoading ? "animate-spin" : ""}`} />
+                        All Stations
                       </button>
+                      {directoryStations.map(station => (
+                        <button
+                          key={station.code}
+                          type="button"
+                          aria-pressed={dbUserStationFilter === station.code}
+                          onClick={() => selectRecipientStation(station.code)}
+                          title={station.name}
+                          className={`rounded-full border px-4 py-2 text-xs font-semibold transition-colors ${dbUserStationFilter === station.code
+                            ? "border-[#aecbfa] bg-[#d3e3fd] text-[#174ea6]"
+                            : "border-[#d3e3fd] bg-white text-[#1a73e8] hover:bg-[#e8f0fe]"}`}
+                        >
+                          {station.name} ({station.code})
+                        </button>
+                      ))}
+                    </nav>
+                    )}
+                    {showRecipientBranches && (
+                      <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-[#d3e3fd] bg-[#f8fbff] p-3">
+                        <label htmlFor={`recipient-branch-station-${transportMode}`} className="text-xs font-semibold text-[#174ea6]">Station</label>
+                        <select id={`recipient-branch-station-${transportMode}`} aria-label="Branch station" value={dbUserStationFilter}
+                          onChange={event => selectRecipientStation(event.target.value)}
+                          className="h-9 min-w-48 rounded-lg border border-[#d3e3fd] bg-white px-3 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#aecbfa]">
+                          {directoryStations.length === 0 && <option value="ALL">No stations available</option>}
+                          {directoryStations.map(station => <option key={station.code} value={station.code}>{station.name} ({station.code})</option>)}
+                        </select>
+                        <span className="text-xs text-slate-500">Branches for the selected station</span>
+                      </div>
+                    )}
+                    {directoryLocationError && <p role="status" className="mb-4 text-xs text-slate-600">{directoryLocationError}</p>}
+                    {stationsLoading && <p role="status" className="mb-4 text-xs text-[#1a73e8]">Loading stations and branches...</p>}
+                    {!stationsLoading && !directoryLocationError && directoryStations.length === 0 && (
+                      <p className="mb-4 text-xs text-slate-600">No active stations are configured.</p>
+                    )}
+
+                    {/* Freight Mode Selector Tabs */}
+                    <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                      <div className="inline-flex p-1 bg-[#e8f0fe] rounded-lg border border-[#d3e3fd]">
+                        <button
+                          type="button"
+                          onClick={() => setDbUserFreightFilter("ALL")}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-1.5 ${
+                            dbUserFreightFilter === "ALL"
+                              ? "bg-white text-slate-800 shadow-sm"
+                              : "text-slate-500 hover:text-slate-800"
+                          }`}
+                        >
+
+                          <span>All Recipients</span>
+                          <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-[#d3e3fd]/70 text-slate-700">
+                            {scopedDirectoryUsers.length}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDbUserFreightFilter("AIR")}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-1.5 ${
+                            dbUserFreightFilter === "AIR"
+                              ? "bg-[#d3e3fd] text-[#174ea6] shadow-sm"
+                              : "text-slate-500 hover:text-slate-600"
+                          }`}
+                        >
+
+                          <span>Air Freight</span>
+                          <span className={`ml-1 px-1.5 py-0.2 rounded-full text-[10px] ${
+                            dbUserFreightFilter === "AIR" ? "bg-[#d3e3fd] text-[#174ea6]" : "bg-[#d3e3fd]/70 text-slate-700"
+                          }`}>
+                            {scopedDirectoryUsers.filter(u => u.is_air !== false).length}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDbUserFreightFilter("SEA")}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-1.5 ${
+                            dbUserFreightFilter === "SEA"
+                              ? "bg-[#d3e3fd] text-[#174ea6] shadow-sm"
+                              : "text-slate-500 hover:text-slate-600"
+                          }`}
+                        >
+
+                          <span>Sea Freight</span>
+                          <span className={`ml-1 px-1.5 py-0.2 rounded-full text-[10px] ${
+                            dbUserFreightFilter === "SEA" ? "bg-[#d3e3fd] text-[#174ea6]" : "bg-[#d3e3fd]/70 text-slate-700"
+                          }`}>
+                            {scopedDirectoryUsers.filter(u => u.is_sea === true).length}
+                          </span>
+                        </button>
+                      </div>
+
+                      <div className="text-[11px] text-slate-400 font-medium">
+                        Set Air and Sea preferences for recipient selection.
+                      </div>
                     </div>
 
-                    {/* Search and Filter */}
-                    <div className="flex flex-col sm:flex-row gap-3 mb-4">
-                      <Input
-                        placeholder="Search by name or email..."
-                        value={dbUserSearch}
-                        onChange={(e) => setDbUserSearch(e.target.value)}
-                        className="h-9 text-xs bg-white border-[#CBD5E0] rounded-lg text-slate-700 flex-1"
-                      />
-                      <select
-                        value={dbUserStationFilter}
-                        onChange={(e) => setDbUserStationFilter(e.target.value)}
-                        className="h-9 px-3 bg-white border border-slate-200 rounded-lg text-slate-700 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 w-44"
-                      >
-                        <option value="ALL">All Stations</option>
-                        <option value="Global">Global</option>
-                        {stationsList.map((s) => (
-                          <option key={s.code} value={s.code}>{s.name} ({s.code})</option>
-                        ))}
-                        <option value="OTHER">Corporate / Other</option>
-                      </select>
-                    </div>
+                    {/* Search and Dropdowns Filter Bar */}
+                    <div className="flex flex-col sm:flex-row gap-3 mb-3">
+                      <div className="relative flex-1">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <Input
+                          aria-label="Search recipients"
+                          placeholder="Search by name, email, station or branch"
+                          value={dbUserSearch}
+                          onChange={(e) => setDbUserSearch(e.target.value)}
+                          className="h-9 pl-9 text-xs bg-white border-[#d3e3fd] rounded-lg text-slate-700"
+                        />
+                        {dbUserSearch && (
+                          <button
+                            onClick={() => setDbUserSearch("")}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
 
-                    {/* Datatable */}
-                    <div className="overflow-x-auto max-h-[450px]">
-                      {dbUsersLoading ? (
-                        <div className="py-12 flex flex-col items-center gap-3 text-slate-400">
-                          <RefreshCw className="w-6 h-6 animate-spin text-[#3182CE]" />
-                          <p className="text-xs font-medium">Fetching database users...</p>
-                        </div>
-                      ) : (
-                        <table className="w-full text-left text-xs border-collapse">
-                          <thead>
-                            <tr className="border-b border-[#E2E8F0] text-slate-400 uppercase font-bold text-[10px] tracking-wider bg-slate-50/50">
-                              <th className="px-4 py-3">Display Name</th>
-                              <th className="px-4 py-3">Email Address</th>
-                              <th className="px-4 py-3">Station</th>
-                              <th className="px-4 py-3">Created At</th>
-                              <th className="px-4 py-3 text-center">Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-[#F1F5F9]">
-                            {dbUsers
-                              .filter((u) => {
-                                // Search filter
-                                const searchQ = dbUserSearch.toLowerCase().trim();
-                                const nameMatch = (u.display_name || "").toLowerCase().includes(searchQ);
-                                const emailMatch = (u.email || "").toLowerCase().includes(searchQ);
-                                if (searchQ && !nameMatch && !emailMatch) return false;
-
-                                // Station filter
-                                if (dbUserStationFilter !== "ALL") {
-                                  const stations = (u.station || "").split(",").map((s: string) => s.trim()).filter(Boolean);
-                                  if (!stations.includes(dbUserStationFilter)) return false;
-                                }
-                                return true;
-                              })
-                              .map((u) => (
-                                <tr key={u.id} className="hover:bg-slate-50/50 transition-colors">
-                                  <td className="px-4 py-3 font-semibold text-slate-700">{u.display_name || "—"}</td>
-                                  <td className="px-4 py-3 font-medium text-slate-500">{u.email}</td>
-                                  <td className="px-4 py-3">
-                                    <Badge className="bg-[#EBF8FF] text-[#2B6CB0] border border-[#BEE3F8] font-bold text-[9px] px-2 py-0.5 rounded-full uppercase">
-                                      {u.station || "Global"}
-                                    </Badge>
-                                  </td>
-                                  <td className="px-4 py-3 text-slate-400 tabular-nums">
-                                    {u.created_at ? new Date(u.created_at).toLocaleDateString() : "—"}
-                                  </td>
-                                  <td className="px-4 py-3 text-center">
-                                    <button
-                                      onClick={async () => {
-                                        if (!confirm(`Are you sure you want to delete ${u.email}?`)) return;
-                                        try {
-                                          const { error } = await supabase
-                                            .from("users")
-                                            .delete()
-                                            .eq("id", u.id);
-                                          if (error) throw error;
-                                          fetchDbUsers(supabase);
-                                        } catch (err: any) {
-                                          alert(err.message || "Failed to delete user.");
-                                        }
-                                      }}
-                                      className="p-1 rounded hover:bg-rose-50 text-rose-500 hover:text-rose-600 transition-colors"
-                                      title="Delete Recipient"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </td>
-                                </tr>
-                              ))}
-                            {dbUsers.length === 0 && (
-                              <tr>
-                                <td colSpan={5} className="text-center py-12 text-slate-400 font-medium italic">
-                                  No database users configured.
-                                </td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
+                      {/* Reset Filters button */}
+                      {(dbUserSearch.trim() !== "" || (!showRecipientBranches && dbUserStationFilter !== "ALL")) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!showRecipientBranches) selectRecipientStation("ALL");
+                            setDbUserSearch("");
+                          }}
+                          className="h-9 px-3 text-xs font-bold text-slate-600 bg-[#f8fbff] hover:bg-[#e8f0fe] border border-[#d3e3fd] rounded-lg transition-colors flex items-center gap-1.5 shrink-0"
+                          title="Reset all filters"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          <span>Reset</span>
+                        </button>
                       )}
                     </div>
+
+                    {/* ── VIEW MODE: BRANCH DIRECTORY (CARDS VIEW) ── */}
+                    {showRecipientBranches && (
+                      <div className="space-y-4">
+                        {!stationsLoading && selectedDirectoryBranches.length === 0 && (
+                          <p className="rounded-xl border border-[#d3e3fd] bg-[#f8fbff] p-5 text-sm text-slate-600">No active branches are configured for this station.</p>
+                        )}
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {selectedDirectoryBranches
+                            .filter(b => {
+                              const q = dbUserSearch.toLowerCase().trim();
+                              if (!q) return true;
+                              const summary = branchUserSummary[b.code];
+                              const matchBranch = b.name.toLowerCase().includes(q) || b.code.toLowerCase().includes(q) || (b.city || "").toLowerCase().includes(q);
+                              const matchUser = summary?.directUsers?.some(u => (u.display_name || "").toLowerCase().includes(q) || (u.email || "").toLowerCase().includes(q));
+                              return matchBranch || matchUser;
+                            })
+                            .map((branch) => {
+                              const summary = branchUserSummary[branch.code];
+                              const directUsers = summary?.directUsers || [];
+                              const globalUsers = summary?.globalUsers || [];
+
+                              return (
+                                <div
+                                  key={branch.code}
+                                  data-directory-branch-code={branch.code}
+                                  className="bg-white rounded-xl border border-[#d3e3fd] p-4 flex flex-col justify-between"
+                                >
+                                  <div>
+                                    {/* Card Header */}
+                                    <div className="flex items-start justify-between pb-3 border-b border-[#d3e3fd] mb-3">
+                                      <div className="flex items-center gap-2.5">
+                                        <div>
+                                          <h4 className="text-xs font-bold text-slate-800 leading-snug">
+                                            {branch.name}
+                                          </h4>
+                                          <div className="flex items-center gap-1.5 mt-0.5">
+                                            <span className="text-[9px] font-semibold text-slate-700 bg-[#f8fbff] border border-[#d3e3fd] px-1.5 py-0.2 rounded uppercase">
+                                              {branch.code}
+                                            </span>
+                                            {branch.city && (
+                                              <span className="text-[10px] text-slate-400">{branch.city}</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-1.5">
+                                        <span className={`text-[9.5px] font-bold px-2 py-0.5 rounded-full ${
+                                          directUsers.length > 0
+                                            ? "bg-[#e8f0fe] text-slate-800 border border-[#d3e3fd]"
+                                            : "bg-[#e8f0fe] text-slate-500"
+                                        }`}>
+                                          {directUsers.length} {directUsers.length === 1 ? "user" : "users"}
+                                        </span>
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          onClick={() => handleOpenAddRecipient(branch.code)}
+                                          className="h-8 px-4 text-xs bg-[#1a73e8] hover:bg-[#1557b0] text-white font-semibold rounded-full"
+                                          title={`Add Recipient to ${branch.code}`}
+                                        >
+                                          <Plus className="w-3.5 h-3.5" />
+                                        </Button>
+                                      </div>
+                                    </div>
+
+                                    {/* Users List for this Branch */}
+                                    <div className="space-y-2 mb-3">
+                                      {directUsers.length > 0 ? (
+                                        directUsers.map((u) => (
+                                          <div
+                                            key={u.id}
+                                            data-recipient-id={u.id}
+                                            className="p-2 rounded-lg bg-[#f8fbff]/80 border border-[#d3e3fd] flex items-center justify-between gap-2 hover:bg-[#f8fbff]/40 transition-colors"
+                                          >
+                                            <div className="flex items-center gap-2 min-w-0">
+                                              <div className="w-6 h-6 rounded-full bg-[#e8f0fe] text-slate-800 border border-[#d3e3fd] flex items-center justify-center text-[9.5px] font-bold shrink-0">
+                                                {((u.display_name || u.email || "U").slice(0, 2)).toUpperCase()}
+                                              </div>
+                                              <div className="min-w-0">
+                                                <p className="text-[11px] font-bold text-slate-800 truncate">
+                                                  {u.display_name || u.email.split("@")[0]}
+                                                </p>
+                                                <p className="text-[10px] text-slate-400 truncate">
+                                                  {u.email}
+                                                </p>
+                                              </div>
+                                            </div>
+
+                                            {/* Preferences & Actions */}
+                                            <div className="flex items-center gap-1.5 shrink-0">
+                                              <button
+                                                type="button"
+                                                aria-pressed={u.is_air !== false}
+                                                onClick={() => handleToggleFreightMode(u.id, "is_air", u.is_air ?? true)}
+                                                className={`px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-0.5 transition-colors cursor-pointer ${
+                                                  u.is_air !== false
+                                                    ? "bg-[#e8f0fe] text-slate-700"
+                                                    : "bg-[#d3e3fd]/60 text-slate-400"
+                                                }`}
+                                                title={u.is_air !== false ? "Air Freight: Subscribed" : "Air Freight: Off"}
+                                              >
+
+                                                <span>Air</span>
+                                              </button>
+                                              <button
+                                                type="button"
+                                                aria-pressed={u.is_sea === true}
+                                                onClick={() => handleToggleFreightMode(u.id, "is_sea", u.is_sea ?? false)}
+                                                className={`px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-0.5 transition-colors cursor-pointer ${
+                                                  u.is_sea === true
+                                                    ? "bg-[#e8f0fe] text-slate-700"
+                                                    : "bg-[#d3e3fd]/60 text-slate-400"
+                                                }`}
+                                                title={u.is_sea === true ? "Sea Freight: Subscribed" : "Sea Freight: Off"}
+                                              >
+
+                                                <span>Sea</span>
+                                              </button>
+                                              <button
+                                                onClick={() => handleOpenEditRecipient(u)}
+                                                className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-white"
+                                                title="Edit"
+                                              >
+                                                <Pencil className="w-3 h-3" />
+                                              </button>
+                                              <button
+                                                onClick={async () => {
+                                                  if (!confirm(`Are you sure you want to delete ${u.email}?`)) return;
+                                                  try {
+                                                    const { error } = await supabase
+                                                      .from(TONNAGE_USERS_TABLE)
+                                                      .delete()
+                                                      .eq("id", u.id);
+                                                    if (error) throw error;
+                                                    fetchDbUsers(supabase);
+                                                  } catch (err: any) {
+                                                    alert(err.message || "Failed to delete user.");
+                                                  }
+                                                }}
+                                                className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-white"
+                                                title="Delete"
+                                              >
+                                                <Trash2 className="w-3 h-3" />
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ))
+                                      ) : (
+                                        <div className="py-4 px-3 rounded-lg border border-dashed border-[#d3e3fd] text-center">
+                                          <p className="text-[11px] text-slate-400 italic mb-2">No recipients directly assigned to this branch.</p>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => handleOpenAddRecipient(branch.code)}
+                                            className="h-8 px-4 text-xs bg-[#1a73e8] hover:bg-[#1557b0] text-white font-semibold rounded-full"
+                                          >
+                                            <Plus className="w-3.5 h-3.5 mr-1" />
+                                            Assign Recipient
+                                          </Button>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* Global recipient note */}
+                                    {globalUsers.length > 0 && (
+                                      <p className="text-[10px] text-slate-400 flex items-center gap-1 pt-2 border-t border-[#d3e3fd]">
+
+                                        <span>+ {globalUsers.length} global recipients are available for report selection</span>
+                                      </p>
+                                    )}
+                                  </div>
+
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── VIEW MODE: TABLE DIRECTORY ── */}
+                    {!showRecipientBranches && (
+                      <div className="overflow-x-auto max-h-[520px]">
+                        {dbUsersLoading ? (
+                          <div className="py-12 flex flex-col items-center gap-3 text-slate-400">
+                            <RefreshCw className="w-6 h-6 animate-spin text-slate-600" />
+                            <p className="text-xs font-medium">Fetching database users...</p>
+                          </div>
+                        ) : (
+                          <table className="w-full text-left text-xs border-collapse">
+                            <thead>
+                              <tr className="border-b border-[#d3e3fd] text-slate-400 uppercase font-bold text-[10px] tracking-wider bg-[#f8fbff]/50 sticky top-0 z-10 backdrop-blur-xs">
+                                <th className="px-4 py-3">Recipient</th>
+                                <th className="px-4 py-3">Email Address</th>
+                                <th className="px-4 py-3">Station</th>
+                                <th className="px-4 py-3">Freight Reports</th>
+                                <th className="px-4 py-3">Created At</th>
+                                <th className="px-4 py-3 text-center">Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[#d3e3fd]">
+                              {visibleDirectoryUsers.map((u) => {
+                                  const stations = (u.station || "").split(",").map((s: string) => s.trim()).filter(Boolean);
+                                  const initialLetters = ((u.display_name || u.email || "U").slice(0, 2)).toUpperCase();
+
+                                  return (
+                                    <tr key={u.id} className="hover:bg-[#f8fbff]/70 transition-colors">
+                                      {/* Recipient Name & Branch Scope Tag */}
+                                      <td className="px-4 py-3">
+                                        <div className="flex items-center gap-2.5">
+                                          <div className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 border bg-[#e8f0fe] text-[#174ea6] border-[#d3e3fd]">
+                                            {initialLetters}
+                                          </div>
+                                          <div className="min-w-0">
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                              <span className="font-bold text-slate-800 text-xs truncate">
+                                                {u.display_name || "—"}
+                                              </span>
+                                            </div>
+                                            <span className="text-[10px] text-slate-400 sm:hidden block truncate">
+                                              {u.email}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      </td>
+
+                                      {/* Email Address */}
+                                      <td className="px-4 py-3 font-medium text-slate-600">
+                                        {u.email}
+                                      </td>
+
+                                      <td className="px-4 py-3">
+                                        <div className="flex flex-wrap gap-1">
+                                          {recipientAssignmentCodes(u.station).filter(code => !directoryBranchParents.has(code)).map(code => (
+                                            <span key={code} title={directoryStations.find(station => station.code.toUpperCase() === code)?.name || code}
+                                              className="rounded-full border border-[#d3e3fd] bg-[#f8fbff] px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                                              {code === "GLOBAL" ? "Global" : code}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </td>
+
+                                      {/* Freight Preferences (Air & Sea toggles) */}
+                                      <td className="px-4 py-3">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          {/* Air Freight Mode Chip */}
+                                          <button
+                                            type="button"
+                                            aria-pressed={u.is_air !== false}
+                                                onClick={() => handleToggleFreightMode(u.id, "is_air", u.is_air ?? true)}
+                                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
+                                              u.is_air !== false
+                                                ? "bg-[#f8fbff] text-slate-700 border border-[#d3e3fd] hover:bg-[#e8f0fe] "
+                                                : "bg-[#f8fbff] text-slate-400 border border-dashed border-[#d3e3fd] hover:bg-[#e8f0fe] hover:text-slate-600"
+                                            }`}
+                                            title={u.is_air !== false ? "Click to disable Air Freight reports" : "Click to enable Air Freight reports"}
+                                          >
+
+                                            <span>Air</span>
+                                            {u.is_air !== false ? (
+                                              <Check className="w-2.5 h-2.5 text-slate-600 stroke-[3]" />
+                                            ) : (
+                                              <span className="text-[9px] text-slate-400 font-normal">Off</span>
+                                            )}
+                                          </button>
+
+                                          {/* Sea Freight Mode Chip */}
+                                          <button
+                                            type="button"
+                                            aria-pressed={u.is_sea === true}
+                                                onClick={() => handleToggleFreightMode(u.id, "is_sea", u.is_sea ?? false)}
+                                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
+                                              u.is_sea === true
+                                                ? "bg-[#f8fbff] text-slate-700 border border-[#d3e3fd] hover:bg-[#e8f0fe] "
+                                                : "bg-[#f8fbff] text-slate-400 border border-dashed border-[#d3e3fd] hover:bg-[#e8f0fe] hover:text-slate-600"
+                                            }`}
+                                            title={u.is_sea === true ? "Click to disable Sea Freight reports" : "Click to enable Sea Freight reports"}
+                                          >
+
+                                            <span>Sea</span>
+                                            {u.is_sea === true ? (
+                                              <Check className="w-2.5 h-2.5 text-slate-600 stroke-[3]" />
+                                            ) : (
+                                              <span className="text-[9px] text-slate-400 font-normal">Off</span>
+                                            )}
+                                          </button>
+                                        </div>
+                                      </td>
+
+                                      <td className="px-4 py-3 text-slate-400 tabular-nums">
+                                        {u.created_at ? new Date(u.created_at).toLocaleDateString() : "—"}
+                                      </td>
+
+                                      <td className="px-4 py-3 text-center">
+                                        <div className="flex items-center justify-center gap-1">
+                                          <button
+                                            onClick={() => handleOpenEditRecipient(u)}
+                                            className="p-1 rounded hover:bg-[#f8fbff] text-slate-400 hover:text-slate-600 transition-colors"
+                                            title="Edit Recipient"
+                                          >
+                                            <Pencil className="w-3.5 h-3.5" />
+                                          </button>
+                                          <button
+                                            onClick={async () => {
+                                              if (!confirm(`Are you sure you want to delete ${u.email}?`)) return;
+                                              try {
+                                                const { error } = await supabase
+                                                  .from(TONNAGE_USERS_TABLE)
+                                                  .delete()
+                                                  .eq("id", u.id);
+                                                if (error) throw error;
+                                                fetchDbUsers(supabase);
+                                              } catch (err: any) {
+                                                alert(err.message || "Failed to delete user.");
+                                              }
+                                            }}
+                                            className="p-1 rounded hover:bg-[#f8fbff] text-slate-500 hover:text-slate-600 transition-colors"
+                                            title="Delete Recipient"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+
+                              {dbUsers.length > 0 && visibleDirectoryUsers.length === 0 && (
+                                <tr><td colSpan={6} className="py-12 text-center text-xs text-slate-500">No recipients matching your active filter criteria.</td></tr>
+                              )}
+
+                              {dbUsers.length === 0 && (
+                                <tr>
+                                  <td colSpan={6} className="text-center py-12 text-slate-400 font-medium italic">
+                                    No database users configured.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    )}
+                      </TabsContent>
+                    </Tabs>
                   </div>
                 </div>
               </div>
+
+              {/* ── ADD / EDIT RECIPIENT MODAL ── */}
+              {isAddRecipientModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-in fade-in-0 duration-150">
+                  <div role="dialog" aria-modal="true" aria-label={editingRecipient ? "Edit Recipient" : "Add New Recipient"} className="bg-white rounded-xl shadow-lg border border-[#d3e3fd] max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-150">
+                    {/* Modal Header */}
+                    <div className="px-6 py-4 border-b border-[#d3e3fd] flex items-center justify-between bg-[#f8fbff]/50">
+                      <div className="flex items-center gap-2">
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-800">
+                            {editingRecipient ? "Edit Recipient" : "Add New Recipient"}
+                          </h3>
+                          <p className="text-[11px] text-slate-400">
+                            Configure station and freight report preferences
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setIsAddRecipientModalOpen(false)}
+                        className="p-1 rounded-lg hover:bg-[#e8f0fe] text-slate-400 hover:text-slate-600 transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Modal Form */}
+                    <form onSubmit={handleSaveRecipient} className="p-6 space-y-4">
+                      {recipientFormError && (
+                        <div className="p-2.5 rounded-lg bg-[#f8fbff] border border-[#d3e3fd] text-slate-700 text-xs flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          <span>{recipientFormError}</span>
+                        </div>
+                      )}
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Email Address <span className="text-slate-500">*</span>
+                        </label>
+                        <Input
+                          type="email"
+                          value={recipientFormEmail}
+                          onChange={(e) => setRecipientFormEmail(e.target.value)}
+                          disabled={!!editingRecipient}
+                          placeholder="recipient@dartglobal.com"
+                          className="h-9 text-xs"
+                          required
+                        />
+                        {editingRecipient && (
+                          <p className="text-[10px] text-slate-400 mt-1">Email address cannot be changed.</p>
+                        )}
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Display Name
+                        </label>
+                        <Input
+                          type="text"
+                          value={recipientFormName}
+                          onChange={(e) => setRecipientFormName(e.target.value)}
+                          placeholder="e.g. Nimal Perera"
+                          className="h-9 text-xs"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Station Assignment
+                        </label>
+                        <select
+                          value={recipientFormStation}
+                          onChange={(e) => setRecipientFormStation(e.target.value)}
+                          className="w-full h-9 px-3 bg-white border border-[#d3e3fd] rounded-lg text-slate-700 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#aecbfa]"
+                        >
+                          {recipientFormStation && !["Global", "OTHER"].includes(recipientFormStation) &&
+                            !directoryStations.some(s => s.code === recipientFormStation) &&
+                            !directoryBranches.some(b => b.code === recipientFormStation) && (
+                              <option value={recipientFormStation}>Current assignments: {recipientFormStation}</option>
+                            )}
+                          <optgroup label="Global & Corporate">
+                            <option value="">Unassigned</option>
+                            <option value="Global">Global (All Stations & Branches)</option>
+                            <option value="OTHER">Corporate / Other</option>
+                          </optgroup>
+                          <optgroup label="National Stations">
+                            {directoryStations.map((s) => (
+                              <option key={s.code} value={s.code}>
+                                {s.name} ({s.code})
+                              </option>
+                            ))}
+                          </optgroup>
+                          {formDirectoryBranches.length > 0 && (
+                          <optgroup label="City Branches">
+                            {formDirectoryBranches.map((b) => (
+                              <option key={b.code} value={b.code}>
+                                Branch: {b.name} ({b.code})
+                              </option>
+                            ))}
+                          </optgroup>
+                          )}
+                        </select>
+                        {(() => {
+                          const branchMatch = directoryBranches.find(b => b.code.toUpperCase() === recipientFormStation.toUpperCase());
+                          if (branchMatch) {
+                            const existingInBranch = dbUsers.filter(u => {
+                              const st = (u.station || "").split(",").map((s: string) => s.trim().toUpperCase());
+                              return st.includes(branchMatch.code.toUpperCase());
+                            });
+                            return (
+                              <div className="mt-2 p-2.5 rounded-lg bg-[#f8fbff] border border-[#d3e3fd] text-[11px] text-slate-900">
+                                <div className="flex items-center gap-1.5 font-bold mb-1">
+
+                                  <span>Branch: {branchMatch.name}</span>
+                                  <span className="text-[9.5px] px-1.5 py-0.2 rounded-full bg-[#d3e3fd]/80 text-slate-800 font-semibold ml-auto">
+                                    {existingInBranch.length} {existingInBranch.length === 1 ? "user" : "users"} assigned
+                                  </span>
+                                </div>
+                                <p className="mb-1 text-[10px] text-slate-600">This assignment is for branch reports only. Station reports require a separate station assignment.</p>
+                                {existingInBranch.length > 0 ? (
+                                  <p className="text-[10px] text-slate-700">
+                                    <strong className="font-semibold">Current recipients:</strong> {existingInBranch.map(u => u.display_name || u.email).join(", ")}
+                                  </p>
+                                ) : (
+                                  <p className="text-[10px] text-slate-600 italic">No recipients currently assigned to this branch.</p>
+                                )}
+                              </div>
+                            );
+                          }
+                          return (
+                            <p className="text-[10px] text-slate-400 mt-1">
+                              Choose 'Global' to receive company-wide reports, or select a specific national station or city branch.
+                            </p>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Freight Preferences (Air & Sea checkboxes) */}
+                      <div className="pt-2 border-t border-[#d3e3fd]">
+                        <label className="block text-xs font-bold text-slate-800 mb-2">
+                          Freight Report Preferences
+                        </label>
+                        <div className="space-y-2">
+                          <label className="flex items-center gap-2.5 p-2 rounded-lg border border-[#d3e3fd] hover:bg-[#f8fbff] cursor-pointer transition-colors">
+                            <input
+                              type="checkbox"
+                              checked={recipientFormIsAir}
+                              onChange={(e) => setRecipientFormIsAir(e.target.checked)}
+                              className="w-4 h-4 rounded text-slate-600 focus:ring-[#aecbfa]"
+                            />
+                            <div className="flex-1">
+                              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+
+                                Air Freight Reports
+                              </span>
+                              <span className="text-[10.5px] text-slate-400 block">
+                                Weekly & Monthly Air Freight Tonnage & Financial Reports
+                              </span>
+                            </div>
+                          </label>
+
+                          <label className="flex items-center gap-2.5 p-2 rounded-lg border border-[#d3e3fd] hover:bg-[#f8fbff] cursor-pointer transition-colors">
+                            <input
+                              type="checkbox"
+                              checked={recipientFormIsSea}
+                              onChange={(e) => setRecipientFormIsSea(e.target.checked)}
+                              className="w-4 h-4 rounded text-slate-600 focus:ring-[#aecbfa]"
+                            />
+                            <div className="flex-1">
+                              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+
+                                Sea Freight Reports
+                              </span>
+                              <span className="text-[10.5px] text-slate-400 block">
+                                Weekly & Monthly Sea Freight Consol & TEU Performance Reports
+                              </span>
+                            </div>
+                          </label>
+                        </div>
+                      </div>
+
+                      {/* Modal Actions */}
+                      <div className="flex items-center justify-end gap-2 pt-4 border-t border-[#d3e3fd]">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setIsAddRecipientModalOpen(false)}
+                          className="text-xs"
+                          disabled={recipientFormLoading}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          type="submit"
+                          size="sm"
+                          className="h-8 px-4 text-xs bg-[#1a73e8] hover:bg-[#1557b0] text-white font-semibold rounded-full"
+                          disabled={recipientFormLoading}
+                        >
+                          {recipientFormLoading ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin mr-1" />
+                          ) : (
+                            <Check className="w-3.5 h-3.5 mr-1" />
+                          )}
+                          {editingRecipient ? "Save Changes" : "Add Recipient"}
+                        </Button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
